@@ -18,8 +18,17 @@ export class FocasError extends Error {
   }
 }
 
+/** The FOCAS thread failed or stopped, so each connection on it is gone with it */
+export class FocasThreadStoppedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FocasThreadStoppedError';
+  }
+}
+
 /** True when the connection to the control is gone, so the machine must connect again */
 export function isConnectionLost(error: unknown): boolean {
+  if (error instanceof FocasThreadStoppedError) return true;
   return error instanceof FocasError && (error.code === EW_SOCKET || error.code === EW_HANDLE);
 }
 

@@ -5,7 +5,7 @@ import { Worker } from 'worker_threads';
 import { Focas, type FocasAlarm, type FocasMacro, type FocasOperatorMessage, type FocasProgram, type FocasSpindleSpeed, type FocasStatus, type FocasSystemInfo } from './focas.js';
 import type { FocasLoader } from './focasLibraryInstaller.js';
 import type { FocasCommand, FocasRead, FocasRequest, FocasResponse } from './focasRequests.js';
-import { FocasError, isBusy } from './focasError.js';
+import { FocasError, FocasThreadStoppedError, isBusy } from './focasError.js';
 import { createLogger } from '../../logging/logger.js';
 
 const log = createLogger('fanuc');
@@ -129,7 +129,7 @@ export class FocasThread {
   async stop(): Promise<void> {
     this.stopped = true;
     const worker = this.worker;
-    if (worker) this.forgetWorker(new Error('The FOCAS thread stopped'));
+    if (worker) this.forgetWorker(new FocasThreadStoppedError('The FOCAS thread stopped'));
     this.owner.stopped(this);
     await worker?.terminate();
   }
@@ -137,13 +137,13 @@ export class FocasThread {
   /** @internal Used by FocasSession */
   sendFor(generation: number, command: FocasCommand): Promise<unknown> {
     if (generation !== this.generation || !this.worker) {
-      return Promise.reject(new Error('The FOCAS thread stopped, so the connection is gone'));
+      return Promise.reject(new FocasThreadStoppedError('The FOCAS thread stopped, so the connection is gone'));
     }
     return this.send(command);
   }
 
   private send(command: FocasCommand): Promise<unknown> {
-    if (this.stopped) return Promise.reject(new Error('The FOCAS thread stopped'));
+    if (this.stopped) return Promise.reject(new FocasThreadStoppedError('The FOCAS thread stopped'));
     const worker = this.runningWorker();
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -163,10 +163,10 @@ export class FocasThread {
     worker.on('message', response => this.answer(response));
     worker.on('error', error => {
       log.error('The FOCAS thread failed', { error });
-      if (this.worker === worker) this.forgetWorker(error);
+      if (this.worker === worker) this.forgetWorker(new FocasThreadStoppedError(`The FOCAS thread failed: ${error.message}`));
     });
     worker.on('exit', exitCode => {
-      if (this.worker === worker) this.forgetWorker(new Error(`The FOCAS thread stopped (exit code ${exitCode})`));
+      if (this.worker === worker) this.forgetWorker(new FocasThreadStoppedError(`The FOCAS thread stopped (exit code ${exitCode})`));
     });
     return worker;
   }
@@ -179,8 +179,8 @@ export class FocasThread {
     else waiting.reject(response.code === undefined ? new Error(response.message) : new FocasError(response.message, response.code));
   }
 
-  /** The library and every connection went with the thread */
-  private forgetWorker(reason: Error): void {
+  /** The library and every connection went with the thread. The waiting calls fail as a lost connection. */
+  private forgetWorker(reason: FocasThreadStoppedError): void {
     this.worker = null;
     this.loaded = false;
     for (const waiting of this.waiting.values()) waiting.reject(reason);

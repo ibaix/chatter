@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Focas } from './focas.js';
 import { FocasThread, FocasThreads, type FocasWorkerPort } from './focasThread.js';
 import { FocasRequestHandler, type FocasConnection, type FocasRequest } from './focasRequests.js';
-import { EW_BUSY, EW_SOCKET, FocasError } from './focasError.js';
+import { EW_BUSY, EW_SOCKET, FocasError, isConnectionLost } from './focasError.js';
 
 /** A worker that answers with a FocasRequestHandler on a later turn, as a real thread does */
 class FakeWorker extends EventEmitter implements FocasWorkerPort {
@@ -192,6 +192,25 @@ describe('FocasThread', () => {
       expect(await fresh.readStatus()).toEqual({ mode: 'h' });
       // The old session has the same number as the new one, but belongs to the stopped thread
       await expect(old.readStatus()).rejects.toThrow('connection is gone');
+    });
+
+    it('gives errors that count as a lost connection, so the poll fails and connects again', async () => {
+      const { thread, workers } = threadWithFakeWorkers();
+      await thread.initialize('/lib.so');
+      const crashed = await thread.connect('h', 8193, 10);
+      workers[0].held = true;
+      const waiting = crashed.readStatus().catch((error: unknown) => error);
+      workers[0].emit('error', new Error('boom'));
+
+      expect(isConnectionLost(await waiting)).toBe(true);
+      expect(isConnectionLost(await crashed.readStatus().catch((error: unknown) => error))).toBe(true);
+
+      await thread.initialize('/lib.so');
+      const stopping = await thread.connect('h', 8193, 10);
+      workers[1].held = true;
+      const cut = stopping.readStatus().catch((error: unknown) => error);
+      await thread.stop();
+      expect(isConnectionLost(await cut)).toBe(true);
     });
 
     it('stops the thread on request', async () => {

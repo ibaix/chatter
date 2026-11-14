@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FanucConnector } from './FanucConnector.js';
-import { EW_HANDLE, EW_SOCKET, FocasError } from './focasError.js';
+import { EW_HANDLE, EW_SOCKET, FocasError, FocasThreadStoppedError } from './focasError.js';
 import { captureLog } from '../../logging/testSupport.js';
 
 // Type definitions for mock return values
@@ -836,6 +836,17 @@ describe('FanucConnector', () => {
         expect(mockThread.connect).toHaveBeenCalledTimes(2);
       });
     }
+
+    it('fails the poll when the FOCAS thread stops in the middle of it', async () => {
+      await connector.connect();
+      mockFocasInstance.readProgram.mockImplementationOnce(() => { throw new FocasThreadStoppedError('The FOCAS thread stopped (exit code 1)'); });
+
+      const failed = await connector.poll();
+
+      expect(failed.connected).toBe(false);
+      expect(failed.errors).toEqual(['Poll failed: The FOCAS thread stopped (exit code 1)']);
+      expect(mockFocasInstance.readAlarms).not.toHaveBeenCalled();
+    });
 
     it('keeps the connection when the control does not have the value', async () => {
       await connector.connect();
