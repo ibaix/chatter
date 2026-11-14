@@ -16,6 +16,7 @@ interface MockStatus {
 interface MockAlarm {
   alarmNo: number;
   type?: number;
+  axis?: number;
   message: string;
 }
 
@@ -40,11 +41,44 @@ const mockFocasInstance = {
   readSpindleLoad: vi.fn<[], number | undefined>(() => 42),
   readProgram: vi.fn(() => ({ name: 'O1234', number: 1234 })),
   readAlarms: vi.fn<[], MockAlarm[]>(() => []),
-  readMacro: vi.fn<[], { value: number | undefined }>(() => ({ value: 100 })),
+  readMacro: vi.fn<[number?], { value: number | undefined }>(() => ({ value: 100 })),
   readOperatorMessages: vi.fn<[], MockOperatorMessage[]>(() => []),
   readSystemInfo: vi.fn<[], { cncType: string; mtType: string }>(() => ({ cncType: '31', mtType: 'M' })),
   readPathCount: vi.fn<[], { path: number; maxPath: number }>(() => ({ path: 1, maxPath: 1 })),
+  readPath: vi.fn<[number, number], MockPathValues>(),
 };
+
+interface MockSpindle {
+  name: string;
+  speed?: number;
+  load?: number;
+}
+
+/** The reply of FocasSession.readPath */
+interface MockPathValues {
+  path: number;
+  status: MockStatus & { tmMode?: number };
+  program?: { name: string; number: number; fullPath?: string };
+  spindles?: MockSpindle[];
+  alarms?: MockAlarm[];
+  failedReads: { read: string; message: string; code?: number }[];
+}
+
+/**
+ * One path of the FANUC 0i-TT (two paths, one turret) that was probed at a customer: path 1 is the turret
+ * with S1 (main spindle) and S2 (milling spindle), path 2 is the sub-spindle S3. The mode is the same on both.
+ */
+function lathePath(path: 1 | 2, runState: string, overrides: Partial<MockPathValues> = {}): MockPathValues {
+  return {
+    path,
+    status: { mode: 'MEMORY', runState, emergency: false, alarm: false, motion: 0 },
+    program: path === 1 ? { name: 'O6000', number: 6000, fullPath: '//DATA_SV/O6000' } : { name: 'O5000', number: 5000, fullPath: '//DATA_SV/O5000' },
+    spindles: path === 1 ? [{ name: 'S1', speed: 0, load: 0 }, { name: 'S2', speed: 0, load: 0 }] : [{ name: 'S3', speed: 0, load: 0 }],
+    alarms: [],
+    failedReads: [],
+    ...overrides,
+  };
+}
 
 // Track availability for tests
 let focasAvailable = true;
@@ -96,6 +130,7 @@ describe('FanucConnector', () => {
     mockFocasInstance.readOperatorMessages.mockReturnValue([]);
     mockFocasInstance.readSystemInfo.mockReset().mockReturnValue({ cncType: '31', mtType: 'M' });
     mockFocasInstance.readPathCount.mockReset().mockReturnValue({ path: 1, maxPath: 1 });
+    mockFocasInstance.readPath.mockReset();
 
     connector = new FanucConnector({
       id: 'test_fanuc',
@@ -1075,26 +1110,298 @@ describe('FanucConnector', () => {
       expect(connector.getDataSnapshot().custom).not.toHaveProperty('paths');
     });
 
-    it('warns once that only path 1 is read, when the control has more paths', async () => {
-      const log = captureLog();
-      try {
-        mockFocasInstance.readPathCount.mockReturnValue({ path: 1, maxPath: 2 });
-        await connector.connect();
-        connector.disconnect();
-        await connector.connect();
-
-        expect(log.text('warn').match(/more than one path/g)).toHaveLength(1);
-      } finally {
-        log.restore();
-      }
-    });
-
     it('refuses a Series 15 control, whose status has another layout', async () => {
       mockFocasInstance.readSystemInfo.mockReturnValue({ cncType: '15', mtType: 'M' });
 
       await expect(connector.connect()).rejects.toThrow('Series 15');
       expect(connector.connected).toBe(false);
       expect(mockFocasInstance.disconnect).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('a control with one path', () => {
+    it('reads as before: no path request and no path change, one call for each value', async () => {
+      connector.toolNumberVariable = 4120;
+      connector.partCounterVariable = 3901;
+      await connector.connect();
+
+      const status = await connector.poll();
+
+      expect(status.connected).toBe(true);
+      expect(mockFocasInstance.readPath).not.toHaveBeenCalled();
+      const calls = [
+        mockFocasInstance.readStatus, mockFocasInstance.readSpindleSpeed, mockFocasInstance.readSpindleLoad,
+        mockFocasInstance.readProgram, mockFocasInstance.readMacro, mockFocasInstance.readAlarms,
+        mockFocasInstance.readOperatorMessages,
+      ];
+      for (const read of calls) expect(read).toHaveBeenCalled();
+      expect(calls.map(read => read.mock.calls.length)).toEqual([1, 1, 1, 1, 2, 1, 1]);
+      // In the same order as before
+      const order = calls.map(read => read.mock.invocationCallOrder[0]);
+      expect([...order].sort((a, b) => a - b)).toEqual(order);
+      expect(status.data).toMatchObject({ runState: 'RUN', spindleSpeed: 5000, spindleLoad: 42, program: 'O1234' });
+    });
+
+    it('also reads one path as before when the control cannot say how many paths it has', async () => {
+      mockFocasInstance.readPathCount.mockImplementation(() => { throw new FocasError('Failed to read path count: No option error', 6); });
+      await connector.connect();
+      await connector.poll();
+
+      expect(mockFocasInstance.readPath).not.toHaveBeenCalled();
+      expect(mockFocasInstance.readStatus).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('a control with two paths (a FANUC 0i-TT two-path lathe)', () => {
+    /** The two paths that readPath gives, by path */
+    let lathe: Record<number, MockPathValues>;
+    /** The path that the next macro read goes to, as on the control: readPath leaves the connection on path 1 */
+    let selectedPath: number;
+    /** The macro variables of each path: #4120 is the T code and #3901 the part count, as probed (path 1 counts) */
+    const macros: Record<number, Record<number, number>> = {
+      1: { 4120: 11011, 3901: 4 },
+      2: { 4120: 0, 3901: 0 },
+    };
+
+    beforeEach(() => {
+      lathe = { 1: lathePath(1, 'RESET'), 2: lathePath(2, 'RESET') };
+      selectedPath = 1;
+      mockFocasInstance.readPathCount.mockReturnValue({ path: 1, maxPath: 2 });
+      mockFocasInstance.readSystemInfo.mockReturnValue({ cncType: '0', mtType: 'TT' });
+      mockFocasInstance.readPath.mockImplementation((path: number) => {
+        selectedPath = 1;
+        return lathe[path];
+      });
+      mockFocasInstance.readMacro.mockImplementation((number?: number) => ({ value: macros[selectedPath][number ?? 0] }));
+      connector.toolNumberVariable = 4120;
+      connector.partCounterVariable = 3901;
+    });
+
+    it('reads each path in one request, path 2 first and the main path last, and no value on its own', async () => {
+      await connector.connect();
+      const status = await connector.poll();
+
+      expect(status.connected).toBe(true);
+      expect(mockFocasInstance.readPath.mock.calls).toEqual([[2, 2], [1, 2]]);
+      for (const read of [mockFocasInstance.readStatus, mockFocasInstance.readSpindleSpeed, mockFocasInstance.readSpindleLoad, mockFocasInstance.readProgram, mockFocasInstance.readAlarms]) {
+        expect(read).not.toHaveBeenCalled();
+      }
+      // The macro variables and the operator messages are read after path 1 is selected again
+      const mainPathRead = mockFocasInstance.readPath.mock.invocationCallOrder[1];
+      expect(mockFocasInstance.readMacro.mock.invocationCallOrder[0]).toBeGreaterThan(mainPathRead);
+      expect(mockFocasInstance.readOperatorMessages.mock.invocationCallOrder[0]).toBeGreaterThan(mainPathRead);
+    });
+
+    it('runs when path 1 runs a program that turns only the sub-spindle, with the mode, program, tool and parts of path 1', async () => {
+      lathe[1] = lathePath(1, 'START', { status: { mode: 'MEMORY', runState: 'START', emergency: false, alarm: false, motion: 2 } });
+      lathe[2] = lathePath(2, 'RESET', { spindles: [{ name: 'S3', speed: 500, load: 0 }] });
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data).toMatchObject({ mode: 'MEMORY', runState: 'START', program: 'O6000', toolNumber: 11011, partCount: 4, motion: 2 });
+      expect(connector.getDataSnapshot()).toMatchObject({ runState: 'START', partCount: 4, toolNumber: 11011 });
+    });
+
+    it('runs when path 2 runs and path 1 is in RESET', async () => {
+      lathe[2] = lathePath(2, 'START');
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data).toMatchObject({ runState: 'START', mode: 'MEMORY', program: 'O6000' });
+    });
+
+    it('does not run while the sub-spindle turns from MDI and no path runs, and the spindle is S1 of path 1', async () => {
+      // Probed: an MDI block for the sub leaves path 1 in STOP and path 2 in RESET, while S3 turns at 500 rpm
+      lathe[1] = lathePath(1, 'STOP', { program: { name: 'O0', number: 0, fullPath: 'O0' } });
+      lathe[1].status.mode = 'MDI';
+      lathe[2] = lathePath(2, 'RESET', { spindles: [{ name: 'S3', speed: 500, load: 3 }] });
+      lathe[2].status.mode = 'MDI';
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data).toMatchObject({ runState: 'STOP', mode: 'MDI', spindleSpeed: 0, spindleLoad: 0 });
+    });
+
+    it('holds when path 1 holds', async () => {
+      lathe[1] = lathePath(1, 'HOLD');
+
+      await connector.connect();
+      expect((await connector.poll()).data.runState).toBe('HOLD');
+    });
+
+    it('gives one E-STOP alarm when the emergency stop shows on both paths', async () => {
+      for (const path of [1, 2] as const) {
+        lathe[path] = lathePath(path, 'RESET', { status: { mode: 'MDI', runState: 'RESET', emergency: true, alarm: false, motion: 0 } });
+      }
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data).toMatchObject({ emergency: true, alarm: true, alarmCode: 'E-STOP', alarmMessage: 'Emergency Stop Active' });
+    });
+
+    it('gives an alarm of either path once, with the code of the screen', async () => {
+      const externalAlarm = { alarmNo: 1000, type: 15, axis: 0, message: 'DOOR OPEN' };
+      lathe[1] = lathePath(1, 'RESET', { alarms: [externalAlarm] });
+      lathe[1].status.alarm = true;
+      lathe[2] = lathePath(2, 'RESET', { alarms: [externalAlarm, { alarmNo: 401, type: 6, axis: 1, message: 'SERVO V-READY OFF' }] });
+      lathe[2].status.alarm = true;
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data).toMatchObject({ alarm: true, alarmCode: 'EX1000', alarmMessage: 'DOOR OPEN' });
+    });
+
+    it('gives the alarm of path 2 when path 1 has none', async () => {
+      lathe[2] = lathePath(2, 'RESET', { alarms: [{ alarmNo: 401, type: 6, axis: 1, message: 'SERVO V-READY OFF' }] });
+      lathe[2].status.alarm = true;
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data).toMatchObject({ alarm: true, alarmCode: 'SV0401', alarmMessage: 'SERVO V-READY OFF' });
+    });
+
+    it('gives a warning of either path', async () => {
+      lathe[2].status.warning = 'Battery low';
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data).toMatchObject({ alarm: false, warning: 'Battery low' });
+    });
+
+    it('reads the macros on path 1, also when path 2 could not select path 1 again', async () => {
+      mockFocasInstance.readPath.mockImplementation((path: number) => {
+        selectedPath = path;
+        if (path === 2) throw new FocasError('Failed to select path 1: Path error', 11);
+        return lathe[path];
+      });
+
+      await connector.connect();
+      const status = await connector.poll();
+
+      expect(status.connected).toBe(true);
+      expect(status.data).toMatchObject({ partCount: 4, toolNumber: 11011, runState: 'RESET' });
+    });
+
+    it('leaves out a path that cannot be read, and logs it once', async () => {
+      const log = captureLog();
+      try {
+        mockFocasInstance.readPath.mockImplementation((path: number) => {
+          if (path === 2) throw new FocasError('Failed to select path 2: Path error', 11);
+          return lathe[path];
+        });
+        await connector.connect();
+        const status = await connector.poll();
+        await connector.poll();
+
+        expect(status.connected).toBe(true);
+        expect(status.data.runState).toBe('RESET');
+        expect(log.text().match(/A FANUC read did not work.*path 2/g)).toHaveLength(1);
+      } finally {
+        log.restore();
+      }
+    });
+
+    it('logs a read of a path that does not work once, until it works again', async () => {
+      const log = captureLog();
+      try {
+        lathe[2] = lathePath(2, 'RESET', { failedReads: [{ read: 'program path', message: 'Failed to read program path: Command prepare error', code: 1 }] });
+        await connector.connect();
+        await connector.poll();
+        await connector.poll();
+        expect(log.text().match(/A FANUC read did not work.*path 2 program path/g)).toHaveLength(1);
+
+        lathe[2] = lathePath(2, 'RESET');
+        await connector.poll();
+        lathe[2] = lathePath(2, 'RESET', { failedReads: [{ read: 'program path', message: 'Failed to read program path: Command prepare error', code: 1 }] });
+        await connector.poll();
+        expect(log.text().match(/A FANUC read did not work.*path 2 program path/g)).toHaveLength(2);
+      } finally {
+        log.restore();
+      }
+    });
+
+    it('fails the poll when the main path cannot be read, as when the status of a one-path control cannot', async () => {
+      mockFocasInstance.readPath.mockImplementation((path: number) => {
+        if (path === 1) throw new FocasError('Failed to read status: Data error', 5);
+        return lathe[path];
+      });
+
+      await connector.connect();
+      const status = await connector.poll();
+
+      expect(status.connected).toBe(false);
+      expect(status.errors).toEqual(['Poll failed: Failed to read status: Data error']);
+    });
+
+    it('stops the poll at once when the connection is lost on path 2', async () => {
+      mockFocasInstance.readPath.mockImplementation((path: number) => {
+        if (path === 2) throw new FocasError('Failed to read status: Socket error', EW_SOCKET);
+        return lathe[path];
+      });
+
+      await connector.connect();
+      const status = await connector.poll();
+
+      expect(status.connected).toBe(false);
+      expect(mockFocasInstance.readPath).toHaveBeenCalledTimes(1);
+      expect(mockFocasInstance.readMacro).not.toHaveBeenCalled();
+    });
+
+    it('logs the spindles of each path once', async () => {
+      const log = captureLog();
+      try {
+        await connector.connect();
+        await connector.poll();
+        await connector.poll();
+
+        const lines = log.lines.filter(line => line.text.includes('FANUC paths'));
+        expect(lines).toHaveLength(1);
+        expect(lines[0].text).toContain('S3');
+        expect(log.text('warn')).not.toContain('path');
+      } finally {
+        log.restore();
+      }
+    });
+
+    describe('the deadline of the reads', () => {
+      afterEach(() => { vi.useRealTimers(); });
+
+      it('still fails the poll when two slow paths run past it', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        await connector.connect();
+        // Each path waits for most of a long timeout
+        mockFocasInstance.readPath.mockImplementation((path: number) => {
+          vi.setSystemTime(Date.now() + 4500);
+          return lathe[path];
+        });
+
+        const status = await connector.poll();
+
+        expect(status.connected).toBe(false);
+        expect(status.errors).toEqual(['Poll failed: The reads of this poll took too long']);
+        expect(mockFocasInstance.readOperatorMessages).not.toHaveBeenCalled();
+      });
+
+      it('does not read the main path when path 2 alone ran past it', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        await connector.connect();
+        mockFocasInstance.readPath.mockImplementation((path: number) => {
+          vi.setSystemTime(Date.now() + 9000);
+          return lathe[path];
+        });
+
+        const status = await connector.poll();
+
+        expect(status.errors).toEqual(['Poll failed: The reads of this poll took too long']);
+        expect(mockFocasInstance.readPath).toHaveBeenCalledTimes(1);
+      });
     });
   });
 

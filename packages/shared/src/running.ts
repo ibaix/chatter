@@ -31,3 +31,13 @@ export function isMachineRunning(values: RunningValues): boolean | undefined {
   if (typeof values.execution === 'string') return values.execution === RUNNING_EXECUTION;
   return undefined;
 }
+
+/**
+ * The one run state of a FANUC control with several paths, such as a two-path lathe: the state of the
+ * first path in which a program runs, else the state of the main path (the first one given).
+ * So a machine runs when any of its paths runs, and isMachineRunning stays the one rule
+ * of the dashboard and the machine history.
+ */
+export function combinedRunState(pathRunStates: readonly (string | undefined)[]): string | undefined {
+  return pathRunStates.find(runState => runState !== undefined && RUNNING_RUN_STATES.includes(runState)) ?? pathRunStates[0];
+}

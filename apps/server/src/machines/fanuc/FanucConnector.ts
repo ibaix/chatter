@@ -1,7 +1,9 @@
+import { combinedRunState } from '@local-chatter/shared';
 import { BaseMachineConnector, errorMessage } from '../BaseMachineConnector.js';
-import { Focas } from './focas.js';
+import { Focas, type FocasAlarm, type FocasProgram } from './focas.js';
 import { isConnectionLost } from './focasError.js';
 import { fanucAlarmCode } from './fanucAlarmCodes.js';
+import { MAIN_PATH, type FocasPathValues } from './focasRequests.js';
 import { focasThreads, type FocasSession, type FocasThread } from './focasThread.js';
 import { createLogger } from '../../logging/logger.js';
 import type {
@@ -34,6 +36,9 @@ const DISPOSE_DISCONNECT_TIMEOUT_MS = 3000;
 /** The Series 15 controls give cnc_statinfo another layout (ODBST), which Chatter does not read */
 const SERIES_15 = '15';
 
+/** The reads of readPath that may fail, each logged once per path while it fails */
+const OPTIONAL_PATH_READS = ['program', 'program path', 'spindles', 'alarms'];
+
 const log = createLogger('fanuc');
 
 /** What the control is, read once after each connect */
@@ -42,8 +47,13 @@ interface ControlInfo {
   series?: string;
   /** M (mill), T (lathe), TT ... */
   type?: string;
-  /** The number of paths. Chatter reads only path 1. */
+  /** The number of paths. A control with more than one (such as a two-path lathe) gets each path read. */
   paths?: number;
+}
+
+/** The name of a program, or its O number when the control gives no name. Undefined when it could not be read. */
+function programName(program: FocasProgram | undefined): string | undefined {
+  return program ? program.name || `O${program.number}` : undefined;
 }
 
 /** Ends when the promise ends or after ms, whichever comes first. The timer does not keep the server running. */
@@ -91,6 +101,8 @@ export class FanucConnector extends BaseMachineConnector {
   private tmMode: number | undefined;
   /** The last control information that was logged, so each control is logged once */
   private loggedControlInfo = '';
+  /** The last path layout (the spindles of each path) that was logged, so each layout is logged once */
+  private loggedPathLayout = '';
 
   constructor(config: FanucMachineConfig) {
     super({
@@ -223,18 +235,22 @@ export class FanucConnector extends BaseMachineConnector {
     this.logControlInfo();
   }
 
-  /** Log the control once, and warn once when it has more than one path */
+  /** Log the control once */
   private logControlInfo(): void {
     const info = JSON.stringify(this.controlInfo);
     if (info === this.loggedControlInfo) return;
     this.loggedControlInfo = info;
 
     log.info('FANUC control', { machine: this.id, ...this.controlInfo });
-    if ((this.controlInfo.paths ?? 1) > 1) {
-      log.warn('The FANUC control has more than one path. Chatter reads only path 1.', {
-        machine: this.id, paths: this.controlInfo.paths,
-      });
-    }
+  }
+
+  /** Log the spindles of each path once, when a control with more than one path first gives them */
+  private logPathLayout(paths: FocasPathValues[]): void {
+    const layout = paths.map(values => ({ path: values.path, spindles: values.spindles?.map(spindle => spindle.name) ?? [] }));
+    const text = JSON.stringify(layout);
+    if (text === this.loggedPathLayout) return;
+    this.loggedPathLayout = text;
+    log.info('FANUC paths', { machine: this.id, mainPath: MAIN_PATH, paths: layout });
   }
 
   /**
@@ -252,11 +268,25 @@ export class FanucConnector extends BaseMachineConnector {
       return value;
     } catch (error) {
       if (isConnectionLost(error)) throw error;
-      if (!this.failingReads.has(name)) {
-        this.failingReads.add(name);
-        log.info('A FANUC read did not work, so its value is left out', { machine: this.id, read: name, error: errorMessage(error) });
-      }
+      this.noteFailedRead(name, errorMessage(error));
       return undefined;
+    }
+  }
+
+  /** Log a read that failed, once until it works again */
+  private noteFailedRead(name: string, error: string): void {
+    if (this.failingReads.has(name)) return;
+    this.failingReads.add(name);
+    log.info('A FANUC read did not work, so its value is left out', { machine: this.id, read: name, error });
+  }
+
+  /** Log each read of a path that failed, once until it works again (see readPath in focasRequests.ts) */
+  private noteFailedPathReads(values: FocasPathValues): void {
+    for (const read of OPTIONAL_PATH_READS) {
+      const name = `path ${values.path} ${read}`;
+      const failure = values.failedReads.find(failed => failed.read === read);
+      if (failure) this.noteFailedRead(name, failure.message);
+      else this.failingReads.delete(name);
     }
   }
 
@@ -290,6 +320,12 @@ export class FanucConnector extends BaseMachineConnector {
   }
 
   private async readAllValues(focas: FocasSession): Promise<void> {
+    const pathCount = this.controlInfo.paths ?? 1;
+    if (pathCount > 1) {
+      await this.readMultiPathValues(focas, pathCount);
+      return;
+    }
+    // A control with one path: no cnc_setpath, and the same reads as before multi-path support
     const status = await focas.readStatus();
     this.tmMode = status.tmMode;
     this.data.mode = status.mode;
@@ -309,6 +345,64 @@ export class FanucConnector extends BaseMachineConnector {
     await this.readConfiguredMacros(focas);
   }
 
+  /**
+   * A control with more than one path, such as a two-path lathe (one machine in Chatter, one connection):
+   * each path is read in one request on the FOCAS thread (readPath), and the values are put together.
+   * - Mode, program, spindle (the first spindle of the main path), tool and part count come from the main path.
+   *   The macro variables (tool, part count and the user's) and the operator messages are read on the main path.
+   * - The run state is that of a path that runs, else the main path's (combinedRunState): a machine runs when any path runs.
+   * - Emergency stop, alarm and warning: any path. The alarm lists of the paths are put together, without
+   *   repeats (an emergency stop or an operator alarm shows on each path).
+   * The other paths are read first, and the main path last: its read must work, and it selects the main
+   * path, so the reads after it surely go to the main path. A path other than the main one may fail; it is left out.
+   */
+  private async readMultiPathValues(focas: FocasSession, pathCount: number): Promise<void> {
+    const otherPaths: FocasPathValues[] = [];
+    for (let path = MAIN_PATH + 1; path <= pathCount; path++) {
+      const values = await this.readIfSupported(`path ${path}`, () => focas.readPath(path, pathCount));
+      if (values) otherPaths.push(values);
+    }
+    this.throwIfPollCutOff();
+    const main = await focas.readPath(MAIN_PATH, pathCount);
+    const paths = [main, ...otherPaths];
+    paths.forEach(values => this.noteFailedPathReads(values));
+    this.logPathLayout(paths);
+
+    const status = main.status;
+    this.tmMode = status.tmMode;
+    this.data.mode = status.mode;
+    this.data.runState = combinedRunState(paths.map(values => values.status.runState));
+    this.data.emergency = paths.some(values => values.status.emergency);
+    this.data.warning = paths.map(values => values.status.warning).find(Boolean);
+    this.data.motion = status.motion;
+
+    const mainSpindle = main.spindles?.[0];
+    this.data.spindleSpeed = mainSpindle?.speed;
+    this.data.spindleLoad = mainSpindle?.load;
+    this.data.program = programName(main.program);
+
+    await this.readCounterMacros(focas);
+    this.applyAlarms(this.alarmsOfPaths(paths), paths.some(values => values.status.alarm));
+    this.markEmergencyStopAsAlarm();
+    await this.readOperatorMessageData(focas);
+    await this.readConfiguredMacros(focas);
+  }
+
+  /**
+   * The alarms of every path, the main path first, each alarm once (the same code on two paths is one alarm).
+   * Undefined when no path could read its alarms.
+   */
+  private alarmsOfPaths(paths: FocasPathValues[]): FocasAlarm[] | undefined {
+    const lists = paths.map(values => values.alarms).filter((alarms): alarms is FocasAlarm[] => alarms !== undefined);
+    if (lists.length === 0) return undefined;
+    const byCode = new Map<string, FocasAlarm>();
+    for (const alarm of lists.flat()) {
+      const code = fanucAlarmCode(alarm.alarmNo, alarm.type, this.controlInfo.series);
+      if (!byCode.has(code)) byCode.set(code, alarm);
+    }
+    return [...byCode.values()];
+  }
+
   /** A read that fails forgets the old value, so an old value is never shown as the current one */
   private async readSpindleAndProgram(focas: FocasSession): Promise<void> {
     this.data.spindleSpeed = await this.readIfSupported('spindle speed', async () => (await focas.readSpindleSpeed()).speed);
@@ -317,7 +411,7 @@ export class FanucConnector extends BaseMachineConnector {
     this.data.spindleLoad = await this.readIfSupported('spindle load', () => focas.readSpindleLoad());
 
     const program = await this.readIfSupported('program', () => focas.readProgram());
-    this.data.program = program ? program.name || `O${program.number}` : undefined;
+    this.data.program = programName(program);
   }
 
   /** The tool number and the part count, from the macro variables that the user set. A failed read forgets the old value. */
@@ -352,6 +446,11 @@ export class FanucConnector extends BaseMachineConnector {
    */
   private async readAlarmData(focas: FocasSession, statusAlarm: boolean): Promise<void> {
     const alarms = await this.readIfSupported('alarms', () => focas.readAlarms());
+    this.applyAlarms(alarms, statusAlarm);
+  }
+
+  /** The alarm values from the alarm list (undefined when it could not be read) and the alarm flag of the status */
+  private applyAlarms(alarms: FocasAlarm[] | undefined, statusAlarm: boolean): void {
     if (alarms && alarms.length > 0) {
       this.data.alarm = true;
       this.data.alarmCode = fanucAlarmCode(alarms[0].alarmNo, alarms[0].type, this.controlInfo.series);
