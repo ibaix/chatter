@@ -874,6 +874,41 @@ describe('FanucConnector', () => {
       expect(mockFocasInstance.readOperatorMessages).not.toHaveBeenCalled();
     });
 
+    it('stops the reads when the machine is disconnected during the poll, for example when the poll ran out of time', async () => {
+      await connector.connect();
+      const dataHandler = vi.fn();
+      connector.on('data', dataHandler);
+      // The scheduler disconnects the machine while the program read waits for the control
+      mockFocasInstance.readProgram.mockImplementationOnce(() => {
+        connector.disconnect();
+        return { name: 'O1', number: 1 };
+      });
+
+      const status = await connector.poll();
+
+      expect(status.connected).toBe(false);
+      expect(status.errors).toEqual(['Poll failed: The machine was disconnected during the poll']);
+      expect(mockFocasInstance.readAlarms).not.toHaveBeenCalled();
+      // The values of a poll that was cut off are not given as new values
+      expect(dataHandler).not.toHaveBeenCalled();
+    });
+
+    it('does not give the values of a poll whose machine was disconnected during its last read', async () => {
+      connector.macros = [{ location: 500, name: 'last' }];
+      await connector.connect();
+      const dataHandler = vi.fn();
+      connector.on('data', dataHandler);
+      mockFocasInstance.readMacro.mockImplementationOnce(() => {
+        connector.disconnect();
+        return { value: 1 };
+      });
+
+      const status = await connector.poll();
+
+      expect(status.connected).toBe(false);
+      expect(dataHandler).not.toHaveBeenCalled();
+    });
+
     it('fails the poll when its reads run past the deadline, before the poll limit of the scheduler', async () => {
       vi.useFakeTimers({ toFake: ['Date'] });
       await connector.connect();

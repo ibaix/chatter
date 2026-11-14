@@ -66,6 +66,8 @@ export class FanucConnector extends BaseMachineConnector {
   private connectionTimeoutSeconds: number;
   /** After this time (Date.now()), the reads of the poll that runs stop */
   private pollDeadline = Infinity;
+  /** The disconnect count when the running poll started, or null between polls */
+  private pollDisconnects: number | null = null;
   /** The optional reads that failed, each logged once until it works again */
   private readonly failingReads = new Set<string>();
   private controlInfo: ControlInfo = {};
@@ -212,10 +214,11 @@ export class FanucConnector extends BaseMachineConnector {
    * Run a read that some controls or setups do not support. Gives undefined when the read fails,
    * and logs the failure once, until the read works again.
    * A lost connection (EW_SOCKET or EW_HANDLE) still throws, so the poll stops its other reads at once,
-   * fails, and the next poll connects again. A poll that runs past its deadline fails the same way.
+   * fails, and the next poll connects again. A poll that runs past its deadline, or whose machine was
+   * disconnected, fails the same way.
    */
   private async readIfSupported<T>(name: string, read: () => Promise<T>): Promise<T | undefined> {
-    if (Date.now() > this.pollDeadline) throw new Error('The reads of this poll took too long');
+    this.throwIfPollCutOff();
     try {
       const value = await read();
       this.failingReads.delete(name);
@@ -230,13 +233,32 @@ export class FanucConnector extends BaseMachineConnector {
     }
   }
 
-  /** The status read must work, or the poll fails. The other values are optional. */
+  /**
+   * The status read must work, or the poll fails. The other values are optional.
+   * A poll whose machine is disconnected while it runs (for example by the scheduler, when the poll ran
+   * out of time) fails too: its later reads would go to a connection that is gone, and its values are not new.
+   */
   private async readMachineValues(focas: FocasSession): Promise<void> {
     this.pollDeadline = Date.now() + POLL_READS_DEADLINE_MS;
+    this.pollDisconnects = this.disconnects;
     try {
       await this.readAllValues(focas);
+      this.throwIfDisconnectedDuringPoll();
     } finally {
       this.pollDeadline = Infinity;
+      this.pollDisconnects = null;
+    }
+  }
+
+  /** The reads of a poll stop when the poll runs past its deadline, or when the machine was disconnected */
+  private throwIfPollCutOff(): void {
+    if (Date.now() > this.pollDeadline) throw new Error('The reads of this poll took too long');
+    this.throwIfDisconnectedDuringPoll();
+  }
+
+  private throwIfDisconnectedDuringPoll(): void {
+    if (this.pollDisconnects !== null && this.pollDisconnects !== this.disconnects) {
+      throw new Error('The machine was disconnected during the poll');
     }
   }
 
