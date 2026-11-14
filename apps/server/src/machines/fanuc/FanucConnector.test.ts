@@ -1140,6 +1140,8 @@ describe('FanucConnector', () => {
       const order = calls.map(read => read.mock.invocationCallOrder[0]);
       expect([...order].sort((a, b) => a - b)).toEqual(order);
       expect(status.data).toMatchObject({ runState: 'RUN', spindleSpeed: 5000, spindleLoad: 42, program: 'O1234' });
+      expect(status.data).not.toHaveProperty('paths');
+      expect(Object.keys(connector.getDataSnapshot().custom ?? {}).filter(key => /^(path\d|spindleS)/.test(key))).toEqual([]);
     });
 
     it('also reads one path as before when the control cannot say how many paths it has', async () => {
@@ -1368,6 +1370,77 @@ describe('FanucConnector', () => {
       } finally {
         log.restore();
       }
+    });
+
+    it('gives each path with its run state, program and spindles by name, for the machine page', async () => {
+      // Probed while O6000 ran on path 1 and turned only the sub-spindle S3 (path 2)
+      lathe[1] = lathePath(1, 'START');
+      lathe[1].status.motion = 2;
+      lathe[2] = lathePath(2, 'RESET', { spindles: [{ name: 'S3', speed: 500, load: 3 }] });
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data.paths).toEqual([
+        {
+          path: 1, runState: 'START', motion: 2, program: 'O6000', programPath: '//DATA_SV/O6000',
+          spindles: [{ name: 'S1', speed: 0, load: 0 }, { name: 'S2', speed: 0, load: 0 }],
+        },
+        { path: 2, runState: 'RESET', motion: 0, program: 'O5000', programPath: '//DATA_SV/O5000', spindles: [{ name: 'S3', speed: 500, load: 3 }] },
+      ]);
+    });
+
+    it('shows the speed of the sub-spindle while it turns from MDI and the machine does not run', async () => {
+      lathe[1] = lathePath(1, 'STOP');
+      lathe[2] = lathePath(2, 'RESET', { spindles: [{ name: 'S3', speed: 500, load: 3 }] });
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data.runState).toBe('STOP');
+      expect(data.paths?.[1].spindles).toEqual([{ name: 'S3', speed: 500, load: 3 }]);
+      expect(connector.getDataSnapshot()).toMatchObject({
+        runState: 'STOP',
+        spindleSpeed: 0,
+        custom: { spindleS3Speed: 500, spindleS3Load: 3, path2RunState: 'RESET', path1RunState: 'STOP' },
+      });
+    });
+
+    it('gives the values of each path and spindle as snapshot fields', async () => {
+      await connector.connect();
+      await connector.poll();
+
+      expect(connector.getDataSnapshot().custom).toMatchObject({
+        paths: 2,
+        path1RunState: 'RESET', path1Program: 'O6000', path1ProgramPath: '//DATA_SV/O6000',
+        path2RunState: 'RESET', path2Program: 'O5000', path2ProgramPath: '//DATA_SV/O5000',
+        spindleS1Speed: 0, spindleS1Load: 0, spindleS2Speed: 0, spindleS3Speed: 0,
+      });
+    });
+
+    it('leaves out a value of a path that could not be read', async () => {
+      lathe[2] = lathePath(2, 'RESET', { program: undefined, spindles: undefined });
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data.paths?.[1]).toEqual({ path: 2, runState: 'RESET', motion: 0, program: undefined, spindles: [] });
+      expect(connector.getDataSnapshot().custom).not.toHaveProperty('path2Program');
+      expect(connector.getDataSnapshot().custom).not.toHaveProperty('spindleS3Speed');
+    });
+
+    it('does not give the paths as a change when no value of them changed', async () => {
+      await connector.connect();
+      await connector.poll();
+      const dataHandler = vi.fn();
+      connector.on('data', dataHandler);
+
+      await connector.poll();
+      expect(dataHandler).not.toHaveBeenCalled();
+
+      lathe[2] = lathePath(2, 'RESET', { spindles: [{ name: 'S3', speed: 500, load: 3 }] });
+      await connector.poll();
+      expect(dataHandler).toHaveBeenCalledWith([expect.objectContaining({ label: 'paths' })]);
     });
 
     describe('the deadline of the reads', () => {

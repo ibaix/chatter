@@ -49,6 +49,15 @@ On Windows, also copy the control-specific DLLs from the kit into `win32-x64/`.
 A file that an Admin uploads wins over a file in this folder.
 A Docker image that you build yourself also copies this folder (`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`).
 
+## Controls with two paths
+
+A control with more than one path, such as a two-path lathe (FANUC 0i-TT) with a sub-spindle, is one machine in Chatter, with one FOCAS connection. Chatter reads every path at each poll:
+
+- Mode, program, tool, part count and the macro variables come from path 1, the main path. The Spindle row and the spindle history are the first spindle of path 1.
+- The machine runs when any path runs a program (START). A sub-spindle that turns from MDI, while no path runs a program, does not count as running.
+- An alarm, emergency stop or warning on any path is shown once.
+- The machine page also shows the run state and program of each path, and the speed and load of each other spindle by its name (such as Spindle S3).
+
 ## Check
 
 **Settings > FANUC library** shows the file that Chatter uses, where it came from, and its SHA-256 fingerprint.

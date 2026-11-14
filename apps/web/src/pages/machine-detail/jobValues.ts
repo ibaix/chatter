@@ -1,6 +1,6 @@
 import type { HistoryValue } from '@local-chatter/shared';
 import { isReachable, machineStateOf, NO_VALUE, partCountOf, spindleLoadOf, spindleSpeedText, toolText } from '../../machines/machineStatus';
-import type { Machine, MachineData } from '../../types';
+import type { Machine, MachineData, MachinePath, MachineSpindle } from '../../types';
 
 /** The rows of a machine that is not connected, each with a dash */
 const OFFLINE_ROWS: Omit<JobValue, 'value'>[] = [
@@ -41,6 +41,36 @@ function spindleLoadValues(data: MachineData): JobValue[] {
   return load ? [{ label: 'Spindle load', value: load.text, fraction: load.fraction, chartValue: 'spindle-load' }] : [];
 }
 
+/** "500 rpm · 3%", or a dash when the control sends neither */
+function spindleText(spindle: MachineSpindle): string {
+  const speed = spindleSpeedText({ spindleSpeed: spindle.speed });
+  const load = spindleLoadOf({ spindleLoad: spindle.load });
+  return [speed, load?.text].filter(Boolean).join(' · ') || NO_VALUE;
+}
+
+/**
+ * A FANUC control with more than one path, such as a two-path lathe: the run state and program of each path,
+ * and each spindle other than the one of the Spindle row (the first spindle of path 1), by its name.
+ * The other rows are of the whole machine.
+ */
+function pathValues(paths: MachinePath[] | undefined): JobValue[] {
+  if (!paths || paths.length < 2) return [];
+  const pathRows = paths.map(path => ({
+    label: `Path ${path.path}`,
+    value: [path.runState, path.program].filter(Boolean).join(' · ') || NO_VALUE,
+  }));
+  const spindleRows = paths
+    .flatMap((path, index) => (index === 0 ? path.spindles.slice(1) : path.spindles))
+    .map(spindle => ({ label: `Spindle ${spindle.name}`, value: spindleText(spindle) }));
+  return [...pathRows, ...spindleRows];
+}
+
+/** The full name of the main program, such as //DATA_SV/O6000, when a FANUC control with more than one path sends it */
+function programText(machine: Machine): string | undefined {
+  if (machine.type !== 'fanuc') return machine.data.program;
+  return machine.data.paths?.[0]?.programPath || machine.data.program;
+}
+
 /** The SINUMERIK program state, tool name and feed override, when the control sends them */
 function siemensValues(data: Extract<Machine, { type: 'siemens' }>['data']): JobValue[] {
   const values: JobValue[] = [];
@@ -73,11 +103,12 @@ function allJobValuesOf(machine: Machine): JobValue[] {
   const values: JobValue[] = [
     { label: 'Mode', value: data.mode || NO_VALUE },
     ...(machine.type === 'mtconnect' ? [{ label: 'Execution', value: machine.data.execution || NO_VALUE }] : []),
-    { label: 'Program', value: data.program || NO_VALUE },
+    { label: 'Program', value: programText(machine) || NO_VALUE },
     { label: 'Parts', value: parts?.text ?? NO_VALUE, fraction: parts?.fraction, chartValue: 'part-count' },
     { label: 'Spindle', value: spindleSpeedText(data) ?? NO_VALUE, chartValue: 'spindle-speed' },
     ...spindleLoadValues(data),
     { label: 'Tool', value: toolText(data) ?? NO_VALUE },
+    ...(machine.type === 'fanuc' ? pathValues(machine.data.paths) : []),
   ];
   if (machine.type === 'fanuc' && machine.data.operatorMessage) {
     values.push({ label: 'Operator message', value: machine.data.operatorMessage });

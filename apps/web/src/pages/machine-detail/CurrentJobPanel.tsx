@@ -29,7 +29,7 @@ export function CurrentJobPanel({ machine, state, now, chartValue }: CurrentJobP
           <div key={jobValue.label} className="flex flex-1 flex-col justify-center gap-1.5 border-t border-zinc-800/70 px-5 py-[0.4375rem]">
             <div className="flex items-baseline justify-between gap-3">
               <dt className="text-xs text-zinc-300">{jobValue.label}</dt>
-              <dd className="m-0 font-mono text-sm font-medium tabular-nums">{jobValue.value}</dd>
+              <dd className="m-0 text-right font-mono text-sm font-medium tabular-nums [overflow-wrap:anywhere]">{jobValue.value}</dd>
             </div>
             {jobValue.fraction != null && <ProgressBar fraction={jobValue.fraction} state={state} />}
           </div>

@@ -1,4 +1,4 @@
-import { combinedRunState } from '@local-chatter/shared';
+import { combinedRunState, type MachinePath } from '@local-chatter/shared';
 import { BaseMachineConnector, errorMessage } from '../BaseMachineConnector.js';
 import { Focas, type FocasAlarm, type FocasProgram } from './focas.js';
 import { isConnectionLost } from './focasError.js';
@@ -54,6 +54,39 @@ interface ControlInfo {
 /** The name of a program, or its O number when the control gives no name. Undefined when it could not be read. */
 function programName(program: FocasProgram | undefined): string | undefined {
   return program ? program.name || `O${program.number}` : undefined;
+}
+
+/** The values of one path for the machine page */
+function toMachinePath(values: FocasPathValues): MachinePath {
+  const programPath = values.program?.fullPath;
+  return {
+    path: values.path,
+    runState: values.status.runState,
+    motion: values.status.motion,
+    program: programName(values.program),
+    ...(programPath ? { programPath } : {}),
+    spindles: (values.spindles ?? []).map(({ name, speed, load }) => ({ name, speed, load })),
+  };
+}
+
+/**
+ * The values of each path and of each spindle of a control with more than one path, as snapshot fields,
+ * for example path2RunState: "RESET", path1ProgramPath: "//DATA_SV/O6000", spindleS3Speed: 500.
+ * None for a control with one path.
+ */
+function pathFields(paths: MachinePath[] | undefined): Record<string, string | number> {
+  const fields: Record<string, string | number> = {};
+  for (const path of paths ?? []) {
+    const prefix = `path${path.path}`;
+    if (path.runState) fields[`${prefix}RunState`] = path.runState;
+    if (path.program) fields[`${prefix}Program`] = path.program;
+    if (path.programPath) fields[`${prefix}ProgramPath`] = path.programPath;
+    for (const spindle of path.spindles) {
+      if (spindle.speed !== undefined) fields[`spindle${spindle.name}Speed`] = spindle.speed;
+      if (spindle.load !== undefined) fields[`spindle${spindle.name}Load`] = spindle.load;
+    }
+  }
+  return fields;
 }
 
 /** Ends when the promise ends or after ms, whichever comes first. The timer does not keep the server running. */
@@ -326,6 +359,7 @@ export class FanucConnector extends BaseMachineConnector {
       return;
     }
     // A control with one path: no cnc_setpath, and the same reads as before multi-path support
+    delete this.data.paths;
     const status = await focas.readStatus();
     this.tmMode = status.tmMode;
     this.data.mode = status.mode;
@@ -380,12 +414,22 @@ export class FanucConnector extends BaseMachineConnector {
     this.data.spindleSpeed = mainSpindle?.speed;
     this.data.spindleLoad = mainSpindle?.load;
     this.data.program = programName(main.program);
+    this.data.paths = this.samePathsAsBefore(paths.map(toMachinePath));
 
     await this.readCounterMacros(focas);
     this.applyAlarms(this.alarmsOfPaths(paths), paths.some(values => values.status.alarm));
     this.markEmergencyStopAsAlarm();
     await this.readOperatorMessageData(focas);
     await this.readConfiguredMacros(focas);
+  }
+
+  /**
+   * The paths as before when no value changed, so the data event does not give them as a change at each poll
+   * (it compares each value with ===)
+   */
+  private samePathsAsBefore(paths: MachinePath[]): MachinePath[] {
+    const before = this.prevData.paths;
+    return before && JSON.stringify(before) === JSON.stringify(paths) ? before : paths;
   }
 
   /**
@@ -548,7 +592,7 @@ export class FanucConnector extends BaseMachineConnector {
     if (this.data.warning) {
       custom.warning = this.data.warning;
     }
-    Object.assign(custom, this.controlInfoFields());
+    Object.assign(custom, this.controlInfoFields(), pathFields(this.data.paths));
 
     return this.buildSnapshot({
       mode: this.data.mode,
