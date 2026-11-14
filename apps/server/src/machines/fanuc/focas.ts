@@ -274,22 +274,20 @@ export interface SpindleMeterReply {
 /** The LOADELM unit for percent */
 const PERCENT_UNIT = 0;
 
-/** A meter value with its decimal places */
-function meterValue(meter: LoadMeterReply): number {
-  return meter.data / Math.pow(10, meter.dec);
-}
-
 /**
  * The spindle load in percent, from the number of spindles read and the first spindle's meters.
  * No spindle read (for example an analog spindle) or another unit gives undefined, not 0.
  */
 export function toSpindleLoadPercent(spindlesRead: number, reply: SpindleMeterReply): number | undefined {
   if (spindlesRead < 1 || reply.spload.unit !== PERCENT_UNIT) return undefined;
-  return meterValue(reply.spload);
+  return reply.spload.data / Math.pow(10, reply.spload.dec);
 }
 
-/** The name of a spindle meter (LOADELM name, suff1, suff2), such as "S1". Only letters and digits count. */
-function spindleName(meter: LoadMeterReply & { name: number; suff1: number; suff2: number }): string {
+/** A meter of the cnc_rdspmeter reply with the name of its spindle (LOADELM name, suff1, suff2) */
+type NamedLoadMeterReply = LoadMeterReply & { name: number; suff1: number; suff2: number };
+
+/** The name of a spindle meter, such as "S1". Only letters and digits count. */
+function spindleName(meter: NamedLoadMeterReply): string {
   return [meter.name, meter.suff1, meter.suff2]
     .map(code => String.fromCharCode(code & 0xff))
     .filter(letter => /[A-Za-z0-9]/.test(letter))
@@ -297,9 +295,8 @@ function spindleName(meter: LoadMeterReply & { name: number; suff1: number; suff
 }
 
 /** The cnc_rdspmeter reply for one spindle, with the name of each meter */
-export interface NamedSpindleMeterReply {
-  spload: LoadMeterReply & { name: number; suff1: number; suff2: number };
-  spspeed: LoadMeterReply;
+export interface NamedSpindleMeterReply extends SpindleMeterReply {
+  spload: NamedLoadMeterReply;
 }
 
 /**
@@ -312,7 +309,7 @@ export function toSpindles(meters: NamedSpindleMeterReply[], speeds: number[]): 
   return meters.map((meter, index) => ({
     name: spindleName(meter.spload) || `S${index + 1}`,
     speed: speeds[index],
-    load: meter.spload.unit === PERCENT_UNIT ? meterValue(meter.spload) : undefined,
+    load: toSpindleLoadPercent(1, meter),
   }));
 }
 
