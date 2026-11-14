@@ -208,8 +208,8 @@ export class FanucConnector extends BaseMachineConnector {
   private async readControlInfo(session: FocasSession): Promise<void> {
     try {
       const system = await this.readIfSupported('system information', () => session.readSystemInfo());
-      const paths = await this.readIfSupported('path count', () => session.readPathCount());
-      this.controlInfo = { series: system?.cncType, type: system?.mtType, paths };
+      const pathCount = await this.readIfSupported('path count', () => session.readPathCount());
+      this.controlInfo = { series: system?.cncType, type: system?.mtType, paths: pathCount?.maxPath };
     } catch (error) {
       session.disconnect().catch(() => undefined);
       throw error;

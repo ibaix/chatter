@@ -2,9 +2,9 @@ import { createRequire } from 'module';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Worker } from 'worker_threads';
-import { Focas, type FocasAlarm, type FocasMacro, type FocasOperatorMessage, type FocasProgram, type FocasSpindleSpeed, type FocasStatus, type FocasSystemInfo } from './focas.js';
+import { Focas, type FocasAlarm, type FocasMacro, type FocasOperatorMessage, type FocasPathCount, type FocasProgram, type FocasSpindleSpeed, type FocasStatus, type FocasSystemInfo } from './focas.js';
 import type { FocasLoader } from './focasLibraryInstaller.js';
-import type { FocasCommand, FocasRead, FocasRequest, FocasResponse } from './focasRequests.js';
+import type { FocasCommand, FocasPathValues, FocasRead, FocasRequest, FocasResponse } from './focasRequests.js';
 import { FocasError, FocasThreadStoppedError, isBusy } from './focasError.js';
 import { createLogger } from '../../logging/logger.js';
 
@@ -234,9 +234,17 @@ export class FocasSession {
     return this.read('readSystemInfo') as Promise<FocasSystemInfo>;
   }
 
-  /** How many paths the control has. Chatter reads only the first. */
-  readPathCount(): Promise<number> {
-    return this.read('readPathCount') as Promise<number>;
+  /** The path that this connection addresses, and how many paths the control has */
+  readPathCount(): Promise<FocasPathCount> {
+    return this.read('readPathCount') as Promise<FocasPathCount>;
+  }
+
+  /**
+   * The status, program, spindles and alarms of one path of a control with pathCount paths, in one request
+   * on the FOCAS thread. The connection addresses the main path again afterwards (see readPath in focasRequests.ts).
+   */
+  readPath(path: number, pathCount: number): Promise<FocasPathValues> {
+    return this.read('readPath', path, pathCount) as Promise<FocasPathValues>;
   }
 
   /** A control that is busy (EW_BUSY) gets a few more tries, a moment apart */

@@ -43,7 +43,7 @@ const mockFocasInstance = {
   readMacro: vi.fn<[], { value: number | undefined }>(() => ({ value: 100 })),
   readOperatorMessages: vi.fn<[], MockOperatorMessage[]>(() => []),
   readSystemInfo: vi.fn<[], { cncType: string; mtType: string }>(() => ({ cncType: '31', mtType: 'M' })),
-  readPathCount: vi.fn<[], number>(() => 1),
+  readPathCount: vi.fn<[], { path: number; maxPath: number }>(() => ({ path: 1, maxPath: 1 })),
 };
 
 // Track availability for tests
@@ -95,7 +95,7 @@ describe('FanucConnector', () => {
     mockFocasInstance.readMacro.mockReturnValue({ value: 100 });
     mockFocasInstance.readOperatorMessages.mockReturnValue([]);
     mockFocasInstance.readSystemInfo.mockReset().mockReturnValue({ cncType: '31', mtType: 'M' });
-    mockFocasInstance.readPathCount.mockReset().mockReturnValue(1);
+    mockFocasInstance.readPathCount.mockReset().mockReturnValue({ path: 1, maxPath: 1 });
 
     connector = new FanucConnector({
       id: 'test_fanuc',
@@ -1078,7 +1078,7 @@ describe('FanucConnector', () => {
     it('warns once that only path 1 is read, when the control has more paths', async () => {
       const log = captureLog();
       try {
-        mockFocasInstance.readPathCount.mockReturnValue(2);
+        mockFocasInstance.readPathCount.mockReturnValue({ path: 1, maxPath: 2 });
         await connector.connect();
         connector.disconnect();
         await connector.connect();

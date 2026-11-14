@@ -3,8 +3,31 @@
  * Nothing here needs a thread, so the tests run it directly.
  */
 
-import type { Focas } from './focas.js';
-import { FocasError } from './focasError.js';
+import type { Focas, FocasAlarm, FocasProgramWithPath, FocasSpindle, FocasStatus } from './focas.js';
+import { FocasError, isConnectionLost } from './focasError.js';
+
+/** The path that Chatter reads mode, program, tool and part count from, and that a connection is left on */
+export const MAIN_PATH = 1;
+
+/** A read of readPath that failed, so the server can log it. The other reads of the path still count. */
+export interface FailedPathRead {
+  read: string;
+  message: string;
+  code?: number;
+}
+
+/** The values of one path of a multi-path control, from one readPath request */
+export interface FocasPathValues {
+  path: number;
+  status: FocasStatus;
+  /** Undefined when the read failed */
+  program?: FocasProgramWithPath;
+  /** Undefined when the read failed */
+  spindles?: FocasSpindle[];
+  /** Undefined when the read failed */
+  alarms?: FocasAlarm[];
+  failedReads: FailedPathRead[];
+}
 
 /** The reads of one connection that the server can ask for */
 export type FocasRead =
@@ -16,7 +39,9 @@ export type FocasRead =
   | 'readAlarms'
   | 'readOperatorMessages'
   | 'readSystemInfo'
-  | 'readPathCount';
+  | 'readPathCount'
+  /** The values of one path: readPath(path, pathCount) (see readPath below) */
+  | 'readPath';
 
 export type FocasCommand =
   | { kind: 'initialize'; libraryPath: string; startProcess: boolean }
@@ -34,7 +59,61 @@ export type FocasResponse =
   | { id: number; ok: false; message: string; code?: number };
 
 /** One connection to a control, as the Focas class gives it */
-export type FocasConnection = Pick<Focas, FocasRead | 'disconnect'>;
+export type FocasConnection = Pick<
+  Focas,
+  Exclude<FocasRead, 'readPath'> | 'disconnect' | 'selectPath' | 'readSpindles' | 'readProgramPath'
+>;
+
+/**
+ * Read one path of a control: select it (cnc_setpath), read its status, program, spindles and alarms,
+ * and select the main path again. It runs on the FOCAS thread as one request, so no other call of the
+ * connection can run between the path change and the reads.
+ *
+ * A control with one path gets no cnc_setpath call. The status must be read, or the request fails, and
+ * so does a failed cnc_setpath (with its FOCAS return code). The other reads may fail: each failure is in
+ * failedReads, and its value is left out. A lost connection (EW_SOCKET, EW_HANDLE) fails the request at once.
+ */
+export function readPath(connection: FocasConnection, path: number, pathCount: number): FocasPathValues {
+  const multiPath = pathCount > 1;
+  if (multiPath) connection.selectPath(path);
+  let values: FocasPathValues;
+  try {
+    const failedReads: FailedPathRead[] = [];
+    const optional = <T>(read: string, run: () => T): T | undefined => {
+      try {
+        return run();
+      } catch (error) {
+        if (isConnectionLost(error)) throw error;
+        failedReads.push({
+          read,
+          message: error instanceof Error ? error.message : String(error),
+          ...(error instanceof FocasError ? { code: error.code } : {}),
+        });
+        return undefined;
+      }
+    };
+
+    const status = connection.readStatus();
+    const program = optional('program', () => connection.readProgram());
+    const fullPath = program ? optional('program path', () => connection.readProgramPath()) : undefined;
+    values = {
+      path,
+      status,
+      program: program && { ...program, ...(fullPath ? { fullPath } : {}) },
+      spindles: optional('spindles', () => connection.readSpindles()),
+      alarms: optional('alarms', () => connection.readAlarms()),
+      failedReads,
+    };
+  } catch (error) {
+    // The reads failed, so their error counts. The main path is selected again when the connection still works.
+    if (multiPath && path !== MAIN_PATH && !isConnectionLost(error)) {
+      try { connection.selectPath(MAIN_PATH); } catch { /* the error of the reads is the one to give */ }
+    }
+    throw error;
+  }
+  if (multiPath && path !== MAIN_PATH) connection.selectPath(MAIN_PATH);
+  return values;
+}
 
 /** The parts of the FOCAS library that the FOCAS thread uses */
 export interface FocasLibrary {
@@ -55,6 +134,7 @@ const READS: ReadonlySet<string> = new Set<FocasRead>([
   'readOperatorMessages',
   'readSystemInfo',
   'readPathCount',
+  'readPath',
 ]);
 
 /**
@@ -119,6 +199,7 @@ export class FocasRequestHandler {
     if (!READS.has(read)) throw new Error(`Unknown FOCAS read: ${read}`);
     const connection = this.connections.get(session);
     if (!connection) throw new Error('Not connected to CNC controller');
+    if (read === 'readPath') return readPath(connection, args[0], args[1]);
     const call = connection[read] as (...values: number[]) => unknown;
     return call.apply(connection, args);
   }
