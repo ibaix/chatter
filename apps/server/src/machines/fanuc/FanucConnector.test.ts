@@ -1245,11 +1245,12 @@ describe('FanucConnector', () => {
       expect(data).toMatchObject({ emergency: true, alarm: true, alarmCode: 'E-STOP', alarmMessage: 'Emergency Stop Active' });
     });
 
-    it('gives an alarm of either path once, with the code of the screen', async () => {
+    it('gives the alarm of path 1 first, with the code of the screen, when both paths have alarms', async () => {
       const externalAlarm = { alarmNo: 1000, type: 15, axis: 0, message: 'DOOR OPEN' };
       lathe[1] = lathePath(1, 'RESET', { alarms: [externalAlarm] });
       lathe[1].status.alarm = true;
-      lathe[2] = lathePath(2, 'RESET', { alarms: [externalAlarm, { alarmNo: 401, type: 6, axis: 1, message: 'SERVO V-READY OFF' }] });
+      // Path 2 is read first, and its own alarm is first in its list
+      lathe[2] = lathePath(2, 'RESET', { alarms: [{ alarmNo: 401, type: 6, axis: 1, message: 'SERVO V-READY OFF' }, externalAlarm] });
       lathe[2].status.alarm = true;
 
       await connector.connect();
@@ -1266,6 +1267,38 @@ describe('FanucConnector', () => {
       const { data } = await connector.poll();
 
       expect(data).toMatchObject({ alarm: true, alarmCode: 'SV0401', alarmMessage: 'SERVO V-READY OFF' });
+    });
+
+    it('gives an E-STOP alarm when the emergency stop shows only on path 2', async () => {
+      lathe[2].status.emergency = true;
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data).toMatchObject({ emergency: true, alarm: true, alarmCode: 'E-STOP' });
+    });
+
+    it('gives the general alarm when only the status of path 2 has the alarm flag and no alarm list can be read', async () => {
+      lathe[1] = lathePath(1, 'RESET', { alarms: undefined });
+      lathe[2] = lathePath(2, 'RESET', { alarms: undefined });
+      lathe[2].status.alarm = true;
+
+      await connector.connect();
+      const { data } = await connector.poll();
+
+      expect(data).toMatchObject({ alarm: true, alarmCode: 'ALARM' });
+    });
+
+    it('clears the alarm when no path has one', async () => {
+      lathe[2] = lathePath(2, 'RESET', { alarms: [{ alarmNo: 401, type: 6, axis: 1, message: 'SERVO V-READY OFF' }] });
+      lathe[2].status.alarm = true;
+      await connector.connect();
+      await connector.poll();
+
+      lathe[2] = lathePath(2, 'RESET');
+      const { data } = await connector.poll();
+
+      expect(data).toMatchObject({ alarm: false, alarmCode: undefined, alarmMessage: undefined });
     });
 
     it('gives a warning of either path', async () => {

@@ -223,6 +223,21 @@ describe('readPath', () => {
     expect(lathe.selected()).toBe(1);
   });
 
+  it('does not read the full program name when the program cannot be read', () => {
+    const lathe = twoPathLathe();
+    lathe.connection.readProgram.mockImplementation(() => { throw new FocasError('Failed to read program: Data error', 5); });
+    lathe.connection.readAlarms.mockImplementation(() => { throw new Error('Failed to read alarms'); });
+
+    const values = readPath(lathe.connection, 2, 2);
+
+    expect(values.program).toBeUndefined();
+    expect(values.alarms).toBeUndefined();
+    expect(lathe.connection.readProgramPath).not.toHaveBeenCalled();
+    expect(values.failedReads.map(failed => failed.read)).toEqual(['program', 'alarms']);
+    expect(values.failedReads[1]).not.toHaveProperty('code');
+    expect(lathe.calls.at(-1)).toBe('setpath(1)');
+  });
+
   it('fails when the status cannot be read, and still selects path 1 again', () => {
     const lathe = twoPathLathe();
     lathe.connection.readStatus.mockImplementation(() => { throw new FocasError('Failed to read status: Busy', -1); });
