@@ -3,7 +3,7 @@ import { BaseMachineConnector, errorMessage } from '../BaseMachineConnector.js';
 import { Focas, type FocasAlarm, type FocasProgram, type FocasStatus } from './focas.js';
 import { isConnectionLost } from './focasError.js';
 import { fanucAlarmCode } from './fanucAlarmCodes.js';
-import { MAIN_PATH, type FocasPathValues } from './focasRequests.js';
+import { MAIN_PATH, OPTIONAL_PATH_READS, type FocasPathValues } from './focasRequests.js';
 import { focasThreads, type FocasSession, type FocasThread } from './focasThread.js';
 import { createLogger } from '../../logging/logger.js';
 import type {
@@ -35,9 +35,6 @@ const DISPOSE_DISCONNECT_TIMEOUT_MS = 3000;
 
 /** The Series 15 controls give cnc_statinfo another layout (ODBST), which Chatter does not read */
 const SERIES_15 = '15';
-
-/** The reads of readPath that may fail, each logged once per path while it fails */
-const OPTIONAL_PATH_READS = ['program', 'program path', 'spindles', 'alarms'];
 
 const log = createLogger('fanuc');
 

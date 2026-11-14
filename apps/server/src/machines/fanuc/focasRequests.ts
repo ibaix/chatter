@@ -9,9 +9,13 @@ import { FocasError, isConnectionLost } from './focasError.js';
 /** The path that Chatter reads mode, program, tool and part count from, and that a connection is left on */
 export const MAIN_PATH = 1;
 
+/** The reads of readPath that may fail. A failed one is in failedReads, by this name. */
+export const OPTIONAL_PATH_READS = ['program', 'program path', 'spindles', 'alarms'] as const;
+export type OptionalPathRead = typeof OPTIONAL_PATH_READS[number];
+
 /** A read of readPath that failed, so the server can log it. The other reads of the path still count. */
 export interface FailedPathRead {
-  read: string;
+  read: OptionalPathRead;
   message: string;
   code?: number;
 }
@@ -79,7 +83,7 @@ export function readPath(connection: FocasConnection, path: number, pathCount: n
   let values: FocasPathValues;
   try {
     const failedReads: FailedPathRead[] = [];
-    const optional = <T>(read: string, run: () => T): T | undefined => {
+    const optional = <T>(read: OptionalPathRead, run: () => T): T | undefined => {
       try {
         return run();
       } catch (error) {
