@@ -1,6 +1,6 @@
 import { combinedRunState, type MachinePath } from '@local-chatter/shared';
 import { BaseMachineConnector, errorMessage } from '../BaseMachineConnector.js';
-import { Focas, type FocasAlarm, type FocasProgram } from './focas.js';
+import { Focas, type FocasAlarm, type FocasProgram, type FocasStatus } from './focas.js';
 import { isConnectionLost } from './focasError.js';
 import { fanucAlarmCode } from './fanucAlarmCodes.js';
 import { MAIN_PATH, type FocasPathValues } from './focasRequests.js';
@@ -49,6 +49,12 @@ interface ControlInfo {
   type?: string;
   /** The number of paths. A control with more than one (such as a two-path lathe) gets each path read. */
   paths?: number;
+}
+
+/** The status of a poll, and the read of its alarm list, which comes later in the poll */
+interface PollStatus {
+  status: FocasStatus;
+  readAlarmList: () => Promise<FocasAlarm[] | undefined>;
 }
 
 /** The name of a program, or its O number when the control gives no name. Undefined when it could not be read. */
@@ -354,13 +360,21 @@ export class FanucConnector extends BaseMachineConnector {
 
   private async readAllValues(focas: FocasSession): Promise<void> {
     const pathCount = this.controlInfo.paths ?? 1;
-    if (pathCount > 1) {
-      await this.readMultiPathValues(focas, pathCount);
-      return;
-    }
-    // A control with one path: no cnc_setpath, and the same reads as before multi-path support
-    delete this.data.paths;
-    const status = await focas.readStatus();
+    const { status, readAlarmList } = pathCount > 1
+      ? await this.readEveryPath(focas, pathCount)
+      : await this.readOnePath(focas);
+
+    await this.readCounterMacros(focas);
+    // The status alarm flag may not show every alarm type, so read the alarm list too.
+    // A warning (battery low, fan ...) is not an alarm, so it never gives the general alarm.
+    this.applyAlarms(await readAlarmList(), status.alarm);
+    this.markEmergencyStopAsAlarm();
+    await this.readOperatorMessageData(focas);
+    await this.readConfiguredMacros(focas);
+  }
+
+  /** The values of the status that the machine shows (for a control with more than one path, the combined status) */
+  private applyStatus(status: FocasStatus): void {
     this.tmMode = status.tmMode;
     this.data.mode = status.mode;
     this.data.runState = status.runState;
@@ -368,15 +382,15 @@ export class FanucConnector extends BaseMachineConnector {
     this.data.alarm = status.alarm;
     this.data.warning = status.warning;
     this.data.motion = status.motion;
+  }
 
+  /** A control with one path: no cnc_setpath, and the same reads as before multi-path support */
+  private async readOnePath(focas: FocasSession): Promise<PollStatus> {
+    delete this.data.paths;
+    const status = await focas.readStatus();
+    this.applyStatus(status);
     await this.readSpindleAndProgram(focas);
-    await this.readCounterMacros(focas);
-    // The status alarm flag may not show every alarm type, so read the alarm list too.
-    // A warning (battery low, fan ...) is not an alarm, so it never gives the general alarm.
-    await this.readAlarmData(focas, status.alarm);
-    this.markEmergencyStopAsAlarm();
-    await this.readOperatorMessageData(focas);
-    await this.readConfiguredMacros(focas);
+    return { status, readAlarmList: () => this.readIfSupported('alarms', () => focas.readAlarms()) };
   }
 
   /**
@@ -385,12 +399,12 @@ export class FanucConnector extends BaseMachineConnector {
    * - Mode, program, spindle (the first spindle of the main path), tool and part count come from the main path.
    *   The macro variables (tool, part count and the user's) and the operator messages are read on the main path.
    * - The run state is that of a path that runs, else the main path's (combinedRunState): a machine runs when any path runs.
-   * - Emergency stop, alarm and warning: any path. The alarm lists of the paths are put together, without
-   *   repeats (an emergency stop or an operator alarm shows on each path).
+   * - Emergency stop, alarm and warning: any path. The alarm list is that of every path, the main path first,
+   *   so the alarm shown is the main path's first alarm, else the first alarm of another path.
    * The other paths are read first, and the main path last: its read must work, and it selects the main
    * path, so the reads after it surely go to the main path. A path other than the main one may fail; it is left out.
    */
-  private async readMultiPathValues(focas: FocasSession, pathCount: number): Promise<void> {
+  private async readEveryPath(focas: FocasSession, pathCount: number): Promise<PollStatus> {
     const otherPaths: FocasPathValues[] = [];
     for (let path = MAIN_PATH + 1; path <= pathCount; path++) {
       const values = await this.readIfSupported(`path ${path}`, () => focas.readPath(path, pathCount));
@@ -402,13 +416,15 @@ export class FanucConnector extends BaseMachineConnector {
     paths.forEach(values => this.noteFailedPathReads(values));
     this.logPathLayout(paths);
 
-    const status = main.status;
-    this.tmMode = status.tmMode;
-    this.data.mode = status.mode;
-    this.data.runState = combinedRunState(paths.map(values => values.status.runState));
-    this.data.emergency = paths.some(values => values.status.emergency);
-    this.data.warning = paths.map(values => values.status.warning).find(Boolean);
-    this.data.motion = status.motion;
+    const statuses = paths.map(values => values.status);
+    const status: FocasStatus = {
+      ...main.status,
+      runState: combinedRunState(statuses.map(pathStatus => pathStatus.runState)) ?? main.status.runState,
+      emergency: statuses.some(pathStatus => pathStatus.emergency),
+      alarm: statuses.some(pathStatus => pathStatus.alarm),
+      warning: statuses.map(pathStatus => pathStatus.warning).find(Boolean),
+    };
+    this.applyStatus(status);
 
     const mainSpindle = main.spindles?.[0];
     this.data.spindleSpeed = mainSpindle?.speed;
@@ -416,11 +432,9 @@ export class FanucConnector extends BaseMachineConnector {
     this.data.program = programName(main.program);
     this.data.paths = this.samePathsAsBefore(paths.map(toMachinePath));
 
-    await this.readCounterMacros(focas);
-    this.applyAlarms(this.alarmsOfPaths(paths), paths.some(values => values.status.alarm));
-    this.markEmergencyStopAsAlarm();
-    await this.readOperatorMessageData(focas);
-    await this.readConfiguredMacros(focas);
+    // Undefined when no path could read its alarms
+    const lists = paths.flatMap(values => (values.alarms ? [values.alarms] : []));
+    return { status, readAlarmList: async () => (lists.length > 0 ? lists.flat() : undefined) };
   }
 
   /**
@@ -430,21 +444,6 @@ export class FanucConnector extends BaseMachineConnector {
   private samePathsAsBefore(paths: MachinePath[]): MachinePath[] {
     const before = this.prevData.paths;
     return before && JSON.stringify(before) === JSON.stringify(paths) ? before : paths;
-  }
-
-  /**
-   * The alarms of every path, the main path first, each alarm once (the same code on two paths is one alarm).
-   * Undefined when no path could read its alarms.
-   */
-  private alarmsOfPaths(paths: FocasPathValues[]): FocasAlarm[] | undefined {
-    const lists = paths.map(values => values.alarms).filter((alarms): alarms is FocasAlarm[] => alarms !== undefined);
-    if (lists.length === 0) return undefined;
-    const byCode = new Map<string, FocasAlarm>();
-    for (const alarm of lists.flat()) {
-      const code = fanucAlarmCode(alarm.alarmNo, alarm.type, this.controlInfo.series);
-      if (!byCode.has(code)) byCode.set(code, alarm);
-    }
-    return [...byCode.values()];
   }
 
   /** A read that fails forgets the old value, so an old value is never shown as the current one */
@@ -484,16 +483,11 @@ export class FanucConnector extends BaseMachineConnector {
   }
 
   /**
+   * The alarm values from the alarm list (undefined when it could not be read) and the alarm flag of the status.
    * The code of the first alarm is the one on the alarm screen, such as SV0401 (see fanucAlarmCode).
    * When the alarm list is empty or cannot be read, the alarm flag of the status decides.
    * An alarm with no list gets a general code and message, never the text of an older alarm.
    */
-  private async readAlarmData(focas: FocasSession, statusAlarm: boolean): Promise<void> {
-    const alarms = await this.readIfSupported('alarms', () => focas.readAlarms());
-    this.applyAlarms(alarms, statusAlarm);
-  }
-
-  /** The alarm values from the alarm list (undefined when it could not be read) and the alarm flag of the status */
   private applyAlarms(alarms: FocasAlarm[] | undefined, statusAlarm: boolean): void {
     if (alarms && alarms.length > 0) {
       this.data.alarm = true;
