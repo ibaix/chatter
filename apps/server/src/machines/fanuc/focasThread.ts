@@ -67,7 +67,8 @@ const OWN_PROCESS: FocasThreadOwner = {
  * The cnc_* calls block until the control answers, for up to the connection timeout.
  * On the server's thread, that stopped every other machine, the web app and the live events.
  * Each FANUC machine gets its own FocasThread (see FocasThreads), so a slow control holds up only its own machine.
- * The thread starts at the first call. When it stops, it starts again at the next call, with no connections.
+ * The thread starts at the first call. When it fails or exits, it starts again at the next call, with no connections.
+ * After stop() it never starts again, so a removed machine cannot leave a thread behind.
  */
 export class FocasThread {
   private worker: FocasWorkerPort | null = null;
@@ -77,6 +78,8 @@ export class FocasThread {
   private readonly waiting = new Map<number, Waiting>();
   private loading: Promise<void> | null = null;
   private loaded = false;
+  /** stop() was called. The thread is done for good. */
+  private stopped = false;
 
   constructor(
     private readonly startWorker: () => FocasWorkerPort = startFocasWorker,
@@ -119,8 +122,12 @@ export class FocasThread {
     return this.send({ kind: 'cleanup', exitProcess }).then(() => undefined);
   }
 
-  /** Stop the thread, for example when its machine is removed. Its connections end with it. */
+  /**
+   * Stop the thread for good, for example when its machine is removed. Its connections end with it,
+   * and each later call fails, so a load that was still waiting cannot start the thread again.
+   */
   async stop(): Promise<void> {
+    this.stopped = true;
     const worker = this.worker;
     if (worker) this.forgetWorker(new Error('The FOCAS thread stopped'));
     this.owner.stopped(this);
@@ -136,6 +143,7 @@ export class FocasThread {
   }
 
   private send(command: FocasCommand): Promise<unknown> {
+    if (this.stopped) return Promise.reject(new Error('The FOCAS thread stopped'));
     const worker = this.runningWorker();
     const id = this.nextId++;
     return new Promise((resolve, reject) => {

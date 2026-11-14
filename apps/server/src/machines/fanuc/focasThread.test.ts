@@ -317,6 +317,24 @@ describe('FocasThreads', () => {
     expect(await session.readStatus()).toEqual({ mode: 'b' });
   });
 
+  it('does not start a thread that was stopped while it waited for the process to start', async () => {
+    let started = 0;
+    // The first thread starts the FOCAS process, and that takes a while
+    const { threads, workers } = threadsWithFakeWorkers(worker => { if (started++ === 0) worker.held = true; });
+    const starting = threads.thread().initialize('/lib.so');
+    const removed = threads.thread();
+    const waiting = removed.initialize('/lib.so');
+
+    // The machine of the second thread is removed before the process has started
+    await removed.stop();
+    workers[0].release();
+    await starting;
+
+    await expect(waiting).rejects.toThrow('The FOCAS thread stopped');
+    await expect(removed.connect('h', 8193, 10)).rejects.toThrow('The FOCAS thread stopped');
+    expect(workers).toHaveLength(1);
+  });
+
   it('keeps the crash behaviour of each thread: its connections fail, and it starts again at the next call', async () => {
     const { threads, workers } = threadsWithFakeWorkers();
     const thread = threads.thread();
@@ -395,7 +413,8 @@ describe('FocasThreads', () => {
 });
 
 describe('FocasThread with a real thread', () => {
-  const thread = new FocasThread();
+  let thread: FocasThread;
+  beforeEach(() => { thread = new FocasThread(); });
   afterEach(() => thread.stop());
 
   it('runs focasWorker.ts and answers with the error of the library', async () => {
