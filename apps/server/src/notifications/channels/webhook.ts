@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ChannelDefinition, OutgoingMessage, SendResult } from './ChannelType.js';
 import { networkFailure } from './networkFailure.js';
-import { hasNoLogin, isHttpAddress } from './webAddress.js';
+import { hasNoLogin, isHttpAddress, REDIRECTS } from './webAddress.js';
 
 const BAD_URL = 'Web address must start with http:// or https://';
 const LOGIN_IN_URL = 'Remove the user name and password from the web address. Put a password in Secret.';
@@ -9,9 +9,6 @@ const BAD_SECRET = 'Secret can have only plain letters, digits, and signs, with 
 
 /** fetch refuses a header value with other characters */
 const HEADER_SAFE = /^[\x21-\x7e]*$/;
-
-/** The answers that point to another address in the Location header */
-const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 
 const webhookSettings = z.object({
   url: z.string({ error: BAD_URL }).trim()

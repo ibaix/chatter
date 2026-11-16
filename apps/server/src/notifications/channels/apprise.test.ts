@@ -192,6 +192,10 @@ describe('appriseChannel', () => {
       },
     );
 
+    it('accepts an address under a longer path, for Apprise behind a proxy', () => {
+      expect(appriseChannel.settings.safeParse({ url: 'https://tools.example.com/apprise/notify/chatter' }).success).toBe(true);
+    });
+
     it.each(['http://apprise.local:8000', 'http://apprise.local:8000/notify/', 'http://apprise.local:8000/notify/a/b', 'http://apprise.local:8000/cfg/chatter'])(
       'refuses the address %s, which has no config key after /notify/',
       url => {

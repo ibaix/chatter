@@ -46,7 +46,7 @@ export interface ChannelDefinition<Settings> extends ChannelTypeInfo {
 
 /** A channel type in the list. It checks the saved values itself, so the rest of Chatter does not know their shape. */
 export interface ChannelType extends ChannelTypeInfo {
-  /** Only on the server: the web app does not need it */
+  /** channelTypeInfos leaves it out, so it stays on the server */
   timeoutMs?: number;
   checkSettings(values: unknown): SettingsCheck;
   /**

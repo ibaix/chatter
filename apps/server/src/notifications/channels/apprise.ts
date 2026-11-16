@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ChannelDefinition, OutgoingMessage, SendResult } from './ChannelType.js';
 import { networkFailure } from './networkFailure.js';
-import { hasNoLogin, isHttpAddress } from './webAddress.js';
+import { hasNoLogin, isHttpAddress, REDIRECTS } from './webAddress.js';
 
 /** Apprise answers only after it sent the message to each service, and an email server can be slow */
 const APPRISE_TIMEOUT_MS = 60_000;
@@ -12,13 +12,10 @@ const LOGIN_IN_URL = 'Remove the user name and password from the address. Put th
 const BAD_TAG = 'Tag can have only letters, digits, -, _, commas, and spaces';
 const COLON_IN_USERNAME = 'User name cannot have a colon (:)';
 
-/** The config key of Apprise API has 1 to 128 letters, digits, - or _ */
-const NOTIFY_PATH = /^\/notify\/[\w-]{1,128}\/?$/;
+/** The config key of Apprise API has 1 to 128 letters, digits, - or _. A proxy can put Apprise under a longer path. */
+const NOTIFY_PATH = /\/notify\/[\w-]{1,128}\/?$/;
 /** In Apprise, a comma means "or" and a space means "and" */
 const TAG = /^[\w\-, ]*$/;
-
-/** The answers that point to another address in the Location header */
-const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 
 /** The kinds of message of Apprise. Each service shows them in its own way, for example with a color or an icon. */
 type AppriseType = 'info' | 'success' | 'warning' | 'failure';
@@ -113,6 +110,7 @@ function appriseTypeOf({ kind, severity }: OutgoingMessage): AppriseType {
 function resultOf(status: number): SendResult {
   const answered = `Apprise answered ${status}`;
   if (status >= 200 && status < 300) return { ok: true, detail: 'Apprise sent it' };
+  if (REDIRECTS.has(status)) return { ok: false, retry: false, error: `${answered} and points to another address. Use the new address.` };
   if (status === 408 || status === 429 || status >= 500) {
     return { ok: false, retry: true, error: `${answered}. Chatter tries again later.` };
   }
@@ -121,7 +119,6 @@ function resultOf(status: number): SendResult {
 
 /** Each refusal stops at once. 424 can mean that some services got the message, so a new try would send it to them 2 times. */
 function refusalOf(status: number): string {
-  if (REDIRECTS.has(status)) return `Apprise answered ${status} and points to another address. Use the new address.`;
   switch (status) {
     case 424:
       return 'Apprise could not send to one service or more, or no service has the tag. Look in the Apprise log.';

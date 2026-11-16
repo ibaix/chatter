@@ -1,5 +1,8 @@
 /** Checks of a web address in the form of a channel type */
 
+/** The answers that point to another address in the Location header. Chatter does not follow them, because a redirect changes a POST to a GET. */
+export const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
 export function isHttpAddress(text: string): boolean {
   try {
     const { protocol } = new URL(text);
