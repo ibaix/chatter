@@ -4,6 +4,8 @@ export type {
   ToolInfo,
   ToolTable,
   MachineData,
+  MachinePath,
+  MachineSpindle,
   MachineType,
   Machine,
   MachineUpdate,

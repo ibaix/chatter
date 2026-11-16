@@ -1,4 +1,4 @@
-import type { MachineData, MacroConfig, ToolTable } from './machineData.js';
+import type { MachineData, MachinePath, MacroConfig, ToolTable } from './machineData.js';
 
 // ============================================
 // Machine Type Definitions
@@ -123,6 +123,12 @@ export interface FanucMachineData extends MachineData {
   motion?: number;           // Axis motion status
   operatorMessage?: string;  // Last operator message from control
   warning?: string;          // A warning of the status, such as "Battery low" (not an alarm)
+  /**
+   * Each path of a control with more than one, such as a two-path lathe, path 1 (the main path) first.
+   * Undefined for a control with one path. The values above are of the whole machine: runState is
+   * that of a path that runs (see combinedRunState), and the spindle is the first spindle of path 1.
+   */
+  paths?: MachinePath[];
 }
 
 export interface FanucMachine extends BaseMachine {

@@ -234,6 +234,30 @@ export interface FocasSpindleSpeed {
   speed: number;
 }
 
+/** The path that a connection addresses now, and how many paths the control has (cnc_getpath) */
+export interface FocasPathCount {
+  /** The path that cnc_* calls of this connection go to now, from 1 */
+  path: number;
+  /** The number of paths of the control: 1 for most controls, 2 for a two-path lathe such as a 0i-TT */
+  maxPath: number;
+}
+
+/** One spindle of a path, from cnc_rdspmeter and cnc_acts2 */
+export interface FocasSpindle {
+  /** The name on the control screen, such as "S1" or "S3" */
+  name: string;
+  /** The actual speed in rpm */
+  speed?: number;
+  /** The load in percent. Undefined when the control gives it in another unit. */
+  load?: number;
+}
+
+/** The program that runs on a path, with its full name on the control when it has one */
+export interface FocasProgramWithPath extends FocasProgram {
+  /** The full name, such as "//DATA_SV/O6000" for a program on the data server (cnc_exeprgname2) */
+  fullPath?: string;
+}
+
 /** One meter of the cnc_rdspmeter reply (LOADELM) */
 export interface LoadMeterReply {
   data: number;
@@ -257,6 +281,36 @@ const PERCENT_UNIT = 0;
 export function toSpindleLoadPercent(spindlesRead: number, reply: SpindleMeterReply): number | undefined {
   if (spindlesRead < 1 || reply.spload.unit !== PERCENT_UNIT) return undefined;
   return reply.spload.data / Math.pow(10, reply.spload.dec);
+}
+
+/** A meter of the cnc_rdspmeter reply with the name of its spindle (LOADELM name, suff1, suff2) */
+type NamedLoadMeterReply = LoadMeterReply & { name: number; suff1: number; suff2: number };
+
+/** The name of a spindle meter, such as "S1". Only letters and digits count. */
+function spindleName(meter: NamedLoadMeterReply): string {
+  return [meter.name, meter.suff1, meter.suff2]
+    .map(code => String.fromCharCode(code & 0xff))
+    .filter(letter => /[A-Za-z0-9]/.test(letter))
+    .join('');
+}
+
+/** The cnc_rdspmeter reply for one spindle, with the name of each meter */
+export interface NamedSpindleMeterReply extends SpindleMeterReply {
+  spload: NamedLoadMeterReply;
+}
+
+/**
+ * The spindles of a path, from the cnc_rdspmeter reply for every spindle (type -1) and the cnc_acts2 speeds
+ * of every spindle (sp_no -1). cnc_acts2 says nothing of how many spindles it filled: on a 0i-TT it fills
+ * only the first N entries, where N is the number of spindles of the path, and the rest is garbage (such as
+ * 8276). So only the first N speeds count, with N from cnc_rdspmeter.
+ */
+export function toSpindles(meters: NamedSpindleMeterReply[], speeds: number[]): FocasSpindle[] {
+  return meters.map((meter, index) => ({
+    name: spindleName(meter.spload) || `S${index + 1}`,
+    speed: speeds[index],
+    load: toSpindleLoadPercent(1, meter),
+  }));
 }
 
 // ============================================
@@ -342,6 +396,24 @@ export const ODBM = koffi.struct('ODBM', {
 /** The length that FANUC gives for ODBM in a cnc_rdmacro call (without the padding at the end) */
 const ODBM_LENGTH = 10;
 
+/** The most spindles of one path (MAX_SPINDLE of fwlib32.h for the 30i series) */
+const MAX_SPINDLES = 8;
+
+/**
+ * The cnc_acts2 reply for every spindle of the path (sp_no -1): one actual speed for each of up to
+ * MAX_SPINDLES spindles. Exported for the test of the field places.
+ */
+export const ODBACT2 = koffi.struct('ODBACT2', {
+  datano: 'int16',    // Spindle number (-1: all)
+  type: 'int16',
+  data: koffi.array('int32', MAX_SPINDLES), // Actual speed of each spindle (a long, read as 32 bits)
+});
+
+/** The cnc_exeprgname2 reply: the full name of the program that runs. Exported for the test of the field places. */
+export const EXEPRG_PATH = koffi.struct('EXEPRG_PATH', {
+  path: koffi.array('char', 256), // For example "//DATA_SV/O6000" or "//CNC_MEM/USER/PATH1/O1234"
+});
+
 /** The cnc_exeprgname reply. Exported for the test of the field places. */
 export const ODBEXEPRG = koffi.struct('ODBEXEPRG', {
   name: koffi.array('char', 36),  // Program name
@@ -385,6 +457,8 @@ function numberedMessageFields(messageType: koffi.IKoffiCType, count: number): R
 }
 
 const ODBALMMSG = koffi.struct('ODBALMMSG', numberedMessageFields(ODBALMMSG_DATA, MAX_ALARMS));
+/** The cnc_rdspmeter reply for every spindle of the path (type -1). Exported for the test of the field places. */
+export const ODBSPLOAD_ALL = koffi.struct('ODBSPLOAD_ALL', numberedMessageFields(ODBSPLOAD, MAX_SPINDLES));
 const OPMSG3 = koffi.struct('OPMSG3', numberedMessageFields(OPMSG3_DATA, MAX_OPERATOR_MESSAGES));
 
 /** Koffi gives a char array as a string, a Uint8Array or a number array */
@@ -443,6 +517,10 @@ interface FocasFunctions {
   rdopmsg3: (handle: number, type: number, length: number[], messages: object) => number;
   sysinfo: (handle: number, info: object) => number;
   getpath: (handle: number, path: number[], maxPath: number[]) => number;
+  setpath: (handle: number, path: number) => number;
+  acts2: (handle: number, spindle: number, speeds: object) => number;
+  rdspmeterAll: (handle: number, type: number, count: number[], meters: object) => number;
+  exeprgname2: (handle: number, program: object) => number;
 }
 
 function declareFunctions(library: koffi.IKoffiLib): FocasFunctions {
@@ -460,6 +538,10 @@ function declareFunctions(library: koffi.IKoffiLib): FocasFunctions {
     rdopmsg3: readMessages('cnc_rdopmsg3', OPMSG3),
     sysinfo: library.func('cnc_sysinfo', 'int16', ['uint16', koffi.out(koffi.pointer(ODBSYS))]),
     getpath: library.func('cnc_getpath', 'int16', ['uint16', koffi.out(koffi.pointer('int16')), koffi.out(koffi.pointer('int16'))]),
+    setpath: library.func('cnc_setpath', 'int16', ['uint16', 'int16']),
+    acts2: library.func('cnc_acts2', 'int16', ['uint16', 'int16', koffi.out(koffi.pointer(ODBACT2))]),
+    rdspmeterAll: library.func('cnc_rdspmeter', 'int16', ['uint16', 'int16', koffi.inout(koffi.pointer('int16')), koffi.out(koffi.pointer(ODBSPLOAD_ALL))]),
+    exeprgname2: library.func('cnc_exeprgname2', 'int16', ['uint16', koffi.out(koffi.pointer(EXEPRG_PATH))]),
   };
 }
 
@@ -516,6 +598,8 @@ const ALL_TYPES = -1;
 const LOAD_METER = 0;
 /** cnc_rdspmeter reads this many spindles, and then says how many it read */
 const SPINDLES_TO_READ = 1;
+/** The cnc_rdspmeter type for the load and the speed meter, and the cnc_acts2 number for every spindle of the path */
+const ALL_SPINDLES = -1;
 
 // ============================================
 // FOCAS class
@@ -716,12 +800,41 @@ export class Focas {
     return toSystemInfo(info as OdbsysReply);
   }
 
-  /** How many paths the control has (cnc_getpath). Chatter reads only the first. */
-  readPathCount(): number {
+  /** The path that this connection addresses, and how many paths the control has (cnc_getpath) */
+  readPathCount(): FocasPathCount {
     const path = [0];
     const maxPath = [0];
     throwIfFailed(this.connectedFunctions().getpath(this.handle, path, maxPath), 'read path count');
-    return maxPath[0];
+    return { path: path[0], maxPath: maxPath[0] };
+  }
+
+  /**
+   * Make the later calls of this connection go to this path (cnc_setpath). It only changes what this
+   * connection addresses: it writes nothing to the control, and other connections keep their own path.
+   */
+  selectPath(path: number): void {
+    throwIfFailed(this.connectedFunctions().setpath(this.handle, path), `select path ${path}`);
+  }
+
+  /** The name, speed and load of every spindle of the path (cnc_rdspmeter and cnc_acts2, see toSpindles) */
+  readSpindles(): FocasSpindle[] {
+    const fns = this.connectedFunctions();
+    const meters = {};
+    const count = [MAX_SPINDLES];
+    throwIfFailed(fns.rdspmeterAll(this.handle, ALL_SPINDLES, count, meters), 'read spindle meters');
+    const speeds = {};
+    throwIfFailed(fns.acts2(this.handle, ALL_SPINDLES, speeds), 'read spindle speeds');
+
+    const spindleCount = Math.max(0, Math.min(MAX_SPINDLES, count[0]));
+    const read = numberedMessages<NamedSpindleMeterReply>(meters, spindleCount);
+    return toSpindles(read, Array.from((speeds as { data: ArrayLike<number> }).data ?? []).slice(0, spindleCount));
+  }
+
+  /** The program that runs, with its full name (cnc_exeprgname2) */
+  readProgramPath(): string {
+    const program = {};
+    throwIfFailed(this.connectedFunctions().exeprgname2(this.handle, program), 'read program path');
+    return charsToString((program as { path: KoffiChars }).path);
   }
 
   private connectedFunctions(): FocasFunctions {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isMachineRunning, type RunningValues } from './running.js';
+import { combinedRunState, isMachineRunning, type RunningValues } from './running.js';
 
 describe('isMachineRunning', () => {
   it.each([
@@ -33,5 +33,25 @@ describe('isMachineRunning', () => {
     const spindleOnly: RunningValues & { spindleSpeed: number } = { spindleSpeed: 8000 };
     expect(isMachineRunning({})).toBeUndefined();
     expect(isMachineRunning(spindleOnly)).toBeUndefined();
+  });
+});
+
+describe('combinedRunState', () => {
+  it('gives the state of the main path when no path runs', () => {
+    expect(combinedRunState(['RESET', 'RESET'])).toBe('RESET');
+    expect(combinedRunState(['HOLD', 'RESET'])).toBe('HOLD');
+    expect(combinedRunState(['RESET', 'STOP'])).toBe('RESET');
+  });
+
+  it('gives the state of a path that runs, so the machine runs when any path runs', () => {
+    expect(combinedRunState(['START', 'RESET'])).toBe('START');
+    expect(combinedRunState(['RESET', 'START'])).toBe('START');
+    expect(combinedRunState(['STOP', 'MSTR'])).toBe('MSTR');
+    expect(isMachineRunning({ runState: combinedRunState(['RESET', 'START']) })).toBe(true);
+  });
+
+  it('gives the state of a control with one path as it is', () => {
+    expect(combinedRunState(['STOP'])).toBe('STOP');
+    expect(combinedRunState([])).toBeUndefined();
   });
 });

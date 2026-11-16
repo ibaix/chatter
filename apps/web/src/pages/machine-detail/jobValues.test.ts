@@ -50,6 +50,51 @@ describe('jobValuesOf', () => {
     expect(labelsOf(testMachine({ type: 'fanuc' } as never))).not.toContain('Warning');
   });
 
+  describe('a FANUC control with two paths (a two-path lathe)', () => {
+    // As probed on a 0i-TT: O6000 runs on path 1 and turns only the sub-spindle S3 of path 2
+    const paths = [
+      {
+        path: 1, runState: 'START', motion: 2, program: 'O6000', programPath: '//DATA_SV/O6000',
+        spindles: [{ name: 'S1', speed: 0, load: 0 }, { name: 'S2', speed: 0, load: 0 }],
+      },
+      { path: 2, runState: 'RESET', motion: 0, program: 'O5000', programPath: '//DATA_SV/O5000', spindles: [{ name: 'S3', speed: 500, load: 3.4 }] },
+    ];
+    const lathe = testMachine({ type: 'fanuc' } as never, {
+      mode: 'MEMORY', runState: 'START', program: 'O6000', spindleSpeed: 0, spindleLoad: 0, toolNumber: 1001, partCount: 4, paths,
+    });
+
+    it('adds the run state and program of each path, and each spindle after the main one by name', () => {
+      expect(jobValuesOf(lathe).slice(-5)).toEqual([
+        { label: 'Tool', value: 'T1001' },
+        { label: 'Path 1', value: 'START · O6000' },
+        { label: 'Path 2', value: 'RESET · O5000' },
+        { label: 'Spindle S2', value: '0 rpm · 0%' },
+        { label: 'Spindle S3', value: '500 rpm · 3%' },
+      ]);
+    });
+
+    it('shows the full name of the main program', () => {
+      expect(jobValuesOf(lathe)).toContainEqual({ label: 'Program', value: '//DATA_SV/O6000' });
+    });
+
+    it('shows a dash for a spindle that sends no values, and the S3 of path 2 also when path 1 sends no spindles', () => {
+      const noSpindles = testMachine({ type: 'fanuc' } as never, {
+        paths: [{ path: 1, runState: 'RESET', spindles: [] }, { path: 2, spindles: [{ name: 'S3' }] }],
+      });
+      expect(jobValuesOf(noSpindles).slice(-3)).toEqual([
+        { label: 'Path 1', value: 'RESET' },
+        { label: 'Path 2', value: '—' },
+        { label: 'Spindle S3', value: '—' },
+      ]);
+    });
+
+    it('adds no path rows for a control with one path', () => {
+      const oneTurret = testMachine({ type: 'fanuc' } as never, { program: 'O1234' });
+      expect(labelsOf(oneTurret)).not.toContain('Path 1');
+      expect(jobValuesOf(oneTurret)).toContainEqual({ label: 'Program', value: 'O1234' });
+    });
+  });
+
   it('adds each macro variable by name, or by location', () => {
     const machine = testMachine({ macros: [{ location: 500, name: 'Offset' }, { location: 501 }] }, { Offset: 1.5 });
     expect(jobValuesOf(machine).slice(-2)).toEqual([

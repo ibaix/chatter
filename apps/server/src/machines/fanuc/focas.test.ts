@@ -1,6 +1,6 @@
 import koffi from 'koffi';
 import { describe, expect, it } from 'vitest';
-import { LOADELM, ODBACT, ODBALMMSG_DATA, ODBEXEPRG, ODBM, ODBSPLOAD, ODBST, ODBSYS, toFocasMacro, toFocasStatus, toSpindleLoadPercent, toSystemInfo } from './focas.js';
+import { EXEPRG_PATH, LOADELM, ODBACT, ODBACT2, ODBALMMSG_DATA, ODBEXEPRG, ODBM, ODBSPLOAD, ODBSPLOAD_ALL, ODBST, ODBSYS, toFocasMacro, toFocasStatus, toSpindleLoadPercent, toSpindles, toSystemInfo } from './focas.js';
 
 describe('ODBST, the reply of cnc_statinfo', () => {
   // The layout of 0i, 16i/18i/21i, 30i/31i/32i and Power Mate i in fwlib32.h: 9 shorts.
@@ -139,5 +139,64 @@ describe('toFocasMacro', () => {
 
   it('gives no value for a vacant variable (mcr_val 0, dec_val -1), not 0', () => {
     expect(toFocasMacro({ datano: 500, mcr_val: 0, dec_val: -1 })).toEqual({ number: 500, value: undefined, decimalPlaces: -1 });
+  });
+});
+
+describe('the replies for every spindle of a path', () => {
+  // fwlib32.h: ODBACT2 { short datano; short type; long data[MAX_SPINDLE] }, MAX_SPINDLE 8 on the 30i series
+  it('puts the speeds of cnc_acts2 at offset 4, 4 bytes each', () => {
+    expect(koffi.offsetof(ODBACT2, 'data')).toBe(4);
+    expect(koffi.sizeof(ODBACT2)).toBe(36);
+  });
+
+  it('gives cnc_rdspmeter room for 8 spindles of 24 bytes each', () => {
+    expect(koffi.sizeof(ODBSPLOAD_ALL)).toBe(8 * 24);
+    expect(koffi.offsetof(ODBSPLOAD_ALL, 'msg2')).toBe(24);
+  });
+
+  it('gives cnc_exeprgname2 256 characters for the full program name', () => {
+    expect(koffi.sizeof(EXEPRG_PATH)).toBe(256);
+  });
+});
+
+describe('toSpindles', () => {
+  const S = 83;
+  const digit = (n: number) => 48 + n;
+  const meter = (suffix: number, load: number, speed: number, loadUnit = 0) => ({
+    spload: { data: load, dec: 0, unit: loadUnit, name: S, suff1: digit(suffix), suff2: 0 },
+    spspeed: { data: speed, dec: 0, unit: 1 },
+  });
+
+  // A FANUC 0i-TT (two paths), as probed: cnc_acts2(-1) fills only the first N speeds, N = the spindles of the path
+  it('keeps only the speeds of the spindles that cnc_rdspmeter read, not the garbage after them', () => {
+    const path1 = toSpindles([meter(1, 0, 0), meter(2, 0, 0)], [0, 0, 0, 8276, 5, 0, 0, 8276]);
+    expect(path1).toEqual([
+      { name: 'S1', speed: 0, load: 0 },
+      { name: 'S2', speed: 0, load: 0 },
+    ]);
+
+    // Path 2 (the sub-spindle S3), turning at 500 rpm after an MDI command
+    expect(toSpindles([meter(3, 84, 500)], [500, 0, 0, 8276, 5, 0, 0, 8276])).toEqual([{ name: 'S3', speed: 500, load: 84 }]);
+  });
+
+  it('gives the load with its decimal places, and no load in another unit', () => {
+    const tenths = meter(1, 375, 0);
+    tenths.spload.dec = 1;
+    expect(toSpindles([tenths], [100])[0].load).toBe(37.5);
+    expect(toSpindles([meter(1, 375, 0, 1)], [100])[0].load).toBeUndefined();
+  });
+
+  it('leaves out characters that are not letters or digits from the name, and numbers a spindle with no name', () => {
+    const garbled = meter(1, 0, 0);
+    garbled.spload.suff2 = 0x01;
+    expect(toSpindles([garbled], [0])[0].name).toBe('S1');
+    const unnamed = meter(1, 0, 0);
+    unnamed.spload.name = 0;
+    unnamed.spload.suff1 = 0;
+    expect(toSpindles([meter(1, 0, 0), unnamed], [0, 0])[1].name).toBe('S2');
+  });
+
+  it('gives no speed for a spindle that cnc_acts2 did not give', () => {
+    expect(toSpindles([meter(1, 0, 0)], [])[0].speed).toBeUndefined();
   });
 });
