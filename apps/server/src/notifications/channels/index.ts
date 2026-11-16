@@ -1,4 +1,5 @@
 import type { ChannelTypeInfo } from '@local-chatter/shared';
+import { appriseChannel } from './apprise.js';
 import { type ChannelType, defineChannelType } from './ChannelType.js';
 import { createTwilioChannel, twilioAddressOf } from './twilio.js';
 import { webhookChannel } from './webhook.js';
@@ -13,6 +14,7 @@ export const TWILIO_ADDRESS = twilioAddressOf(process.env.TWILIO_API_URL);
 const CHANNEL_TYPES: readonly ChannelType[] = [
   defineChannelType(createTwilioChannel(TWILIO_ADDRESS.url)),
   defineChannelType(webhookChannel),
+  defineChannelType(appriseChannel),
 ];
 
 export function findChannelType(id: string): ChannelType | undefined {

@@ -51,8 +51,15 @@ describe('defineChannelType', () => {
 });
 
 describe('channel types', () => {
-  it('has the Twilio text message type first, and then the webhook type', () => {
-    expect(channelTypeInfos().map(type => type.id)).toEqual(['twilio-sms', 'webhook']);
+  it('has the Twilio text message type first, then the webhook type, then the Apprise type', () => {
+    expect(channelTypeInfos().map(type => type.id)).toEqual(['twilio-sms', 'webhook', 'apprise']);
+  });
+
+  it('keeps the time limit of a type on the server, out of the list for the web app', () => {
+    const apprise = channelTypeInfos().find(type => type.id === 'apprise');
+
+    expect(apprise).toEqual({ id: 'apprise', name: 'Apprise', fields: expect.any(Array), note: expect.any(String) });
+    expect(findChannelType('apprise')?.timeoutMs).toBe(60_000);
   });
 
   it('lists each type with its fields, for the form of the web app', () => {
