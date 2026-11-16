@@ -190,6 +190,18 @@ describe('OutboxSender', () => {
     expect(statusOf(id)).toMatchObject({ status: 'waiting', lastError: 'Fake did not answer in time.' });
   });
 
+  it('waits the time limit of the channel type, when the type has its own', async () => {
+    const answersLate: ChannelType = { ...fakeType([]).type, timeoutMs: 1000, send: async () => {
+      await new Promise(resolve => setTimeout(resolve, 30));
+      return { ok: true, detail: 'Sent' };
+    } };
+    const id = queue();
+
+    await senderFor({ phones: { channel: channel('phones'), type: answersLate, values: {} } }, 10).sendDue();
+
+    expect(statusOf(id)).toMatchObject({ status: 'sent' });
+  });
+
   it('aborts the signal of a try that takes too long, so the request stops', async () => {
     let signal: AbortSignal | undefined;
     const slow: ChannelType = { ...fakeType([]).type, send: (_values, _message, context) => {
