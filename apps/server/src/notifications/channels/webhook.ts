@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ChannelDefinition, OutgoingMessage, SendResult } from './ChannelType.js';
 import { networkFailure } from './networkFailure.js';
+import { hasNoLogin, isHttpAddress } from './webAddress.js';
 
 const BAD_URL = 'Web address must start with http:// or https://';
 const LOGIN_IN_URL = 'Remove the user name and password from the web address. Put a password in Secret.';
@@ -15,7 +16,6 @@ const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const webhookSettings = z.object({
   url: z.string({ error: BAD_URL }).trim()
     .refine(isHttpAddress, BAD_URL)
-    // fetch refuses such an address, and its error text would show the password
     .refine(hasNoLogin, LOGIN_IN_URL),
   secret: z.string().trim().regex(HEADER_SAFE, BAD_SECRET).optional(),
 });
@@ -82,20 +82,4 @@ function resultOf(status: number): SendResult {
   }
   if (status === 401 || status === 403) return { ok: false, retry: false, error: `${answered}. Check the secret.` };
   return { ok: false, retry: false, error: `${answered}. Check the web address.` };
-}
-
-/** True also for text that is not a web address, because isHttpAddress refuses that text */
-function hasNoLogin(text: string): boolean {
-  if (!URL.canParse(text)) return true;
-  const { username, password } = new URL(text);
-  return !username && !password;
-}
-
-function isHttpAddress(text: string): boolean {
-  try {
-    const { protocol } = new URL(text);
-    return protocol === 'http:' || protocol === 'https:';
-  } catch {
-    return false;
-  }
 }
