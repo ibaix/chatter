@@ -158,6 +158,11 @@ Chatter gives each message an Apprise type, so each service can show it with its
 The title is `Chatter: ` and the machine name, for example the subject of an email. The text is the same as in a text message.
 
 Apprise answers only after it sent the message to each service. So Chatter waits up to 60 seconds for Apprise. For the other types, it waits 10 seconds.
+If Apprise does not answer in 60 seconds, Chatter tries again later. Then a service that already got the message can get it two times.
+
+::: warning Not tested with a real Apprise server yet
+The tests of Chatter use a fake Apprise. If something does not work, please tell us in a GitHub issue.
+:::
 
 ## The message list
 
@@ -187,6 +192,8 @@ The **Messages** panel shows each message of the last 30 days, the newest first.
 | **Failed:** Apprise has no config with this key | The config key in the **Apprise address** is wrong, or you did not save the config in Apprise. |
 | **Failed:** Apprise refused the login | Type the user name and password of Apprise. |
 | **Failed:** Chatter could not reach Apprise | Apprise API is not running, or the address is wrong. Chatter tries again for 24 hours. |
+| **Waiting:** Apprise did not answer in time | Apprise needs more than 60 seconds to send to your services. Look in the Apprise log for a slow service. Chatter tries again later. |
+| **Waiting:** Apprise answered 500 (or 502, 503, 429) | Apprise or one of its parts has a problem, or is busy. Look in the Apprise log. Chatter tries again for 24 hours. |
 | **Waiting** for a long time | The service does not answer, or answers with an error that can go away. Chatter tries again for 24 hours, then the message fails. |
 | An "And 7 more alerts" message | A channel gets at most 10 messages in 10 minutes. Chatter puts the other alerts in one message. Make fewer alerts fire, or select **Critical only**. |
 | The times are in UTC | Set the **Time zone** in **Message settings**. |
