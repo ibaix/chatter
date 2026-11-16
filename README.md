@@ -24,7 +24,7 @@
 - **File transfer:** browse, send, download, and delete the program files on the machines, with an upload history
 - **Users and roles:** Viewer, Operator, and Admin accounts
 - **Alerts:** your own alert rules on the machine history
-- **Notifications:** text messages (Twilio) and webhooks (Slack, ntfy, Home Assistant) when an alert starts and ends
+- **Notifications:** text messages (Twilio), webhooks (Slack, ntfy, Home Assistant), and Apprise (Teams, Discord, Telegram, email, and more) when an alert starts and ends
 - **Updates:** on the Raspberry Pi card, an Admin updates Chatter from **Settings > Updates**
 
 ## Install

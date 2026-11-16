@@ -3,7 +3,7 @@
 These endpoints are for an **Admin** only. Another role gets `403`.
 For what notifications do, see [Notifications](../guide/notifications.md).
 
-The server never sends a secret value back, such as the Twilio auth token or the webhook secret.
+The server never sends a secret value back, such as the Twilio auth token, the webhook secret, or the Apprise password.
 `hasSecret` tells which secrets have a saved value, for example `{ "authToken": true }`.
 
 ## Channel types
@@ -14,7 +14,7 @@ The server never sends a secret value back, such as the Twilio auth token or the
 
 Each type is `{ id, name, fields, note? }`. Each field is `{ key, label, kind, required, hint?, mono? }`.
 `kind` is `text`, `secret`, `url`, or `phone-list`. The value of a `phone-list` field is a list of phone numbers. The value of each other field is one text.
-Version 1 has the types `twilio-sms` and `webhook`.
+The types are `twilio-sms`, `webhook`, and `apprise`.
 
 ## Channels
 
