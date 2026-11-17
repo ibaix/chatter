@@ -170,6 +170,19 @@ describe('appriseChannel', () => {
       .toEqual({ ok: false, retry: true, error: 'Chatter could not reach Apprise (ECONNREFUSED).' });
   });
 
+  it('keeps the password and the config key out of the error, also when the network error text has them', async () => {
+    const PASSWORD = 'password-for-tests';
+    const KEY = 'private-key-for-tests';
+    const privateSettings = { ...settings, url: `http://apprise.local:8000/notify/${KEY}`, username: 'chatter', password: PASSWORD };
+    const failed = fakeFetch(() => {
+      throw new TypeError(`fetch failed for ${privateSettings.url} as chatter:${PASSWORD}`, { cause: { code: 'ECONNREFUSED' } });
+    });
+
+    const result = await appriseChannel.send(privateSettings, MESSAGE, failed.context());
+
+    expect(result).toEqual({ ok: false, retry: true, error: 'Chatter could not reach Apprise (ECONNREFUSED).' });
+  });
+
   it('gives the result of the send, also when Chatter cannot close the answer', async () => {
     const response = new Response('ok', { status: 200 });
     response.body!.cancel = () => Promise.reject(new Error('the time limit ended'));
@@ -217,7 +230,7 @@ describe('appriseChannel', () => {
       expect(firstProblem({ url: URL_WITH_KEY, username: 'a:b' })).toBe('User name cannot have a colon (:)');
     });
 
-    it('sends no tag and no login when they are only spaces', async () => {
+    it('sends no tag and no login when they are blank', async () => {
       const service = fakeFetch(() => new Response(null, { status: 200 }));
       const parsed = appriseChannel.settings.parse({ url: URL_WITH_KEY, tag: '  ', username: ' ', password: '' });
 
