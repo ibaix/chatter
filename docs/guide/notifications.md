@@ -1,7 +1,11 @@
 # Notifications
 
 Chatter can send a message when a machine alert starts and when it ends.
-The message goes to a **channel**: the phones of the shop as text messages (Twilio), a web address (a webhook), for example Slack, ntfy, or Home Assistant, or an Apprise server, which sends it on to Teams, Discord, Telegram, email, and many more services.
+The message goes to a **channel**. There are three types of channel:
+
+- **Twilio** sends a text message to the phones of the shop.
+- **Webhook** sends the message to a web address, for example Slack, ntfy, or Home Assistant.
+- **Apprise** sends the message to an Apprise server. Apprise then sends it to Teams, Discord, Telegram, email, and many more services.
 
 You set up the channels in **Settings > Notifications**. Only an **Admin** can see this tab.
 To make the alerts themselves, see [Alerts](./alerts.md).
@@ -151,11 +155,14 @@ Chatter gives each message an Apprise type, so each service can show it with its
 | Message | Apprise type |
 | --- | --- |
 | A critical alert starts | `failure` |
-| A warning alert starts, or an "And more alerts" message | `warning` |
+| A warning alert starts, or an "And N more alerts" message | `warning` |
 | An alert ends | `success` |
 | A test | `info` |
 
-The title is `Chatter: ` and the machine name, for example the subject of an email. The text is the same as in a text message.
+The title is `Chatter: ` and the machine name.
+A test and an "And N more alerts" message have only the title `Chatter`.
+In an email, the title is the subject.
+The text is the same as in a text message.
 
 Apprise answers only after it sent the message to each service. So Chatter waits up to 60 seconds for Apprise. For the other types, it waits 10 seconds.
 If Apprise does not answer in 60 seconds, Chatter tries again later. Then a service that already got the message can get it two times.
@@ -190,6 +197,7 @@ The **Messages** panel shows each message of the last 30 days, the newest first.
 | **Failed:** Chatter could not reach Apprise | Apprise API is not running, or the address is wrong. Chatter tries again for 24 hours. |
 | **Waiting:** Apprise did not answer in time | Apprise needs more than 60 seconds to send to your services. Look in the Apprise log for a slow service. Chatter tries again later. |
 | **Waiting:** Apprise answered 500 (or 502, 503, 429) | Apprise or one of its parts has a problem, or is busy. Look in the Apprise log. Chatter tries again for 24 hours. |
+| Apprise API does not start on the Chatter Raspberry Pi card | The Apprise image is only for 64-bit processors. The Pi card is 32-bit. Run Apprise API on another computer. See [Apprise](#apprise). |
 | **Waiting** for a long time | The service does not answer, or answers with an error that can go away. Chatter tries again for 24 hours, then the message fails. |
 | An "And 7 more alerts" message | A channel gets at most 10 messages in 10 minutes. Chatter puts the other alerts in one message. Make fewer alerts fire, or select **Critical only**. |
 | The times are in UTC | Set the **Time zone** in **Message settings**. |
