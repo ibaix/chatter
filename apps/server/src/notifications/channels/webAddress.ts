@@ -1,4 +1,4 @@
-/** Checks of a web address in the form of a channel type */
+/** Checks of a web address in the form of a channel type, and the redirect answers that Chatter does not follow */
 
 /** The answers that point to another address in the Location header. Chatter does not follow them, because a redirect changes a POST to a GET. */
 export const REDIRECTS = new Set([301, 302, 303, 307, 308]);

@@ -57,11 +57,10 @@ export const appriseChannel: ChannelDefinition<AppriseSettings> = {
   timeoutMs: APPRISE_TIMEOUT_MS,
   settings: appriseSettings,
   async send(settings, message, { fetch, signal }) {
+    const body = JSON.stringify(appriseBody(message, settings.tag));
     try {
       // A redirect would change the POST to a GET, so Chatter does not follow it
-      const response = await fetch(settings.url, {
-        method: 'POST', headers: headersOf(settings), body: JSON.stringify(appriseBody(message, settings.tag)), redirect: 'manual', signal,
-      });
+      const response = await fetch(settings.url, { method: 'POST', headers: headersOf(settings), body, redirect: 'manual', signal });
       // Chatter does not read the answer. A failure to close it must not send the message again.
       response.body?.cancel().catch(() => {});
       return resultOf(response.status);
@@ -77,10 +76,13 @@ function hasNotifyPath(text: string): boolean {
 
 function headersOf({ username, password }: AppriseSettings): Record<string, string> {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (username || password) {
-    headers.authorization = `Basic ${Buffer.from(`${username ?? ''}:${password ?? ''}`, 'utf8').toString('base64')}`;
-  }
+  if (username || password) headers.authorization = basicLogin(username ?? '', password ?? '');
   return headers;
+}
+
+/** The Authorization header of HTTP Basic Auth: "Basic" and then "user:password" in base64 */
+function basicLogin(username: string, password: string): string {
+  return `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`;
 }
 
 function appriseBody(message: OutgoingMessage, tag: string | undefined) {
@@ -107,12 +109,17 @@ function appriseTypeOf({ kind, severity }: OutgoingMessage): AppriseType {
   }
 }
 
+function answered(status: number): string {
+  return `Apprise answered ${status}`;
+}
+
 function resultOf(status: number): SendResult {
-  const answered = `Apprise answered ${status}`;
   if (status >= 200 && status < 300) return { ok: true, detail: 'Apprise sent it' };
-  if (REDIRECTS.has(status)) return { ok: false, retry: false, error: `${answered} and points to another address. Use the new address.` };
+  if (REDIRECTS.has(status)) {
+    return { ok: false, retry: false, error: `${answered(status)} and points to another address. Use the new address.` };
+  }
   if (status === 408 || status === 429 || status >= 500) {
-    return { ok: false, retry: true, error: `${answered}. Chatter tries again later.` };
+    return { ok: false, retry: true, error: `${answered(status)}. Chatter tries again later.` };
   }
   return { ok: false, retry: false, error: refusalOf(status) };
 }
@@ -129,6 +136,6 @@ function refusalOf(status: number): string {
     case 403:
       return 'Apprise refused the request. Check the tag and the access of the config.';
     default:
-      return `Apprise answered ${status}. Check the address.`;
+      return `${answered(status)}. Check the address.`;
   }
 }
