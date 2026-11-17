@@ -39,11 +39,15 @@ export type SettingsCheck = { ok: true } | { ok: false; error: string };
  */
 export interface ChannelDefinition<Settings> extends ChannelTypeInfo {
   settings: z.ZodType<Settings>;
+  /** The time limit of one try, for a service that answers only after it sent the message, for example Apprise. Without it, SEND_TIMEOUT_MS. */
+  timeoutMs?: number;
   send(settings: Settings, message: OutgoingMessage, context: SendContext): Promise<SendResult>;
 }
 
 /** A channel type in the list. It checks the saved values itself, so the rest of Chatter does not know their shape. */
 export interface ChannelType extends ChannelTypeInfo {
+  /** channelTypeInfos leaves it out, so it stays on the server */
+  timeoutMs?: number;
   checkSettings(values: unknown): SettingsCheck;
   /**
    * Never throws. A failure that the channel type did not expect is a failure that Chatter tries again.
@@ -53,12 +57,13 @@ export interface ChannelType extends ChannelTypeInfo {
 }
 
 export function defineChannelType<Settings>(definition: ChannelDefinition<Settings>): ChannelType {
-  const { id, name, fields, note } = definition;
+  const { id, name, fields, note, timeoutMs } = definition;
   return {
     id,
     name,
     fields,
     note,
+    timeoutMs,
     checkSettings(values) {
       const result = definition.settings.safeParse(values);
       return result.success ? { ok: true } : { ok: false, error: firstProblem(result.error) };

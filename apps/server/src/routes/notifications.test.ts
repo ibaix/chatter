@@ -96,7 +96,7 @@ describe('notification routes', () => {
   it('gives the channel types and their fields', async () => {
     const types = (await (await asAdmin('GET', '/notification-types')).json()) as { id: string }[];
 
-    expect(types.map(type => type.id)).toEqual(['twilio-sms', 'webhook']);
+    expect(types.map(type => type.id)).toEqual(['twilio-sms', 'webhook', 'apprise']);
   });
 
   it('adds a channel and never sends its secret back', async () => {

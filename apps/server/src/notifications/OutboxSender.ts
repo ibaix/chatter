@@ -21,7 +21,8 @@ export function retryWait(attempts: number): number {
 }
 
 /**
- * One try, which always ends: after `timeoutMs`, the signal stops the request, and the result is a failure to try again.
+ * One try, which always ends: after the time limit, the signal stops the request, and the result is a failure to try again.
+ * The time limit is the one of the channel type, or else `timeoutMs`.
  * A channel type can forget the signal, so a race with the timer makes sure.
  */
 export function sendWithTimeLimit(
@@ -35,7 +36,7 @@ export function sendWithTimeLimit(
     timer = setTimeout(() => {
       controller.abort();
       resolve(timeoutFailure(type));
-    }, timeoutMs);
+    }, type.timeoutMs ?? timeoutMs);
   });
   // The async function turns an error that send throws into a failed promise, so the timer always stops
   const sent = (async () => type.send(values, message, { fetch, signal: controller.signal }))();

@@ -1,7 +1,11 @@
 # Notifications
 
 Chatter can send a message when a machine alert starts and when it ends.
-The message goes to a **channel**: the phones of the shop as text messages (Twilio), or a web address (a webhook), for example Slack, ntfy, or Home Assistant.
+The message goes to a **channel**. There are three types of channel:
+
+- **Twilio** sends a text message to the phones of the shop.
+- **Webhook** sends the message to a web address, for example Slack, ntfy, or Home Assistant.
+- **Apprise** sends the message to an Apprise server. Apprise then sends it to Teams, Discord, Telegram, email, and many more services.
 
 You set up the channels in **Settings > Notifications**. Only an **Admin** can see this tab.
 To make the alerts themselves, see [Alerts](./alerts.md).
@@ -29,7 +33,7 @@ The **Message settings** panel is at the bottom of the tab.
 
 1. Click **Add channel**.
 2. Select the **Type**, and type a **Name**, for example "Shop phones".
-3. Fill in the boxes of the type. See [Text messages with Twilio](#text-messages-with-twilio) or [Webhooks](#webhooks).
+3. Fill in the boxes of the type. See [Text messages with Twilio](#text-messages-with-twilio), [Webhooks](#webhooks), or [Apprise](#apprise).
 4. Under **Which alerts**, select:
    - **Level:** **Warning and up** sends each alert. **Critical only** sends only the critical alerts.
    - **Machines:** **All machines, also the machines that you add later** sends the alerts of each machine, now and later. **Pick machines** sends only the alerts of the machines that you select.
@@ -45,7 +49,7 @@ Each alert sends 2 messages: one when it starts, and one when it ends.
 - **Edit** opens the channel. Change it, then click **Save channel**.
 - To delete a channel, click **Edit**, then **Delete channel**, then **Delete the channel**. Chatter stops its waiting messages. Its sent and failed messages stay in the message list as **Deleted channel**, until Chatter removes them.
 
-After you save, Chatter never shows a secret again, such as the Twilio auth token. To keep the saved secret, leave its box empty.
+After you save, Chatter never shows a secret again, such as the Twilio auth token or the Apprise password. To keep the saved secret, leave its box empty.
 To change it, type the new one. To stop sending a webhook secret, select **Delete the saved secret**.
 
 ## Text messages with Twilio
@@ -114,6 +118,55 @@ Use a topic name that other people cannot guess. If your topic needs a login, pu
 
 In the automation, `trigger.json.text` is the message, and `trigger.json.machine.name` is the machine name.
 
+## Apprise
+
+[Apprise](https://github.com/caronc/apprise) sends one message to more than 100 services, for example Microsoft Teams, Discord, Telegram, email, Pushover, and Signal.
+Chatter sends each message to **Apprise API**, a small server that you run in the shop. Apprise then sends it to your services.
+The logins of your services stay in Apprise, not in Chatter.
+
+Apprise API runs on a computer with a 64-bit processor (Intel, AMD, or 64-bit ARM). It does not run on the Chatter Raspberry Pi card, so put it on another computer.
+
+1. Start Apprise API with Docker, for example with this `docker-compose.yml`:
+
+   ```yaml
+   services:
+     apprise:
+       image: caronc/apprise:latest
+       ports:
+         - "8000:8000"
+       environment:
+         APPRISE_STATEFUL_MODE: simple
+       volumes:
+         - ./config:/config
+       restart: unless-stopped
+   ```
+
+2. Open Apprise in a browser, for example `http://apprise.local:8000`. Save the addresses of your services under a **config key**, for example `chatter`.
+   Each service has its own address form, for example `tgram://bottoken/ChatID` for Telegram. The [Apprise wiki](https://github.com/caronc/apprise/wiki) has the form of each service.
+3. In Apprise, send a test to the config key. Make sure that each service gets it.
+4. In Chatter, add a channel of the type **Apprise**:
+   - **Apprise address:** the Apprise address, then `/notify/`, then your config key, for example `http://apprise.local:8000/notify/chatter`.
+   - **Tag (optional):** sends only to the services that have this tag in Apprise. Leave it empty to send to the services with no tag. Type `all` to send to each service.
+   - **User name** and **Password (optional):** only when your Apprise asks for a login (`APPRISE_AUTH_REQUIRED=yes`).
+5. Click **Send test**.
+
+Chatter gives each message an Apprise type, so each service can show it with its own color or icon:
+
+| Message | Apprise type |
+| --- | --- |
+| A critical alert starts | `failure` |
+| A warning alert starts, or an "And N more alerts" message | `warning` |
+| An alert ends | `success` |
+| A test | `info` |
+
+The title is `Chatter: ` and the machine name.
+A test and an "And N more alerts" message have only the title `Chatter`.
+In an email, the title is the subject.
+The text is the same as in a text message.
+
+Apprise answers only after it sent the message to each service. So Chatter waits up to 60 seconds for Apprise. For the other types, it waits 10 seconds.
+If Apprise does not answer in 60 seconds, Chatter tries again later. Then a service that already got the message can get it two times.
+
 ## The message list
 
 The **Messages** panel shows each message of the last 30 days, the newest first. Chatter keeps at most 1000 messages, so a busy shop sees fewer days. Select a channel in **Channel** to see only its messages.
@@ -138,6 +191,13 @@ The **Messages** panel shows each message of the last 30 days, the newest first.
 | **Failed:** the address answered 404 | The web address is wrong. Copy it again. |
 | **Failed:** the address answered 401 or 403 | The secret is wrong, or the app needs one. |
 | **Failed:** the address points to another address | Chatter does not follow a redirect. Use the new address, for example `https://` in place of `http://`. |
+| **Failed:** Apprise could not send to one service or more | One of your services in Apprise failed, or no service has the tag. Look in the Apprise log. Chatter does not try again, so no service gets the message two times. |
+| **Failed:** Apprise has no config with this key | The config key in the **Apprise address** is wrong, or you did not save the config in Apprise. |
+| **Failed:** Apprise refused the login | Type the user name and password of Apprise. |
+| **Failed:** Chatter could not reach Apprise | Apprise API is not running, or the address is wrong. Chatter tries again for 24 hours. |
+| **Waiting:** Apprise did not answer in time | Apprise needs more than 60 seconds to send to your services. Look in the Apprise log for a slow service. Chatter tries again later. |
+| **Waiting:** Apprise answered 500 (or 502, 503, 429) | Apprise or one of its parts has a problem, or is busy. Look in the Apprise log. Chatter tries again for 24 hours. |
+| Apprise API does not start on the Chatter Raspberry Pi card | The Apprise image is only for 64-bit processors. The Pi card is 32-bit. Run Apprise API on another computer. See [Apprise](#apprise). |
 | **Waiting** for a long time | The service does not answer, or answers with an error that can go away. Chatter tries again for 24 hours, then the message fails. |
 | An "And 7 more alerts" message | A channel gets at most 10 messages in 10 minutes. Chatter puts the other alerts in one message. Make fewer alerts fire, or select **Critical only**. |
 | The times are in UTC | Set the **Time zone** in **Message settings**. |
@@ -155,8 +215,8 @@ Sometimes the service does not answer, or answers that it is busy. Then Chatter 
 The waits are 30 seconds, 1 minute, 2 minutes, and 5 minutes, then 10 minutes each time. After 24 hours, the message fails.
 It does not try again when the service refuses the message, for example for a wrong login, because the next try fails too.
 
-Chatter keeps the Twilio auth token and the webhook secret in `chatter.db` as plain text, because it must send them to the service. See [Keep chatter.db private](../security.md#keep-chatter-db-private).
+Chatter keeps the Twilio auth token, the webhook secret, and the Apprise password in `chatter.db` as plain text, because it must send them to the service. See [Keep chatter.db private](../security.md#keep-chatter-db-private).
 
-Chatter sends the messages directly to Twilio or to the web address. It cannot send them through a proxy server yet.
+Chatter sends the messages directly to Twilio, to the web address, or to Apprise. It cannot send them through a proxy server yet.
 
 To manage the channels from a program, see [Notifications API](../api/notifications.md).

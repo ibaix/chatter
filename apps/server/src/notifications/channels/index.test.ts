@@ -32,6 +32,13 @@ describe('defineChannelType', () => {
     expect(echoChannel.checkSettings({})).toEqual({ ok: false, error: 'To is necessary' });
   });
 
+  it('keeps the time limit of a type, and has none when the type gives none', () => {
+    const slow = defineChannelType({ id: 'slow', name: 'Slow', fields: [], settings: z.object({}), timeoutMs: 60_000, send: async () => ({ ok: true, detail: 'Sent' }) });
+
+    expect(slow.timeoutMs).toBe(60_000);
+    expect(echoChannel.timeoutMs).toBeUndefined();
+  });
+
   it('gives a failure that Chatter tries again, without the error text, when the channel type fails in a way it did not expect', async () => {
     const broken = defineChannelType({
       id: 'broken', name: 'Broken', fields: [], settings: z.object({}),
@@ -44,8 +51,15 @@ describe('defineChannelType', () => {
 });
 
 describe('channel types', () => {
-  it('has the Twilio text message type first, and then the webhook type', () => {
-    expect(channelTypeInfos().map(type => type.id)).toEqual(['twilio-sms', 'webhook']);
+  it('has the Twilio text message type first, then the webhook type, then the Apprise type', () => {
+    expect(channelTypeInfos().map(type => type.id)).toEqual(['twilio-sms', 'webhook', 'apprise']);
+  });
+
+  it('keeps the time limit of a type on the server, out of the list for the web app', () => {
+    const apprise = channelTypeInfos().find(type => type.id === 'apprise');
+
+    expect(apprise).toEqual({ id: 'apprise', name: 'Apprise', fields: expect.any(Array), note: expect.any(String) });
+    expect(findChannelType('apprise')?.timeoutMs).toBe(60_000);
   });
 
   it('lists each type with its fields, for the form of the web app', () => {
