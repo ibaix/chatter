@@ -160,10 +160,6 @@ The title is `Chatter: ` and the machine name, for example the subject of an ema
 Apprise answers only after it sent the message to each service. So Chatter waits up to 60 seconds for Apprise. For the other types, it waits 10 seconds.
 If Apprise does not answer in 60 seconds, Chatter tries again later. Then a service that already got the message can get it two times.
 
-::: warning Not tested with a real Apprise server yet
-The tests of Chatter use a fake Apprise. If something does not work, please tell us in a GitHub issue.
-:::
-
 ## The message list
 
 The **Messages** panel shows each message of the last 30 days, the newest first. Chatter keeps at most 1000 messages, so a busy shop sees fewer days. Select a channel in **Channel** to see only its messages.
