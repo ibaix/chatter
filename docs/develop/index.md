@@ -85,7 +85,8 @@ npm run typecheck       # check the TypeScript types in all parts
 
 The CI on GitHub also runs `npm audit` on `package-lock.json` and on `docs/package-lock.json`.
 The check fails when a package has a known high or critical vulnerability.
-To do the same check on your computer, run `npm audit --audit-level=high` and `npm audit --prefix docs --audit-level=high`.
+For `docs/`, the check skips the dev dependencies that only build the site.
+To do the same check on your computer, run `npm audit --audit-level=high` and `npm audit --prefix docs --omit=dev --audit-level=high`.
 
 ## Production build
 
