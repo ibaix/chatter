@@ -2,6 +2,7 @@ import type { ChannelTypeInfo } from '@local-chatter/shared';
 import { appriseChannel } from './apprise.js';
 import { type ChannelType, defineChannelType } from './ChannelType.js';
 import { discordChannel } from './discord.js';
+import { telegramChannel } from './telegram.js';
 import { createTwilioChannel, twilioAddressOf } from './twilio.js';
 import { webhookChannel } from './webhook.js';
 
@@ -17,6 +18,7 @@ const CHANNEL_TYPES: readonly ChannelType[] = [
   defineChannelType(webhookChannel),
   defineChannelType(appriseChannel),
   defineChannelType(discordChannel),
+  defineChannelType(telegramChannel),
 ];
 
 export function findChannelType(id: string): ChannelType | undefined {

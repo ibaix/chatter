@@ -1,12 +1,13 @@
 # Notifications
 
 Chatter can send a message when a machine alert starts and when it ends.
-The message goes to a **channel**. There are four types of channel:
+The message goes to a **channel**. There are five types of channel:
 
 - **Twilio** sends a text message to the phones of the shop.
 - **Webhook** sends the message to a web address, for example Slack, ntfy, or Home Assistant.
-- **Apprise** sends the message to an Apprise server. Apprise then sends it to Teams, Telegram, email, and many more services.
+- **Apprise** sends the message to an Apprise server. Apprise then sends it to Teams, Pushover, email, and many more services.
 - **Discord** sends the message to a channel of a Discord server. It can mention people or roles.
+- **Telegram** sends the message to a Telegram chat, with a bot of your own.
 
 You set up the channels in **Settings > Notifications**. Only an **Admin** can see this tab.
 To make the alerts themselves, see [Alerts](./alerts.md).
@@ -34,7 +35,7 @@ The **Message settings** panel is at the bottom of the tab.
 
 1. Click **Add channel**.
 2. Select the **Type**, and type a **Name**, for example "Shop phones".
-3. Fill in the boxes of the type. See [Text messages with Twilio](#text-messages-with-twilio), [Webhooks](#webhooks), [Apprise](#apprise), or [Discord](#discord).
+3. Fill in the boxes of the type. See [Text messages with Twilio](#text-messages-with-twilio), [Webhooks](#webhooks), [Apprise](#apprise), [Discord](#discord), or [Telegram](#telegram).
 4. Under **Which alerts**, select:
    - **Level:** **Warning and up** sends each alert. **Critical only** sends only the critical alerts.
    - **Machines:** **All machines, also the machines that you add later** sends the alerts of each machine, now and later. **Pick machines** sends only the alerts of the machines that you select.
@@ -50,7 +51,7 @@ Each alert sends 2 messages: one when it starts, and one when it ends.
 - **Edit** opens the channel. Change it, then click **Save channel**.
 - To delete a channel, click **Edit**, then **Delete channel**, then **Delete the channel**. Chatter stops its waiting messages. Its sent and failed messages stay in the message list as **Deleted channel**, until Chatter removes them.
 
-After you save, Chatter never shows a secret again, such as the Twilio auth token, the Apprise password, or the Discord webhook address. To keep the saved secret, leave its box empty.
+After you save, Chatter never shows a secret again, such as the Twilio auth token, the Apprise password, the Discord webhook address, or the Telegram bot token. To keep the saved secret, leave its box empty.
 To change it, type the new one. To stop sending a webhook secret, select **Delete the saved secret**.
 
 ## Text messages with Twilio
@@ -205,6 +206,21 @@ To get an ID, turn on **Developer Mode** in Discord (**User Settings > Advanced*
 Chatter mentions the people when an alert starts, and for a test. It does not mention them when an alert ends, or for an "And N more alerts" message.
 Only the mentions in this box send a notification to people. A machine name that has `@everyone` in it sends none.
 
+## Telegram
+
+Chatter sends each message to a Telegram chat, with a bot of your own. The chat can be a group, a channel, or a private chat with you.
+
+1. In Telegram, send `/newbot` to **@BotFather**. Follow the steps, and copy the **bot token**.
+2. Send a message to your bot. Or add the bot to your group or channel, and write a message there. Telegram does not let a bot write first.
+3. Open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser. Put your bot token in place of `<TOKEN>`. Look for `"chat":{"id":` in the answer. The number after it is the chat ID.
+   A group has a negative number, for example `-1001234567890`. A private chat with you has a positive number.
+4. In Chatter, add a channel of the type **Telegram**:
+   - **Bot token:** from step 1. Chatter never shows it again after you save.
+   - **Chat ID:** from step 3. For a public channel, you can type `@` and the name of the channel. The bot must be an admin of the channel.
+5. Click **Send test**.
+
+The message has the same text as a text message.
+
 ## The message list
 
 The **Messages** panel shows each message of the last 30 days, the newest first. Chatter keeps at most 1000 messages, so a busy shop sees fewer days. Select a channel in **Channel** to see only its messages.
@@ -234,6 +250,9 @@ The **Messages** panel shows each message of the last 30 days, the newest first.
 | **Failed:** Apprise refused the login | Type the user name and password of Apprise. |
 | **Failed:** Discord answered 401, 403, or 404 | The webhook is deleted, or the address is wrong. Copy the webhook address from Discord again. |
 | **Failed:** Discord answered 400 and refused the message | Check the **Mention** box. Empty it, and send a test. |
+| **Failed:** Telegram refused the bot token | The bot token is wrong. Copy it again from @BotFather. |
+| **Failed:** Telegram cannot find the chat | The chat ID is wrong. Look in `getUpdates` again. |
+| **Failed:** The bot cannot write to the chat | Send a message to the bot, or add the bot to the group or channel. For a channel, make the bot an admin. |
 | **Failed:** Chatter could not reach Apprise | Apprise API is not running, or the address is wrong. Chatter tries again for 24 hours. |
 | **Waiting:** Apprise did not answer in time | Apprise needs more than 60 seconds to send to your services. Look in the Apprise log for a slow service. Chatter tries again later. |
 | **Waiting:** Apprise answered 500 (or 502, 503, 429) | Apprise or one of its parts has a problem, or is busy. Look in the Apprise log. Chatter tries again for 24 hours. |
