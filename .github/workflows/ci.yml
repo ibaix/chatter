@@ -39,7 +39,9 @@ jobs:
   # Fails on a known high or critical vulnerability in a dependency.
   # npm audit reads the lockfile only, so this job does not install packages.
   # The root lockfile covers apps/server, apps/web and packages/shared.
-  # docs/ has its own lockfile. tools/fake-machines and tools/fake-notify have no dependencies.
+  # docs/ has its own lockfile. Its packages are dev dependencies that build the static site,
+  # so that step uses --omit=dev: vitepress 1.6 pins vite 5, and no fix is available for it yet.
+  # tools/fake-machines and tools/fake-notify have no dependencies.
   audit:
     runs-on: ubuntu-latest
 
@@ -57,7 +59,7 @@ jobs:
 
       - name: Audit docs dependencies
         if: ${{ !cancelled() }}
-        run: npm audit --prefix docs --audit-level=high
+        run: npm audit --prefix docs --omit=dev --audit-level=high
 
   build:
     runs-on: ubuntu-latest
