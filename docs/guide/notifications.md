@@ -1,11 +1,12 @@
 # Notifications
 
 Chatter can send a message when a machine alert starts and when it ends.
-The message goes to a **channel**. There are three types of channel:
+The message goes to a **channel**. There are four types of channel:
 
 - **Twilio** sends a text message to the phones of the shop.
 - **Webhook** sends the message to a web address, for example Slack, ntfy, or Home Assistant.
-- **Apprise** sends the message to an Apprise server. Apprise then sends it to Teams, Discord, Telegram, email, and many more services.
+- **Apprise** sends the message to an Apprise server. Apprise then sends it to Teams, Telegram, email, and many more services.
+- **Discord** sends the message to a channel of a Discord server. It can mention people or roles.
 
 You set up the channels in **Settings > Notifications**. Only an **Admin** can see this tab.
 To make the alerts themselves, see [Alerts](./alerts.md).
@@ -33,7 +34,7 @@ The **Message settings** panel is at the bottom of the tab.
 
 1. Click **Add channel**.
 2. Select the **Type**, and type a **Name**, for example "Shop phones".
-3. Fill in the boxes of the type. See [Text messages with Twilio](#text-messages-with-twilio), [Webhooks](#webhooks), or [Apprise](#apprise).
+3. Fill in the boxes of the type. See [Text messages with Twilio](#text-messages-with-twilio), [Webhooks](#webhooks), [Apprise](#apprise), or [Discord](#discord).
 4. Under **Which alerts**, select:
    - **Level:** **Warning and up** sends each alert. **Critical only** sends only the critical alerts.
    - **Machines:** **All machines, also the machines that you add later** sends the alerts of each machine, now and later. **Pick machines** sends only the alerts of the machines that you select.
@@ -49,7 +50,7 @@ Each alert sends 2 messages: one when it starts, and one when it ends.
 - **Edit** opens the channel. Change it, then click **Save channel**.
 - To delete a channel, click **Edit**, then **Delete channel**, then **Delete the channel**. Chatter stops its waiting messages. Its sent and failed messages stay in the message list as **Deleted channel**, until Chatter removes them.
 
-After you save, Chatter never shows a secret again, such as the Twilio auth token or the Apprise password. To keep the saved secret, leave its box empty.
+After you save, Chatter never shows a secret again, such as the Twilio auth token, the Apprise password, or the Discord webhook address. To keep the saved secret, leave its box empty.
 To change it, type the new one. To stop sending a webhook secret, select **Delete the saved secret**.
 
 ## Text messages with Twilio
@@ -167,6 +168,43 @@ The text is the same as in a text message.
 Apprise answers only after it sent the message to each service. So Chatter waits up to 60 seconds for Apprise. For the other types, it waits 10 seconds.
 If Apprise does not answer in 60 seconds, Chatter tries again later. Then a service that already got the message can get it two times.
 
+## Discord
+
+Chatter sends each message to a channel of a Discord server, through a **webhook**. A webhook is a web address that lets an app post to one channel. You need the **Manage Webhooks** permission on the server.
+
+1. In Discord, open **Server Settings > Integrations > Webhooks**. Click **New Webhook**, and select the channel. Click **Copy Webhook URL**.
+2. In Chatter, add a channel of the type **Discord**:
+   - **Webhook address:** the address from step 1. It starts with `https://discord.com/api/webhooks/`. It has a token in it, so Chatter never shows it again after you save.
+   - **Mention (optional):** the people or roles that Discord mentions when an alert starts. See [Mention people in Discord](#mention-people-in-discord).
+3. Click **Send test**.
+
+Each message is an embed (a card) with the text of the message. The color of the bar shows the kind of message:
+
+| Message | Color |
+| --- | --- |
+| A critical alert starts | Red |
+| A warning alert starts | Amber |
+| An alert ends | Green |
+| A test, an "And N more alerts" message, or an alert with no known level | Gray |
+
+Discord shows the time of the alert under the embed.
+
+### Mention people in Discord
+
+Type one mention or more in **Mention (optional)**. Put a space between them:
+
+| To mention | Type |
+| --- | --- |
+| A person | `<@USER_ID>` |
+| A role | `<@&ROLE_ID>` |
+| The people in the channel who are online | `@here` |
+| Everyone on the server | `@everyone` |
+
+To get an ID, turn on **Developer Mode** in Discord (**User Settings > Advanced**). Then right-click the person, or the role in **Server Settings > Roles**, and click **Copy ID**. Put the ID in the form, for example `<@&123456789012345678>` for a role.
+
+Chatter mentions the people when an alert starts, and for a test. It does not mention them when an alert ends, or for an "And N more alerts" message.
+Only the mentions in this box send a notification to people. A machine name that has `@everyone` in it sends none.
+
 ## The message list
 
 The **Messages** panel shows each message of the last 30 days, the newest first. Chatter keeps at most 1000 messages, so a busy shop sees fewer days. Select a channel in **Channel** to see only its messages.
@@ -194,6 +232,8 @@ The **Messages** panel shows each message of the last 30 days, the newest first.
 | **Failed:** Apprise could not send to one service or more | One of your services in Apprise failed, or no service has the tag. Look in the Apprise log. Chatter does not try again, so no service gets the message two times. |
 | **Failed:** Apprise has no config with this key | The config key in the **Apprise address** is wrong, or you did not save the config in Apprise. |
 | **Failed:** Apprise refused the login | Type the user name and password of Apprise. |
+| **Failed:** Discord answered 401, 403, or 404 | The webhook is deleted, or the address is wrong. Copy the webhook address from Discord again. |
+| **Failed:** Discord answered 400 and refused the message | Check the **Mention** box. Empty it, and send a test. |
 | **Failed:** Chatter could not reach Apprise | Apprise API is not running, or the address is wrong. Chatter tries again for 24 hours. |
 | **Waiting:** Apprise did not answer in time | Apprise needs more than 60 seconds to send to your services. Look in the Apprise log for a slow service. Chatter tries again later. |
 | **Waiting:** Apprise answered 500 (or 502, 503, 429) | Apprise or one of its parts has a problem, or is busy. Look in the Apprise log. Chatter tries again for 24 hours. |
