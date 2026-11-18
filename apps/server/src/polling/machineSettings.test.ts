@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockAccess = vi.fn();
 vi.mock('basic-ftp', () => ({
-  Client: vi.fn(() => ({ access: mockAccess, list: vi.fn().mockResolvedValue([]), close: vi.fn(), ftp: {} })),
+  Client: vi.fn(function () { return { access: mockAccess, list: vi.fn().mockResolvedValue([]), close: vi.fn(), ftp: {} }; }),
 }));
 
 import { BrotherConnector } from '../machines/brother/BrotherConnector.js';
