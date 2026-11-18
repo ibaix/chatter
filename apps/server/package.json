@@ -21,7 +21,7 @@
   "dependencies": {
     "@hono/node-server": "^2.1.6",
     "@local-chatter/shared": "*",
-    "basic-ftp": "^5.0.5",
+    "basic-ftp": "^6.2.6",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^16.3.1",
     "hono": "^4.13.16",
@@ -40,6 +40,6 @@
     "@types/xml2js": "^0.4.14",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "vitest": "^1.1.0"
+    "vitest": "^5.1.1"
   }
 }

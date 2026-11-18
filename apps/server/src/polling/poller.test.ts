@@ -659,7 +659,7 @@ describe('HardwarePoller', () => {
 });
 
 describe('HardwarePoller start with no machines', () => {
-  let pollSpy: MockInstance<Parameters<BrotherConnector['poll']>, ReturnType<BrotherConnector['poll']>>;
+  let pollSpy: MockInstance<BrotherConnector['poll']>;
   let poller: HardwarePoller;
 
   beforeEach(() => {

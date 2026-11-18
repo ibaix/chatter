@@ -51,9 +51,9 @@ describe('API Routes', () => {
   let app: ReturnType<typeof createApp>;
   let poller: HardwarePoller;
   let history: {
-    windowAverages: ReturnType<typeof vi.fn<[WindowQuery], ReturnType<HistorySource['windowAverages']>>>;
-    stateTime: ReturnType<typeof vi.fn<[RangeQuery], Promise<StateTime | null>>>;
-    rangeIncrease: ReturnType<typeof vi.fn<[RangeQuery], Promise<number | null>>>;
+    windowAverages: ReturnType<typeof vi.fn<(...args: [WindowQuery]) => ReturnType<HistorySource['windowAverages']>>>;
+    stateTime: ReturnType<typeof vi.fn<(...args: [RangeQuery]) => Promise<StateTime | null>>>;
+    rangeIncrease: ReturnType<typeof vi.fn<(...args: [RangeQuery]) => Promise<number | null>>>;
   };
   let mockDb: Database.Database;
   let statePeriods: StatePeriodStore;

@@ -30,7 +30,7 @@ interface MockOperatorMessage {
 const mockFocasInstance = {
   connect: vi.fn(),
   disconnect: vi.fn(async () => undefined),
-  readStatus: vi.fn<[], MockStatus>(() => ({
+  readStatus: vi.fn<() => MockStatus>(() => ({
     mode: 'MEM',
     runState: 'RUN',
     emergency: false,
@@ -38,14 +38,14 @@ const mockFocasInstance = {
     motion: 0,
   })),
   readSpindleSpeed: vi.fn(() => ({ speed: 5000 })),
-  readSpindleLoad: vi.fn<[], number | undefined>(() => 42),
+  readSpindleLoad: vi.fn<() => number | undefined>(() => 42),
   readProgram: vi.fn(() => ({ name: 'O1234', number: 1234 })),
-  readAlarms: vi.fn<[], MockAlarm[]>(() => []),
-  readMacro: vi.fn<[number?], { value: number | undefined }>(() => ({ value: 100 })),
-  readOperatorMessages: vi.fn<[], MockOperatorMessage[]>(() => []),
-  readSystemInfo: vi.fn<[], { cncType: string; mtType: string }>(() => ({ cncType: '31', mtType: 'M' })),
-  readPathCount: vi.fn<[], { path: number; maxPath: number }>(() => ({ path: 1, maxPath: 1 })),
-  readPath: vi.fn<[number, number], MockPathValues>(),
+  readAlarms: vi.fn<() => MockAlarm[]>(() => []),
+  readMacro: vi.fn<(...args: [number?]) => { value: number | undefined }>(() => ({ value: 100 })),
+  readOperatorMessages: vi.fn<() => MockOperatorMessage[]>(() => []),
+  readSystemInfo: vi.fn<() => { cncType: string; mtType: string }>(() => ({ cncType: '31', mtType: 'M' })),
+  readPathCount: vi.fn<() => { path: number; maxPath: number }>(() => ({ path: 1, maxPath: 1 })),
+  readPath: vi.fn<(...args: [number, number]) => MockPathValues>(),
 };
 
 interface MockSpindle {
@@ -109,6 +109,9 @@ describe('FanucConnector', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // restoreAllMocks does not reset vi.fn() mocks, so a test that makes connect throw would change the next tests.
+    // mockReset gives each mock back the implementation that it was made with.
+    Object.values(mockFocasInstance).forEach(mock => mock.mockReset());
 
     // Reset to available state
     focasAvailable = true;
