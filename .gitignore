@@ -24,3 +24,7 @@ docs/.vitepress/dist/
 
 # macOS folder files
 .DS_Store
+
+# Probe dumps and logs from real shop machines. They hold the shop's addresses and control details.
+apps/server/*-probe-*.json
+apps/server/*.log
