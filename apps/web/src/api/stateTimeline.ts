@@ -14,5 +14,6 @@ export async function fetchStateTimeline(machineId: string, range: string): Prom
     start: Date.parse(segment.start),
     end: Date.parse(segment.end),
     ...('detail' in segment && segment.detail !== undefined ? { detail: segment.detail } : {}),
+    ...('program' in segment && segment.program !== undefined ? { program: segment.program } : {}),
   }));
 }

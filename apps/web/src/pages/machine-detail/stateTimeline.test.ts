@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { clipSegments, segmentAt, stateTotals, timelineStateOf, withLiveState, type StateSegment } from './stateTimeline';
+import { testMachine } from '../../test/testMachine';
+import { clipSegments, liveStateOf, segmentAt, stateTotals, timelineStateOf, withLiveState, type StateSegment } from './stateTimeline';
 
 const segment = (state: StateSegment['state'], start: number, end: number, detail?: string): StateSegment =>
   detail === undefined ? { state, start, end } : { state, start, end, detail };
@@ -13,19 +14,39 @@ describe('timelineStateOf', () => {
   });
 });
 
-describe('withLiveState', () => {
-  it('keeps the segments when the live state is the same as the last one', () => {
-    const segments = [segment('running', 0, 100)];
+describe('liveStateOf', () => {
+  it('gives the state and the program of a connected machine', () => {
+    const machine = testMachine({ connected: true }, { execution: 'ACTIVE', program: 'O1001' });
+    expect(liveStateOf(machine)).toEqual({ state: 'running', program: 'O1001' });
+  });
 
-    expect(withLiveState(segments, 'running', 150)).toBe(segments);
+  it('gives no program for an offline machine, because its program is old', () => {
+    expect(liveStateOf(testMachine({ connected: false }, { program: 'O1001' }))).toEqual({ state: 'offline' });
+  });
+});
+
+describe('withLiveState', () => {
+  it('keeps the segments when the live state and program are the same as the last ones', () => {
+    const segments = [{ ...segment('running', 0, 100), program: 'O1' }];
+
+    expect(withLiveState(segments, { state: 'running', program: 'O1' }, 150)).toBe(segments);
   });
 
   it('holds the last state until the change, then starts a new segment', () => {
-    expect(withLiveState([segment('running', 0, 100)], 'idle', 150)).toEqual([segment('running', 0, 150), segment('idle', 150, 150)]);
+    expect(withLiveState([segment('running', 0, 100)], { state: 'idle' }, 150)).toEqual([segment('running', 0, 150), segment('idle', 150, 150)]);
+  });
+
+  it('starts a new segment when the program changes and the state does not', () => {
+    const segments = [{ ...segment('running', 0, 100), program: 'O1' }];
+
+    expect(withLiveState(segments, { state: 'running', program: 'O2' }, 150)).toEqual([
+      { ...segment('running', 0, 150), program: 'O1' },
+      { ...segment('running', 150, 150), program: 'O2' },
+    ]);
   });
 
   it('starts the timeline with the live state when there is none', () => {
-    expect(withLiveState([], 'idle', 150)).toEqual([segment('idle', 150, 150)]);
+    expect(withLiveState([], { state: 'idle' }, 150)).toEqual([segment('idle', 150, 150)]);
   });
 });
 

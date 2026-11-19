@@ -1,11 +1,10 @@
 import { useState, type PointerEvent } from 'react';
 import { useBoxSize } from '../../hooks/useBoxSize';
-import { machineStateOf } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 import { formatDuration, formatShare } from './reportView';
 import { messageFor, timeLabelAnchor, timeLabels, type ChartRange } from './historyChart';
 import { StateBand, StateSwatch, TIMELINE_STATE_LABELS } from './StateBand';
-import { segmentAt, stateTotals, timelineStateOf, type StateSegment } from './stateTimeline';
+import { liveStateOf, segmentAt, stateTotals, type StateSegment } from './stateTimeline';
 import { useStateTimeline } from './useStateTimeline';
 
 const BAND_HEIGHT = 88;
@@ -24,8 +23,7 @@ const LEGEND_TEXT = {
 
 /** The machine state over time, as a colored band, with the share of time in each state */
 export function StateChart({ machine, range }: { machine: Machine; range: ChartRange }) {
-  const live = timelineStateOf(machineStateOf(machine));
-  const { segments, status, now } = useStateTimeline(machine.id, live, range);
+  const { segments, status, now } = useStateTimeline(machine.id, liveStateOf(machine), range);
   const { ref, width } = useBoxSize<HTMLDivElement>();
   const totals = stateTotals(segments);
 
@@ -128,7 +126,7 @@ function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) 
   );
 }
 
-/** The state, its times and its length, and the alarm text, in a box over the band */
+/** The state, its times and its length, the program, and the alarm text, in a box over the band */
 function SegmentTooltip({ segment, left }: { segment: StateSegment; left: number }) {
   return (
     <div
@@ -142,6 +140,7 @@ function SegmentTooltip({ segment, left }: { segment: StateSegment; left: number
       <span className="font-mono text-zinc-300">
         {new Date(segment.start).toLocaleString()} – {new Date(segment.end).toLocaleTimeString()}
       </span>
+      {segment.program && <span className="text-zinc-300">Program <span className="font-mono text-zinc-50">{segment.program}</span></span>}
       {segment.detail && <span className="text-alarm-soft">{segment.detail}</span>}
     </div>
   );

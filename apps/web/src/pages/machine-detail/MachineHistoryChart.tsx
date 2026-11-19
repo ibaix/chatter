@@ -1,11 +1,10 @@
-import { historyWindowValue, type TimelineState } from '@local-chatter/shared';
+import { historyWindowValue } from '@local-chatter/shared';
 import { cn } from '@toolpath/ui';
 import { useState, type PointerEvent } from 'react';
 import type { HistoryPoint } from '../../api/history';
 import { CHOICE_HEIGHT, ChoiceMenu } from '../../components/ui/ChoiceMenu';
 import { RangeButtons } from '../../components/ui/RangeButtons';
 import { useBoxSize } from '../../hooks/useBoxSize';
-import { machineStateOf } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
@@ -23,7 +22,7 @@ import {
 } from './historyChart';
 import { StateBand, StateSwatch, TIMELINE_STATE_LABELS } from './StateBand';
 import { StateChart } from './StateChart';
-import { segmentAt, timelineStateOf, type StateSegment } from './stateTimeline';
+import { liveStateOf, segmentAt, type StateSegment } from './stateTimeline';
 import { useChartHistory } from './useChartHistory';
 import { useStateTimeline } from './useStateTimeline';
 
@@ -38,7 +37,7 @@ const TIME_LABEL_BOTTOM = 6;
 /** The space between the hover line and the tooltip */
 const TOOLTIP_GAP = 12;
 /** About the width of the tooltip, so a tooltip near the right edge stays inside the chart */
-const TOOLTIP_WIDTH = 150;
+const TOOLTIP_WIDTH = 190;
 const AXIS_LABEL_CLASS = 'fill-zinc-300 font-mono text-[0.6875rem]';
 /** The newest value from the live machine events, or null when the machine is not connected */
 function livePointOf(machine: Machine, value: ChartValue): HistoryPoint | null {
@@ -87,7 +86,7 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
 function ValueChart({ machine, value, range }: { machine: Machine; value: ChartValue; range: ChartRange }) {
   const livePoint = livePointOf(machine, value);
   const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range);
-  const { segments } = useStateTimeline(machine.id, timelineStateOf(machineStateOf(machine)), range);
+  const { segments } = useStateTimeline(machine.id, liveStateOf(machine), range);
   const { ref, width, height } = useBoxSize<HTMLDivElement>();
 
   return (
@@ -203,7 +202,7 @@ function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected,
         <HoverTooltip
           point={hovered}
           value={value}
-          state={segmentAt(stateSegments, hovered.time)?.state}
+          segment={segmentAt(stateSegments, hovered.time)}
           left={Math.min(scale.x(hovered.time) + TOOLTIP_GAP, width - TOOLTIP_WIDTH)}
         />
       )}
@@ -309,13 +308,13 @@ function HoverMarker({ point, scale }: { point: HistoryPoint; scale: ChartScale 
 interface HoverTooltipProps {
   point: HistoryPoint;
   value: ChartValue;
-  /** The machine state at the time of the point, when it is known */
-  state?: TimelineState;
+  /** The machine state and program at the time of the point, when they are known */
+  segment?: StateSegment;
   left: number;
 }
 
-/** The value and the time of the hovered point, and the machine state then, in a box over the chart */
-function HoverTooltip({ point, value, state, left }: HoverTooltipProps) {
+/** The value and the time of the hovered point, and the machine state and program then, in a box over the chart */
+function HoverTooltip({ point, value, segment, left }: HoverTooltipProps) {
   return (
     <div
       className="pointer-events-none absolute flex flex-col gap-0.5 rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs"
@@ -323,10 +322,11 @@ function HoverTooltip({ point, value, state, left }: HoverTooltipProps) {
     >
       <strong className="font-mono">{value.format(point.value)}</strong>
       <span className="text-zinc-300">{new Date(point.time).toLocaleString()}</span>
-      {state && (
+      {segment && (
         <span className="flex items-center gap-1.5 text-zinc-300">
-          <StateSwatch state={state} />
-          {TIMELINE_STATE_LABELS[state]}
+          <StateSwatch state={segment.state} />
+          {TIMELINE_STATE_LABELS[segment.state]}
+          {segment.program && <span className="font-mono text-zinc-50">{segment.program}</span>}
         </span>
       )}
     </div>
