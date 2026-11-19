@@ -17,6 +17,8 @@ interface MachineDetailPageProps {
   machines: Machine[];
   /** False until the server sent the machine list the first time */
   isLoaded: boolean;
+  /** True when the page lost its live connection to Chatter, so the values are old */
+  chatterIsLost?: boolean;
   /** True when the server removed the machine */
   onRemove: (id: string) => Promise<boolean>;
   /** True when the server saved the update */
@@ -30,7 +32,7 @@ const CLOCK_TICK_MS = 1000;
 const KNOWN_TYPES: readonly string[] = SUPPORTED_MACHINE_TYPES;
 
 /** One machine: its state, the current job, the spindle chart, and its files and settings */
-function MachineDetailPage({ machines, isLoaded, onRemove, onUpdate }: MachineDetailPageProps) {
+function MachineDetailPage({ machines, isLoaded, chatterIsLost = false, onRemove, onUpdate }: MachineDetailPageProps) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const now = useNow(CLOCK_TICK_MS);
@@ -50,7 +52,7 @@ function MachineDetailPage({ machines, isLoaded, onRemove, onUpdate }: MachineDe
   return (
     <>
       <MachineHeader machine={machine} state={state} now={now} />
-      <MachineNotice machine={machine} state={state} now={now} />
+      <MachineNotice machine={machine} state={state} now={now} chatterIsLost={chatterIsLost} />
       <div className="flex flex-wrap items-stretch gap-5">
         <CurrentJobPanel machine={machine} state={state} now={now} chartValue={chartValue.id} />
         <MachineHistoryChart

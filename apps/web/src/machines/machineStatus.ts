@@ -31,6 +31,14 @@ export function machineStateOf(machine: Machine): MachineState {
   return 'idle';
 }
 
+/**
+ * The machines while the page has lost its live connection to Chatter. Each one shows as connecting,
+ * because its last values are old: the page cannot tell if it still runs.
+ */
+export function machinesWhileChatterIsLost(machines: Machine[]): Machine[] {
+  return machines.map(machine => ({ ...machine, connecting: true }));
+}
+
 /** True when the server gets values from the machine now. Values from before are old, so the pages do not show them. */
 export function isReachable(state: MachineState): boolean {
   return state !== 'connecting' && state !== 'offline';
