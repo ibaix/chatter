@@ -138,7 +138,18 @@ export const periodQuery = z.object({
   kind: z.enum(STATE_PERIOD_KINDS, { error: `kind must be one of: ${STATE_PERIOD_KINDS.join(', ')}` }).optional(),
 });
 
-export const timelineQuery = z.object({ range: historyQuery.shape.range });
+/** The state timeline goes back at most this far. The chart shows at most 7 days. */
+const MAX_TIMELINE_DAYS = 31;
+const TIMELINE_UNIT_DAYS: Record<string, number> = { s: 1 / 86_400, m: 1 / 1440, h: 1 / 24, d: 1, w: 7 };
+
+/** How far back the state timeline goes */
+export const timelineQuery = z.object({
+  range: z.string()
+    .regex(/^-[1-9]\d{0,5}(s|m|h|d|w)$/, 'range must look like -1h')
+    .refine(range => Number(range.slice(1, -1)) * TIMELINE_UNIT_DAYS[range.slice(-1)] <= MAX_TIMELINE_DAYS,
+      `range can go back at most ${MAX_TIMELINE_DAYS} days`)
+    .optional(),
+});
 
 /** VictoriaMetrics keeps the history 1 year, so a longer report has no more data */
 const MAX_REPORT_DAYS = 366;

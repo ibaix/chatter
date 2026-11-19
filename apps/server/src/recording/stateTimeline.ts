@@ -1,5 +1,5 @@
 import { isRunningStateText, type TimelineState } from '@local-chatter/shared';
-import type { StatePeriod } from './StatePeriodStore.js';
+import type { StatePeriod, StatePeriodStore } from './StatePeriodStore.js';
 
 /**
  * One time when the machine had one state and one program. `detail` is the alarm code and text of an alarm.
@@ -66,4 +66,36 @@ function addSegment(segments: TimelineSegment[], segment: TimelineSegment): void
     return;
   }
   segments.push(segment);
+}
+
+/** More periods than this are open at one time only on a broken machine. One per kind is normal. */
+const MAX_OPEN_AT_ONE_TIME = 100;
+
+export interface TimelineRead {
+  periods: StatePeriod[];
+  /** Where the timeline starts. Later than the start of the range when `more` is true. */
+  from: number;
+  /** True when the range had more than `limit` periods, so the older part is left out */
+  more: boolean;
+}
+
+/**
+ * The periods for the state timeline from `from` to `to`, at most `limit` of the newest ones.
+ * With more, the timeline starts at the oldest period read (never before `from`). A long period of another kind
+ * that is open then (for example a run state open for days while the tool changes often) is read on its own,
+ * because the limit can leave it out.
+ */
+export function readTimelinePeriods(
+  store: StatePeriodStore,
+  { machineId, from, to, limit }: { machineId: string; from: number; to: number; limit: number },
+): TimelineRead {
+  const found = store.read({ machineId, from, to, limit: limit + 1 });
+  if (found.length <= limit) return { periods: found, from, more: false };
+
+  const read = found.slice(0, limit);
+  const cut = Math.max(read[read.length - 1]?.start ?? from, from);
+  const openAtCut = store.read({ machineId, from: cut, to: cut + 1, limit: MAX_OPEN_AT_ONE_TIME });
+  const keyOf = (period: StatePeriod) => `${period.kind} ${period.start} ${period.value}`;
+  const known = new Set(read.map(keyOf));
+  return { periods: [...read, ...openAtCut.filter(period => !known.has(keyOf(period)))], from: cut, more: true };
 }
