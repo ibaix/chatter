@@ -23,7 +23,8 @@ export function useStateTimeline(
   const [segments, setSegments] = useState<StateSegment[]>([]);
   const [status, setStatus] = useState<HistoryStatus>('loading');
   /** The machine and range that `segments` belong to. Until the effect starts the new ones, the old ones must not show. */
-  const key = `${machineId} ${range.id} ${end ?? 'now'}`;
+  // The query, not the id: two zooms have the same id but other times
+  const key = `${machineId} ${range.query} ${end ?? 'now'}`;
   const [segmentsKey, setSegmentsKey] = useState(key);
   const ownNow = useNow(CHART_CLOCK_TICK_MS);
   const now = end ?? clockNow ?? ownNow;

@@ -16,6 +16,7 @@ import {
   timeLabels,
   viewText,
   withLivePoint,
+  zoomView,
 } from './historyChart';
 
 const point = (time: number, value: number) => ({ time, value });
@@ -208,5 +209,34 @@ describe('withLivePoint windows', () => {
 
   it('keeps every value when the window is 0', () => {
     expect(withLivePoint([point(0, 1)], point(1, 2), 0)).toEqual([point(0, 1), point(1, 2)]);
+  });
+});
+
+describe('zoomView', () => {
+  const NOW = Date.parse('2026-11-19T15:00:00.000Z');
+  const MINUTE = 60_000;
+
+  it('shows the highlighted time, with a server window small enough for detail', () => {
+    const view = zoomView(NOW - 70 * MINUTE, NOW - 60 * MINUTE, NOW);
+
+    expect(view.end).toBe(NOW - 60 * MINUTE);
+    expect(view.range).toMatchObject({ id: 'zoom', ms: 10 * MINUTE, words: '10 minutes', query: '-600s', window: '2s' });
+  });
+
+  it('stays live when the highlight reaches now', () => {
+    expect(zoomView(NOW - 5 * MINUTE, NOW, NOW).end).toBeNull();
+  });
+
+  it('makes a very short highlight 30 seconds long, around its middle', () => {
+    const view = zoomView(NOW - 10 * MINUTE, NOW - 10 * MINUTE + 4000, NOW);
+
+    expect(view.range.ms).toBe(30_000);
+    expect(view.end).toBe(NOW - 10 * MINUTE + 2000 + 15_000);
+  });
+
+  it('gives the words of the range, for the text under the title', () => {
+    expect(zoomView(NOW - 45_000, NOW - 5000, NOW).range.words).toBe('40 seconds');
+    expect(zoomView(NOW - 5 * 3_600_000, NOW - 3_600_000, NOW).range.words).toBe('4 hours');
+    expect(zoomView(NOW - 4 * 86_400_000, NOW - 86_400_000, NOW).range.words).toBe('3 days');
   });
 });

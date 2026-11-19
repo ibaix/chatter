@@ -18,7 +18,8 @@ export function durationMs(text: string): number {
 }
 
 export interface ChartRange {
-  id: '10m' | '1h' | '24h' | '7d';
+  /** A range button, or 'zoom' for a time that the user highlighted on the chart */
+  id: '10m' | '1h' | '24h' | '7d' | 'zoom';
   /** The words after "in the last" */
   words: string;
   ms: number;
@@ -189,4 +190,40 @@ export function timeLabelAnchor(index: number, labelCount: number): 'start' | 'm
   if (index === 0) return 'start';
   if (index === labelCount - 1) return 'end';
   return 'middle';
+}
+
+const SECOND = 1000;
+/** A zoom is at least this long, so a very small highlight still shows some time */
+const MIN_ZOOM_MS = 30 * SECOND;
+/** A zoomed chart asks for about this many windows, so it shows detail */
+const ZOOM_POINTS = 300;
+
+/** "40 seconds", "12 minutes", "4 hours" or "3 days", for the text under the title */
+function durationWords(ms: number): string {
+  if (ms < 2 * MINUTE) return `${Math.round(ms / SECOND)} seconds`;
+  if (ms < 2 * HOUR) return `${Math.round(ms / MINUTE)} minutes`;
+  if (ms < 2 * DAY) return `${Math.round(ms / HOUR)} hours`;
+  return `${Math.round(ms / DAY)} days`;
+}
+
+/** The range of a zoom of `ms`. Its window gives about ZOOM_POINTS points, and at least 1 second. */
+function zoomRange(ms: number): ChartRange {
+  const seconds = Math.round(ms / SECOND);
+  return {
+    id: 'zoom',
+    words: durationWords(ms),
+    ms: seconds * SECOND,
+    query: `-${seconds}s`,
+    window: `${Math.max(1, Math.round(seconds / ZOOM_POINTS))}s`,
+  };
+}
+
+/**
+ * The chart view of a time that the user highlighted, from `from` to `to`. A very short highlight grows to
+ * MIN_ZOOM_MS around its middle. A highlight that reaches now gives a live chart (end null).
+ */
+export function zoomView(from: number, to: number, now: number): { range: ChartRange; end: number | null } {
+  const ms = Math.max(to - from, MIN_ZOOM_MS);
+  const end = Math.min((from + to) / 2 + ms / 2, now);
+  return { range: zoomRange(ms), end: end >= now - SECOND ? null : end };
 }
