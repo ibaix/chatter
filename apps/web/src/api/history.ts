@@ -16,14 +16,20 @@ export interface ValueHistory {
 /**
  * One value of a machine over time (for example the spindle speed), as one average for each window.
  * `range` is how far back, for example "-10m". `averageWindow` is the time that each average covers, for example "5s".
+ * `end` is the end of the time in milliseconds, to look back in time. Without it, the time ends now.
  */
 export async function fetchValueHistory(
   machineId: string,
   value: HistoryValue,
   range: string,
   averageWindow?: string,
+  end?: number,
 ): Promise<ValueHistory> {
-  const query = averageWindow ? { range, window: averageWindow } : { range };
+  const query = {
+    range,
+    ...(averageWindow ? { window: averageWindow } : {}),
+    ...(end === undefined ? {} : { end: new Date(end).toISOString() }),
+  };
   const response = await api.machine[':id'].history[':value'].$get({ param: { id: machineId, value }, query });
   if (!response.ok) throw new Error(`Could not load the ${value} history`);
   const body = await response.json();

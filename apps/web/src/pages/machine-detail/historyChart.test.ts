@@ -9,9 +9,12 @@ import {
   lineParts,
   mergeHistory,
   nearestPoint,
+  pannedEnd,
   recentPoints,
   stepPoints,
+  CHART_RANGES,
   timeLabels,
+  viewText,
   withLivePoint,
 } from './historyChart';
 
@@ -143,6 +146,42 @@ describe('timeLabels', () => {
     const now = Date.parse('2026-11-06T12:00:00.000Z');
     const [first] = timeLabels(7 * 86_400_000, now);
     expect(first.text).toBe(new Date(now - 7 * 86_400_000).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }));
+  });
+
+  it('gives the time, not "Now", at the end of a chart that looks back in time', () => {
+    const end = Date.parse('2026-11-06T12:00:00.000Z');
+    const labels = timeLabels(3_600_000, end, false);
+    expect(labels[4].text).toBe(new Date(end).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }));
+  });
+});
+
+describe('pannedEnd', () => {
+  const NOW = Date.parse('2026-11-19T15:00:00.000Z');
+  const HOUR = 3_600_000;
+
+  it('goes back by a part of the range from now', () => {
+    expect(pannedEnd(null, -0.5, HOUR, NOW)).toBe(NOW - HOUR / 2);
+  });
+
+  it('goes on from an end in the past', () => {
+    expect(pannedEnd(NOW - 2 * HOUR, 0.25, HOUR, NOW)).toBe(NOW - 2 * HOUR + HOUR / 4);
+  });
+
+  it('goes back to the live chart (null) when the step reaches now, so a chart never shows the future', () => {
+    expect(pannedEnd(NOW - HOUR / 4, 0.5, HOUR, NOW)).toBeNull();
+    expect(pannedEnd(null, 0.5, HOUR, NOW)).toBeNull();
+  });
+});
+
+describe('viewText', () => {
+  it('tells the range of a live chart', () => {
+    expect(viewText(CHART_RANGES[0], null)).toBe('in the last 10 minutes');
+  });
+
+  it('tells the start and the end of a chart that looks back in time', () => {
+    const end = Date.parse('2026-11-19T15:00:00.000Z');
+    const format = (time: number) => new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    expect(viewText(CHART_RANGES[1], end)).toBe(`from ${format(end - 3_600_000)} to ${format(end)}`);
   });
 });
 

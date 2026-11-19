@@ -50,6 +50,14 @@ export const ChevronDownIcon = (props: IconProps) => (
   <LineIcon strokeWidth={2} {...props}><path d="M4 6l4 4 4-4" /></LineIcon>
 );
 
+export const ChevronLeftIcon = (props: IconProps) => (
+  <LineIcon strokeWidth={2} {...props}><path d="M10 4l-4 4 4 4" /></LineIcon>
+);
+
+export const ChevronRightIcon = (props: IconProps) => (
+  <LineIcon strokeWidth={2} {...props}><path d="M6 4l4 4-4 4" /></LineIcon>
+);
+
 export const CheckIcon = (props: IconProps) => (
   <LineIcon strokeWidth={2} {...props}><path d="M3 8.5l3 3 7-7" /></LineIcon>
 );

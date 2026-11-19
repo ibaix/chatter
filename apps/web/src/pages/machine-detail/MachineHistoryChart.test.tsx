@@ -163,4 +163,50 @@ describe('MachineHistoryChart', () => {
       expect(path).toMatch(/L([\d.]+),[\d.]+L\1,/);
     });
   });
+
+  describe('moving in time', () => {
+    it('goes back half a range with Earlier, and back to the live chart with Now', async () => {
+      render(<ChartWithMenu machine={runningMachine()} />);
+      expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
+
+      const before = Date.now();
+      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+
+      await waitFor(() => expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', '-10m', '5s', expect.any(Number)));
+      const end = vi.mocked(fetchValueHistory).mock.lastCall![4]!;
+      expect(end).toBeGreaterThanOrEqual(before - 5 * MINUTE);
+      expect(end).toBeLessThanOrEqual(Date.now() - 5 * MINUTE);
+      expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m', end);
+      expect(screen.getByText(/^How fast the spindle turned from /)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Later' })).toBeEnabled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Now' }));
+
+      await waitFor(() => expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', '-10m', '5s'));
+      expect(screen.getByText('How fast the spindle turned in the last 10 minutes.')).toBeInTheDocument();
+    });
+
+    it('moves the time with a sideways scroll, but not with an up or down scroll', async () => {
+      render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));
+      const chartBody = screen.getByText(/^Loading the machine state|^Running: a program runs/).closest('div[class*="flex-col"]')!;
+
+      fireEvent.wheel(chartBody, { deltaX: 0, deltaY: 200 });
+      expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
+
+      fireEvent.wheel(chartBody, { deltaX: -80, deltaY: 0 });
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m', expect.any(Number)));
+    });
+
+    it('goes back to the live chart when the user picks another range', async () => {
+      render(<ChartWithMenu machine={runningMachine()} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Now' })).toBeEnabled());
+
+      fireEvent.click(screen.getByRole('button', { name: '1h' }));
+
+      await waitFor(() => expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', '-1h', undefined));
+      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
+    });
+  });
 });

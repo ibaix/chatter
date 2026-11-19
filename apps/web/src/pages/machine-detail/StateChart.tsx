@@ -3,7 +3,7 @@ import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 import { ChartTooltip, TimeLabels } from './ChartParts';
-import { messageFor, timeLabels, type ChartRange } from './historyChart';
+import { messageFor, timeLabels, viewText, type ChartRange } from './historyChart';
 import { formatDuration, formatShare } from './reportView';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
 import { liveStateOf, segmentAt, segmentTimesText, stateTotals, type StateSegment, type StateTotal } from './stateTimeline';
@@ -28,13 +28,13 @@ function lengthText(ms: number): string {
 }
 
 /** The machine state over time, as a colored band, with the share of time in each state */
-export function StateChart({ machine, range }: { machine: Machine; range: ChartRange }) {
-  const { segments, status, now } = useStateTimeline(machine.id, liveStateOf(machine), range);
+export function StateChart({ machine, range, end }: { machine: Machine; range: ChartRange; end: number | null }) {
+  const { segments, status, now } = useStateTimeline(machine.id, liveStateOf(machine), range, undefined, end);
   const { ref, width } = useBoxSize<HTMLDivElement>();
   const totals = stateTotals(segments);
 
   if (status !== 'ready') {
-    return <p className="m-0 flex h-[13.75rem] items-center justify-center text-center text-zinc-300">{messageFor(status, 'machine state', range)}</p>;
+    return <p className="m-0 flex h-[13.75rem] items-center justify-center text-center text-zinc-300">{messageFor(status, 'machine state', range, end)}</p>;
   }
 
   return (
@@ -53,7 +53,7 @@ export function StateChart({ machine, range }: { machine: Machine; range: ChartR
         ))}
       </div>
       <div ref={ref} className="relative">
-        {width > 0 && <StatePlot segments={segments} totalsText={totalsText(totals, range)} now={now} range={range} width={width} />}
+        {width > 0 && <StatePlot segments={segments} totalsText={totalsText(totals, range)} now={now} range={range} live={end === null} width={width} />}
       </div>
       <StateLegend explain className="gap-x-4" />
     </div>
@@ -67,13 +67,15 @@ function totalsText(totals: StateTotal[], range: ChartRange): string {
 
 interface StatePlotProps {
   segments: StateSegment[];
+  /** False when the chart looks back in time, so its end is not "Now" */
+  live: boolean;
   totalsText: string;
   now: number;
   range: ChartRange;
   width: number;
 }
 
-function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) {
+function StatePlot({ segments, totalsText, now, range, live, width }: StatePlotProps) {
   // The hovered time, not the segment: the live segment grows, so the segment is found again on each render
   const [hoveredTime, setHoveredTime] = useState<number | undefined>();
   const hovered = hoveredTime === undefined ? undefined : segmentAt(segments, hoveredTime);
@@ -91,7 +93,7 @@ function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) 
         width={width}
         height={SVG_HEIGHT}
         role="img"
-        aria-label={`Machine state in the last ${range.words}. ${totalsText}.`}
+        aria-label={`Machine state ${viewText(range, live ? null : now)}. ${totalsText}.`}
         onPointerMove={showSegment}
         onPointerLeave={() => setHoveredTime(undefined)}
         className="block"
@@ -109,7 +111,7 @@ function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) 
             className="stroke-zinc-50"
           />
         )}
-        <TimeLabels labels={timeLabels(range.ms, now)} x={x} y={BAND_HEIGHT + TIME_LABEL_GAP} />
+        <TimeLabels labels={timeLabels(range.ms, now, live)} x={x} y={BAND_HEIGHT + TIME_LABEL_GAP} />
       </svg>
       {hovered && <SegmentTooltip segment={hovered} left={Math.min(Math.max(0, x(hovered.start)), width - TOOLTIP_WIDTH)} />}
     </>

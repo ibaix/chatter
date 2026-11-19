@@ -148,21 +148,40 @@ function dayText(time: number): string {
   return new Date(time).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
 }
 
-/** Five labels under the chart, from the start of the range to "Now" */
-export function timeLabels(rangeMs: number, now: number): TimeLabel[] {
+/** Five labels under the chart, from the start of the range to its end. A live chart ends with "Now". */
+export function timeLabels(rangeMs: number, end: number, live = true): TimeLabel[] {
   const format = rangeMs > DAY ? dayText : clockText;
   return [4, 3, 2, 1, 0].map(quarter => {
-    const time = now - (rangeMs * quarter) / 4;
-    return { time, text: quarter === 0 ? 'Now' : format(time) };
+    const time = end - (rangeMs * quarter) / 4;
+    return { time, text: quarter === 0 && live ? 'Now' : format(time) };
   });
 }
 
+/**
+ * The end of the chart after a step of `step` ranges: negative goes back in time, positive goes on.
+ * `end` null is the live chart, which ends now. A step that reaches now gives null, so the chart is live again.
+ */
+export function pannedEnd(end: number | null, step: number, rangeMs: number, now: number): number | null {
+  const next = (end ?? now) + step * rangeMs;
+  return next >= now ? null : next;
+}
+
+function dateTimeText(time: number): string {
+  return new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/** The time that a chart shows, after its description: "in the last hour", or "from Nov 19, 2:00 PM to Nov 19, 3:00 PM" */
+export function viewText(range: ChartRange, end: number | null): string {
+  if (end === null) return `in the last ${range.words}`;
+  return `from ${dateTimeText(end - range.ms)} to ${dateTimeText(end)}`;
+}
+
 /** The text in place of the chart while the history loads, when it fails, or when it is empty */
-export function messageFor(status: HistoryStatus, valueName: string, range: ChartRange): string {
+export function messageFor(status: HistoryStatus, valueName: string, range: ChartRange, end: number | null = null): string {
   const name = valueName.toLowerCase();
   if (status === 'loading') return `Loading the ${name} history…`;
   if (status === 'failed') return `Could not load the ${name} history. Reload the page to try again.`;
-  return `No ${name} in the last ${range.words}. Chatter saves it while the machine is connected.`;
+  return `No ${name} ${viewText(range, end)}. Chatter saves it while the machine is connected.`;
 }
 
 /** The first time label starts at the left edge and the last one ends at the right edge, so both stay inside the chart */

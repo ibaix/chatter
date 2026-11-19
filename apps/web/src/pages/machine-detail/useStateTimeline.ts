@@ -10,15 +10,23 @@ import { clipSegments, withLiveState, type LiveState, type StateSegment } from '
  * ends where the state was last known, so it does not paint an old state up to now.
  * A new machine or range starts again from no segments, so the old ones never show under the new ones.
  * `clockNow` is the chart's own "now", so a strip under a line ends where the line ends. Without it, the hook keeps its own clock.
+ * With an `end`, the band looks back in time: it shows the range before `end`, and no live states.
  */
-export function useStateTimeline(machineId: string, live: LiveState | undefined, range: ChartRange, clockNow?: number) {
+export function useStateTimeline(
+  machineId: string,
+  liveState: LiveState | undefined,
+  range: ChartRange,
+  clockNow?: number,
+  end: number | null = null,
+) {
+  const live = end === null ? liveState : undefined;
   const [segments, setSegments] = useState<StateSegment[]>([]);
   const [status, setStatus] = useState<HistoryStatus>('loading');
   /** The machine and range that `segments` belong to. Until the effect starts the new ones, the old ones must not show. */
-  const key = `${machineId} ${range.id}`;
+  const key = `${machineId} ${range.id} ${end ?? 'now'}`;
   const [segmentsKey, setSegmentsKey] = useState(key);
   const ownNow = useNow(CHART_CLOCK_TICK_MS);
-  const now = clockNow ?? ownNow;
+  const now = end ?? clockNow ?? ownNow;
   // The newest live state, so a new machine or range starts with it and does not wait for the next change
   const latestLive = useRef(live);
   latestLive.current = live;
@@ -32,7 +40,7 @@ export function useStateTimeline(machineId: string, live: LiveState | undefined,
     setSegmentsKey(key);
     setStatus('loading');
     lastKnownAt.current = undefined;
-    fetchStateTimeline(machineId, range.query)
+    (end === null ? fetchStateTimeline(machineId, range.query) : fetchStateTimeline(machineId, range.query, end))
       .then(loaded => {
         if (stopped) return;
         const current = latestLive.current;
@@ -43,7 +51,7 @@ export function useStateTimeline(machineId: string, live: LiveState | undefined,
         if (!stopped) setStatus('failed');
       });
     return () => { stopped = true; };
-  }, [machineId, range]);
+  }, [machineId, range, end]);
 
   // `live` is a new object on each render, so the effect runs only when its values change
   useEffect(() => {
@@ -52,7 +60,7 @@ export function useStateTimeline(machineId: string, live: LiveState | undefined,
 
   const chartNow = Math.max(now, segments[segments.length - 1]?.end ?? 0);
   if (live) lastKnownAt.current = chartNow;
-  const lastEnd = live ? chartNow : (lastKnownAt.current ?? segments[segments.length - 1]?.end ?? chartNow);
+  const lastEnd = end ?? (live ? chartNow : (lastKnownAt.current ?? segments[segments.length - 1]?.end ?? chartNow));
   const shown = useMemo(() => clipSegments(segments, chartNow - range.ms, chartNow, lastEnd), [segments, chartNow, range.ms, lastEnd]);
 
   if (segmentsKey !== key) return { segments: [], status: 'loading' as const, now: chartNow };

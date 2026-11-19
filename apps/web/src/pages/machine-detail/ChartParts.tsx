@@ -1,4 +1,5 @@
 import { cn } from '@toolpath/ui';
+import { ChevronLeftIcon, ChevronRightIcon } from '../../components/ui/icons';
 import type { CSSProperties, ReactNode } from 'react';
 import { timeLabelAnchor, type TimeLabel } from './historyChart';
 
@@ -29,6 +30,34 @@ export function ChartTooltip({ style, className, children }: { style: CSSPropert
       style={style}
     >
       {children}
+    </div>
+  );
+}
+
+const PAN_BUTTON_CLASS =
+  'inline-flex min-h-8 items-center gap-1 rounded-md border-0 bg-transparent px-2 font-semibold text-zinc-200 hover:text-zinc-50 disabled:cursor-default disabled:text-zinc-500';
+
+interface PanButtonsProps {
+  /** False for the live chart: it already ends now */
+  canGoLater: boolean;
+  onEarlier: () => void;
+  onLater: () => void;
+  onNow: () => void;
+}
+
+/** Buttons that move the time of the chart: back, on, and back to now */
+export function PanButtons({ canGoLater, onEarlier, onLater, onNow }: PanButtonsProps) {
+  return (
+    <div role="group" aria-label="Move in time" className="inline-flex gap-0.5 rounded-lg bg-zinc-950 p-[0.1875rem]">
+      <button type="button" onClick={onEarlier} className={PAN_BUTTON_CLASS} aria-label="Earlier">
+        <ChevronLeftIcon size={16} />
+      </button>
+      <button type="button" onClick={onLater} disabled={!canGoLater} className={PAN_BUTTON_CLASS} aria-label="Later">
+        <ChevronRightIcon size={16} />
+      </button>
+      <button type="button" onClick={onNow} disabled={!canGoLater} className={PAN_BUTTON_CLASS}>
+        Now
+      </button>
     </div>
   );
 }

@@ -1,13 +1,13 @@
 import { historyWindowValue } from '@local-chatter/shared';
 import { cn } from '@toolpath/ui';
-import { useState, type PointerEvent } from 'react';
+import { useRef, useState, type PointerEvent, type WheelEvent } from 'react';
 import type { HistoryPoint } from '../../api/history';
 import { CHOICE_HEIGHT, ChoiceMenu } from '../../components/ui/ChoiceMenu';
 import { RangeButtons } from '../../components/ui/RangeButtons';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
-import { AXIS_LABEL_CLASS, ChartTooltip, TimeLabels } from './ChartParts';
+import { AXIS_LABEL_CLASS, ChartTooltip, PanButtons, TimeLabels } from './ChartParts';
 import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
   axisTicks,
@@ -17,7 +17,9 @@ import {
   messageFor,
   nearestPoint,
   stepPoints,
+  pannedEnd,
   timeLabels,
+  viewText,
   type ChartRange,
 } from './historyChart';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
@@ -30,6 +32,12 @@ const MARGIN = { top: 12, right: 16, bottom: 38, left: 52 };
 /** The machine state strip under the plot, above the time labels */
 const STRIP_GAP = 5;
 const STRIP_HEIGHT = 6;
+/** The Earlier and Later buttons move the time by half the range */
+const BUTTON_STEP = 0.5;
+/** One step of a sideways scroll moves the time by a quarter of the range */
+const WHEEL_STEP = 0.25;
+/** How far a sideways scroll goes, in pixels, before the time moves one step */
+const WHEEL_STEP_PX = 60;
 /** The space between a value label and the left end of its grid line */
 const VALUE_LABEL_GAP = 8;
 /** The distance from the bottom of the chart to the time labels */
@@ -58,6 +66,24 @@ interface MachineHistoryChartProps {
 /** One machine value, or the machine state, over time, with a menu for the value and buttons for the time range */
 function MachineHistoryChart({ machine, choices, choice, onChoose, className }: MachineHistoryChartProps) {
   const [range, setRange] = useState<ChartRange>(CHART_RANGES[0]);
+  /** The end of the time that the chart shows, or null for the live chart that ends now */
+  const [end, setEnd] = useState<number | null>(null);
+  const wheelDelta = useRef(0);
+  const pan = (step: number) => setEnd(current => pannedEnd(current, step, range.ms, Date.now()));
+  const chooseRange = (next: ChartRange) => {
+    setRange(next);
+    setEnd(null);
+  };
+
+  /** A sideways scroll (trackpad, or Shift and the mouse wheel) moves the time. An up or down scroll stays with the page. */
+  const scrollTime = (event: WheelEvent<HTMLDivElement>) => {
+    const sideways = event.shiftKey && event.deltaX === 0 ? event.deltaY : event.deltaX;
+    if (!event.shiftKey && Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+    wheelDelta.current += sideways;
+    if (Math.abs(wheelDelta.current) < WHEEL_STEP_PX) return;
+    pan(Math.sign(wheelDelta.current) * WHEEL_STEP);
+    wheelDelta.current = 0;
+  };
 
   return (
     <section
@@ -67,25 +93,35 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-col gap-0.5">
           <ChartTitle choices={choices} choice={choice} onChoose={onChoose} />
-          <span className="text-xs text-zinc-300">{choice.description} in the last {range.words}.</span>
+          <span className="text-xs text-zinc-300">{choice.description} {viewText(range, end)}.</span>
         </div>
-        <RangeButtons options={CHART_RANGES} value={range} onChange={setRange} />
+        <div className="flex flex-wrap items-center gap-2">
+          <PanButtons
+            canGoLater={end !== null}
+            onEarlier={() => pan(-BUTTON_STEP)}
+            onLater={() => pan(BUTTON_STEP)}
+            onNow={() => setEnd(null)}
+          />
+          <RangeButtons options={CHART_RANGES} value={range} onChange={chooseRange} />
+        </div>
       </div>
-      {choice.id === MACHINE_STATE.id ? (
-        <StateChart machine={machine} range={range} />
-      ) : (
-        <ValueChart machine={machine} value={choice} range={range} />
-      )}
+      <div onWheel={scrollTime} className="flex flex-col gap-2.5">
+        {choice.id === MACHINE_STATE.id ? (
+          <StateChart machine={machine} range={range} end={end} />
+        ) : (
+          <ValueChart machine={machine} value={choice} range={range} end={end} />
+        )}
+      </div>
     </section>
   );
 }
 
 /** A machine value as a line, with the machine state as a thin strip under it */
-function ValueChart({ machine, value, range }: { machine: Machine; value: ChartValue; range: ChartRange }) {
+function ValueChart({ machine, value, range, end }: { machine: Machine; value: ChartValue; range: ChartRange; end: number | null }) {
   const livePoint = livePointOf(machine, value);
-  const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range);
+  const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range, end);
   // The chart's clock, so the strip ends where the line ends
-  const { segments: stripSegments, status: stateStatus } = useStateTimeline(machine.id, liveStateOf(machine), range, now);
+  const { segments: stripSegments, status: stateStatus } = useStateTimeline(machine.id, liveStateOf(machine), range, now, end);
   const { ref, width, height } = useBoxSize<HTMLDivElement>();
   const showPlot = points.length > 0 && width > 0;
 
@@ -101,12 +137,13 @@ function ValueChart({ machine, value, range }: { machine: Machine; value: ChartV
             now={now}
             range={range}
             gapMs={gapMs}
-            connected={machine.connected}
+            connected={machine.connected && end === null}
+            live={end === null}
             width={width}
             height={height}
           />
         ) : (
-          <p className="m-0 flex h-full items-center justify-center text-center text-zinc-300">{messageFor(status, value.name, range)}</p>
+          <p className="m-0 flex h-full items-center justify-center text-center text-zinc-300">{messageFor(status, value.name, range, end)}</p>
         )}
       </div>
       {showPlot && (
@@ -149,6 +186,8 @@ function ChartTitle({ choices, choice, onChoose }: ChartTitleProps) {
 
 interface ChartPlotProps {
   points: HistoryPoint[];
+  /** False when the chart looks back in time, so its end is not "Now" */
+  live: boolean;
   value: ChartValue;
   /** The machine state over the range, for the strip under the plot */
   stateSegments: StateSegment[];
@@ -160,7 +199,7 @@ interface ChartPlotProps {
   height: number;
 }
 
-function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected, width, height }: ChartPlotProps) {
+function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected, live, width, height }: ChartPlotProps) {
   const [hovered, setHovered] = useState<HistoryPoint | undefined>();
   const ticks = axisTicks(highestValue(points), value.smallestAxisTop);
   const scale = chartScale({ width, height, startTime: now - range.ms, rangeMs: range.ms, topValue: ticks[ticks.length - 1] });
@@ -180,13 +219,13 @@ function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected,
         width={width}
         height={height}
         role="img"
-        aria-label={`${value.name} in the last ${range.words}. Newest value: ${value.format(newest.value)}.`}
+        aria-label={`${value.name} ${viewText(range, live ? null : now)}. Newest value: ${value.format(newest.value)}.`}
         onPointerMove={showNearest}
         onPointerLeave={() => setHovered(undefined)}
         className="block"
       >
         <ValueAxis ticks={ticks} scale={scale} width={width} />
-        <TimeLabels labels={timeLabels(range.ms, now)} x={scale.x} y={height - TIME_LABEL_BOTTOM} />
+        <TimeLabels labels={timeLabels(range.ms, now, live)} x={scale.x} y={height - TIME_LABEL_BOTTOM} />
         {drawnParts.map(part => (
           <path key={part[0].time} d={linePath(part, scale)} fill="none" strokeWidth={2} strokeLinejoin="round" className="stroke-primary" />
         ))}
