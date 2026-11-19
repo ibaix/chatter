@@ -189,13 +189,44 @@ describe('MachineHistoryChart', () => {
     it('moves the time with a sideways scroll, but not with an up or down scroll', async () => {
       render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
       await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));
-      const chartBody = screen.getByText(/^Loading the machine state|^Running: a program runs/).closest('div[class*="flex-col"]')!;
+      const chartBody = screen.getByRole('group', { name: 'Chart: drag or scroll sideways to move in time' });
 
       fireEvent.wheel(chartBody, { deltaX: 0, deltaY: 200 });
       expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
 
       fireEvent.wheel(chartBody, { deltaX: -80, deltaY: 0 });
       await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m', expect.any(Number)));
+    });
+
+    it('moves the time when the user drags the chart: to the right goes back', async () => {
+      render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));
+      const chartBody = screen.getByRole('group', { name: 'Chart: drag or scroll sideways to move in time' });
+      vi.spyOn(chartBody, 'getBoundingClientRect').mockReturnValue({ width: BOX_WIDTH } as DOMRect);
+
+      const before = Date.now();
+      fireEvent.pointerDown(chartBody, { button: 0, clientX: 100, pointerId: 1 });
+      fireEvent.pointerMove(chartBody, { clientX: 100 + BOX_WIDTH / 2, pointerId: 1 });
+      fireEvent.pointerUp(chartBody, { clientX: 100 + BOX_WIDTH / 2, pointerId: 1 });
+
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m', expect.any(Number)));
+      const end = vi.mocked(fetchStateTimeline).mock.lastCall![2]!;
+      expect(end).toBeGreaterThanOrEqual(before - 5 * MINUTE - 1000);
+      expect(end).toBeLessThanOrEqual(Date.now() - 5 * MINUTE + 1000);
+    });
+
+    it('does not move the time for a click, or for a drag of the live chart into the future', async () => {
+      render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));
+      const chartBody = screen.getByRole('group', { name: 'Chart: drag or scroll sideways to move in time' });
+      vi.spyOn(chartBody, 'getBoundingClientRect').mockReturnValue({ width: BOX_WIDTH } as DOMRect);
+
+      fireEvent.pointerDown(chartBody, { button: 0, clientX: 300, pointerId: 1 });
+      fireEvent.pointerUp(chartBody, { clientX: 302, pointerId: 1 });
+      fireEvent.pointerDown(chartBody, { button: 0, clientX: 300, pointerId: 1 });
+      fireEvent.pointerUp(chartBody, { clientX: 100, pointerId: 1 });
+
+      expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
     });
 
     it('goes back to the live chart when the user picks another range', async () => {

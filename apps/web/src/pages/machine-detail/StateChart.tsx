@@ -2,7 +2,7 @@ import { useState, type PointerEvent } from 'react';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
-import { ChartTooltip, TimeLabels } from './ChartParts';
+import { ChartTooltip, dragStyle, TimeLabels } from './ChartParts';
 import { messageFor, timeLabels, viewText, type ChartRange } from './historyChart';
 import { formatDuration, formatShare } from './reportView';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
@@ -28,7 +28,7 @@ function lengthText(ms: number): string {
 }
 
 /** The machine state over time, as a colored band, with the share of time in each state */
-export function StateChart({ machine, range, end }: { machine: Machine; range: ChartRange; end: number | null }) {
+export function StateChart({ machine, range, end, dragX }: { machine: Machine; range: ChartRange; end: number | null; dragX: number }) {
   const { segments, status, now } = useStateTimeline(machine.id, liveStateOf(machine), range, undefined, end);
   const { ref, width } = useBoxSize<HTMLDivElement>();
   const totals = stateTotals(segments);
@@ -52,7 +52,7 @@ export function StateChart({ machine, range, end }: { machine: Machine; range: C
           </div>
         ))}
       </div>
-      <div ref={ref} className="relative">
+      <div ref={ref} className="relative" style={dragStyle(dragX)}>
         {width > 0 && <StatePlot segments={segments} totalsText={totalsText(totals, range)} now={now} range={range} live={end === null} width={width} />}
       </div>
       <StateLegend explain className="gap-x-4" />

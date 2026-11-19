@@ -7,7 +7,7 @@ import { RangeButtons } from '../../components/ui/RangeButtons';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
-import { AXIS_LABEL_CLASS, ChartTooltip, PanButtons, TimeLabels } from './ChartParts';
+import { AXIS_LABEL_CLASS, ChartTooltip, dragStyle, PanButtons, TimeLabels } from './ChartParts';
 import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
   axisTicks,
@@ -38,6 +38,8 @@ const BUTTON_STEP = 0.5;
 const WHEEL_STEP = 0.25;
 /** How far a sideways scroll goes, in pixels, before the time moves one step */
 const WHEEL_STEP_PX = 60;
+/** A drag shorter than this, in pixels, is a click */
+const MIN_DRAG_PX = 5;
 /** The space between a value label and the left end of its grid line */
 const VALUE_LABEL_GAP = 8;
 /** The distance from the bottom of the chart to the time labels */
@@ -85,6 +87,31 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
     wheelDelta.current = 0;
   };
 
+  /** Where a drag started, and the width of the chart then */
+  const dragStart = useRef<{ x: number; width: number } | null>(null);
+  /** How far the chart follows the mouse while the user drags. The new time loads once, when the drag ends. */
+  const [dragX, setDragX] = useState(0);
+  /** The live chart ends now, so it cannot go on: a drag to the left does not move it */
+  const shownDragX = (x: number) => (end === null ? Math.max(0, x) : x);
+
+  const startDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    dragStart.current = { x: event.clientX, width: event.currentTarget.getBoundingClientRect().width };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+  const followDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (dragStart.current) setDragX(shownDragX(event.clientX - dragStart.current.x));
+  };
+  const endDrag = (event: PointerEvent<HTMLDivElement>) => {
+    const start = dragStart.current;
+    dragStart.current = null;
+    setDragX(0);
+    if (!start || start.width <= 0) return;
+    const moved = shownDragX(event.clientX - start.x);
+    // A small move is a click, for example to see a hover box
+    if (Math.abs(moved) >= MIN_DRAG_PX) pan(-moved / start.width);
+  };
+
   return (
     <section
       aria-label={`${choice.name} chart`}
@@ -105,19 +132,37 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
           <RangeButtons options={CHART_RANGES} value={range} onChange={chooseRange} />
         </div>
       </div>
-      <div onWheel={scrollTime} className="flex flex-col gap-2.5">
+      <div
+        role="group"
+        aria-label="Chart: drag or scroll sideways to move in time"
+        onWheel={scrollTime}
+        onPointerDown={startDrag}
+        onPointerMove={followDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        className={cn('flex touch-pan-y flex-col gap-2.5 overflow-hidden select-none', dragX ? 'cursor-grabbing' : 'cursor-grab')}
+      >
         {choice.id === MACHINE_STATE.id ? (
-          <StateChart machine={machine} range={range} end={end} />
+          <StateChart machine={machine} range={range} end={end} dragX={dragX} />
         ) : (
-          <ValueChart machine={machine} value={choice} range={range} end={end} />
+          <ValueChart machine={machine} value={choice} range={range} end={end} dragX={dragX} />
         )}
       </div>
     </section>
   );
 }
 
+interface ValueChartProps {
+  machine: Machine;
+  value: ChartValue;
+  range: ChartRange;
+  end: number | null;
+  /** How far the plot follows a drag, in pixels */
+  dragX: number;
+}
+
 /** A machine value as a line, with the machine state as a thin strip under it */
-function ValueChart({ machine, value, range, end }: { machine: Machine; value: ChartValue; range: ChartRange; end: number | null }) {
+function ValueChart({ machine, value, range, end, dragX }: ValueChartProps) {
   const livePoint = livePointOf(machine, value);
   const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range, end);
   // The chart's clock, so the strip ends where the line ends
@@ -128,7 +173,7 @@ function ValueChart({ machine, value, range, end }: { machine: Machine; value: C
   return (
     <>
       {/* The box sets the chart height in rem, so the chart follows the page scale */}
-      <div ref={ref} className="relative h-[13.75rem]">
+      <div ref={ref} className="relative h-[13.75rem]" style={dragStyle(dragX)}>
         {showPlot ? (
           <ChartPlot
             points={points}

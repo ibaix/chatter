@@ -19,6 +19,11 @@ export function TimeLabels({ labels, x, y }: { labels: TimeLabel[]; x: (time: nu
   );
 }
 
+/** Moves a plot with the mouse while the user drags it. No style when it does not move. */
+export function dragStyle(dragX: number): CSSProperties | undefined {
+  return dragX ? { transform: `translateX(${dragX}px)` } : undefined;
+}
+
 /** The box of a hover readout, over the chart. `style` places it. */
 export function ChartTooltip({ style, className, children }: { style: CSSProperties; className?: string; children: ReactNode }) {
   return (
