@@ -7,10 +7,10 @@ An unknown machine id gets `404`.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/machine/:id/history/:value` | One machine value over time, as one average for each window |
+| GET | `/api/machine/:id/history/:value` | One machine value over time, as one value for each window |
 
 `:value` is one of these:
-- Numbers: `spindle-speed`, `spindle-load`, `feedrate`, `part-count`, `part-goal`, `tool-number`
+- Numbers: `spindle-speed`, `spindle-load`, `feedrate`, `part-count`, `part-goal`, `tool-number`. Each window gives the average, but `part-count`, `part-goal` and `tool-number` give the last value in the window. An average such as T7.4 is not a value that the machine sent.
 - `spindle-load` is in percent of the spindle motor's rating. A Haas needs its query port (Setting 143) and a vector drive (macro #1098). A FANUC needs a FANUC digital (serial) spindle. An MTConnect agent needs a LOAD item on the spindle. A Brother does not send it. The Haas, FANUC and MTConnect spindle loads are not tested on real machines yet.
 - States: `connected`, `running`, `alarm`, `emergency`. A state is 1 (on) or 0 (off), so its average is the part of the window that it was on. For example, `running` 0.75 means that a program ran for 75% of the window. All four machine types tell if a program runs: Haas needs its query port (Setting 143), and Brother needs a C00 or D00 control. The Haas, Brother and FANUC run states are not tested on real machines yet.
 
