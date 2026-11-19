@@ -57,6 +57,12 @@ function segmentReply({ state, start, end, detail, program }: TimelineSegment) {
   };
 }
 
+/** The end of the asked time: `end`, or now. An end in the future is now, because no data is there. */
+function endOf(end: string | undefined): number {
+  const now = Date.now();
+  return end === undefined ? now : Math.min(Date.parse(end), now);
+}
+
 /** Machine values over time: numbers from VictoriaMetrics, and state periods from SQLite */
 export function historyRoutes(poller: HardwarePoller, history: HistorySource, periods: StatePeriodStore) {
   return new Hono()
@@ -78,8 +84,8 @@ export function historyRoutes(poller: HardwarePoller, history: HistorySource, pe
       const machineId = c.req.param('id');
       if (!poller.getMachine(machineId)) return notFound(c);
 
-      const { range = DEFAULT_TIMELINE_RANGE } = c.req.valid('query');
-      const to = Date.now();
+      const { range = DEFAULT_TIMELINE_RANGE, end } = c.req.valid('query');
+      const to = endOf(end);
       const read = readTimelinePeriods(periods, { machineId, from: to - durationMs(range), to, limit: MAX_TIMELINE_PERIODS });
       return c.json({
         machineId,
@@ -105,7 +111,7 @@ export function historyRoutes(poller: HardwarePoller, history: HistorySource, pe
         return c.json({ error: `${problem}. One reply can have at most ${MAX_POINTS} points.` }, 400);
       }
 
-      const to = Date.now();
+      const to = endOf(query.end);
       const from = alignedWindowStart(to - rangeMs, windowMs);
       let points;
       try {

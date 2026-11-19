@@ -127,9 +127,15 @@ export const historyParams = z.object({
  * How far back the history goes, and the time that each average covers.
  * Examples: range "-1h", window "10s". At most 6 digits, so the numbers stay in range.
  */
+/** The end of a chart's time, to look back in time. A time with a date, for example 2026-11-19T15:00:00Z. */
+const endTime = z.string()
+  .refine(text => /^\d{4}-\d{2}-\d{2}T/.test(text) && Number.isFinite(Date.parse(text)), 'end must be a time such as 2026-11-19T15:00:00Z')
+  .optional();
+
 export const historyQuery = z.object({
   range: z.string().regex(/^-[1-9]\d{0,5}(s|m|h|d|w)$/, 'range must look like -1h').optional(),
   window: z.string().regex(/^[1-9]\d{0,5}(s|m|h|d)$/, 'window must look like 10s').optional(),
+  end: endTime,
 });
 
 /** How far back, and optionally one kind of state */
@@ -149,6 +155,7 @@ export const timelineQuery = z.object({
     .refine(range => Number(range.slice(1, -1)) * TIMELINE_UNIT_DAYS[range.slice(-1)] <= MAX_TIMELINE_DAYS,
       `range can go back at most ${MAX_TIMELINE_DAYS} days`)
     .optional(),
+  end: endTime,
 });
 
 /** VictoriaMetrics keeps the history 1 year, so a longer report has no more data */
