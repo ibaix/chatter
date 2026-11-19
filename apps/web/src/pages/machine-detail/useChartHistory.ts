@@ -2,12 +2,18 @@ import type { HistoryValue } from '@local-chatter/shared';
 import { useEffect, useRef, useState } from 'react';
 import { fetchValueHistory, type HistoryPoint } from '../../api/history';
 import { useNow } from '../../hooks/useNow';
-import { durationMs, gapFor, mergeHistory, recentPoints, withLivePoint, type ChartRange } from './historyChart';
+import {
+  CHART_CLOCK_TICK_MS,
+  durationMs,
+  gapFor,
+  mergeHistory,
+  recentPoints,
+  withLivePoint,
+  type ChartRange,
+  type HistoryStatus,
+} from './historyChart';
 
-export type HistoryStatus = 'loading' | 'ready' | 'failed';
 
-/** The chart moves on this often, also when no new value comes */
-const CLOCK_TICK_MS = 5000;
 
 /**
  * One value over the chart's range: the saved history first, then each live value.
@@ -20,7 +26,7 @@ export function useChartHistory(machineId: string, value: HistoryValue, live: Hi
   const [pointsValue, setPointsValue] = useState(value);
   /** The time each history point covers. Live values are kept one per window of this length. */
   const [windowMs, setWindowMs] = useState(0);
-  const now = useNow(CLOCK_TICK_MS);
+  const now = useNow(CHART_CLOCK_TICK_MS);
   // The newest live value, so a new range or value starts with it and does not wait for the next one
   const latestLive = useRef(live);
   latestLive.current = live;

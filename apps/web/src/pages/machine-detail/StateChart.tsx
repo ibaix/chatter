@@ -1,10 +1,12 @@
 import { useState, type PointerEvent } from 'react';
 import { useBoxSize } from '../../hooks/useBoxSize';
+import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
+import { ChartTooltip, TimeLabels } from './ChartParts';
+import { messageFor, timeLabels, type ChartRange } from './historyChart';
 import { formatDuration, formatShare } from './reportView';
-import { messageFor, timeLabelAnchor, timeLabels, type ChartRange } from './historyChart';
-import { StateBand, StateSwatch, TIMELINE_STATE_LABELS } from './StateBand';
-import { liveStateOf, segmentAt, stateTotals, type StateSegment } from './stateTimeline';
+import { StateBand, StateLegend, StateSwatch } from './StateBand';
+import { liveStateOf, segmentAt, stateTotals, type StateSegment, type StateTotal } from './stateTimeline';
 import { useStateTimeline } from './useStateTimeline';
 
 const BAND_HEIGHT = 88;
@@ -13,13 +15,17 @@ const TIME_LABEL_GAP = 18;
 const SVG_HEIGHT = BAND_HEIGHT + TIME_LABEL_GAP + 4;
 /** About the width of the hover box, so a box near the right edge stays inside the chart */
 const TOOLTIP_WIDTH = 220;
+const SECOND_MS = 1000;
 
-const LEGEND_TEXT = {
-  running: 'Running: a program runs',
-  idle: 'Idle: connected, no program runs',
-  alarm: 'Alarm: shows over Running',
-  offline: 'Offline: no answer, or Chatter was off',
-} as const;
+/** "40%" of the range, also "0%" for a state that did not occur */
+function shareText(ms: number, range: ChartRange): string {
+  return formatShare(ms, range.ms) || '0%';
+}
+
+/** "12 min", or "under 1 s" for a very short segment */
+function lengthText(ms: number): string {
+  return ms < SECOND_MS ? 'under 1 s' : formatDuration(ms);
+}
 
 /** The machine state over time, as a colored band, with the share of time in each state */
 export function StateChart({ machine, range }: { machine: Machine; range: ChartRange }) {
@@ -27,7 +33,7 @@ export function StateChart({ machine, range }: { machine: Machine; range: ChartR
   const { ref, width } = useBoxSize<HTMLDivElement>();
   const totals = stateTotals(segments);
 
-  if (status !== 'ready' && segments.length === 0) {
+  if (status !== 'ready') {
     return <p className="m-0 flex h-[13.75rem] items-center justify-center text-center text-zinc-300">{messageFor(status, 'machine state', range)}</p>;
   }
 
@@ -38,10 +44,10 @@ export function StateChart({ machine, range }: { machine: Machine; range: ChartR
           <div key={state} className="flex flex-col gap-0.5 rounded-lg bg-zinc-800/60 px-3 py-2">
             <span className="flex items-center gap-1.5 text-xs text-zinc-300">
               <StateSwatch state={state} />
-              {TIMELINE_STATE_LABELS[state]}
+              {STATE_LABELS[state]}
             </span>
             <span className="font-mono text-lg font-medium">
-              {formatShare(ms, range.ms) || '0%'} <span className="text-xs text-zinc-400">{ms > 0 ? formatDuration(ms) : ''}</span>
+              {shareText(ms, range)} <span className="text-xs text-zinc-400">{ms > 0 ? lengthText(ms) : ''}</span>
             </span>
           </div>
         ))}
@@ -49,21 +55,14 @@ export function StateChart({ machine, range }: { machine: Machine; range: ChartR
       <div ref={ref} className="relative">
         {width > 0 && <StatePlot segments={segments} totalsText={totalsText(totals, range)} now={now} range={range} width={width} />}
       </div>
-      <ul className="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-xs text-zinc-300">
-        {totals.map(({ state }) => (
-          <li key={state} className="inline-flex items-center gap-1.5">
-            <StateSwatch state={state} />
-            {LEGEND_TEXT[state]}
-          </li>
-        ))}
-      </ul>
+      <StateLegend explain className="gap-x-4" />
     </div>
   );
 }
 
 /** "Running 40%, Idle 11%, Alarm 1%, Offline 48%", for the screen reader text */
-function totalsText(totals: ReturnType<typeof stateTotals>, range: ChartRange): string {
-  return totals.map(({ state, ms }) => `${TIMELINE_STATE_LABELS[state]} ${formatShare(ms, range.ms) || '0%'}`).join(', ');
+function totalsText(totals: StateTotal[], range: ChartRange): string {
+  return totals.map(({ state, ms }) => `${STATE_LABELS[state]} ${shareText(ms, range)}`).join(', ');
 }
 
 interface StatePlotProps {
@@ -78,7 +77,6 @@ function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) 
   const [hovered, setHovered] = useState<StateSegment | undefined>();
   const startTime = now - range.ms;
   const x = (time: number) => ((time - startTime) / range.ms) * width;
-  const labels = timeLabels(range.ms, now);
 
   const showSegment = (event: PointerEvent<SVGSVGElement>) => {
     const offsetX = event.clientX - event.currentTarget.getBoundingClientRect().left;
@@ -109,17 +107,7 @@ function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) 
             className="stroke-zinc-50"
           />
         )}
-        {labels.map(({ time, text }, index) => (
-          <text
-            key={index}
-            x={x(time)}
-            y={BAND_HEIGHT + TIME_LABEL_GAP}
-            textAnchor={timeLabelAnchor(index, labels.length)}
-            className="fill-zinc-300 font-mono text-[0.6875rem]"
-          >
-            {text}
-          </text>
-        ))}
+        <TimeLabels labels={timeLabels(range.ms, now)} x={x} y={BAND_HEIGHT + TIME_LABEL_GAP} />
       </svg>
       {hovered && <SegmentTooltip segment={hovered} left={Math.min(Math.max(0, x(hovered.start)), width - TOOLTIP_WIDTH)} />}
     </>
@@ -129,19 +117,20 @@ function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) 
 /** The state, its times and its length, the program, and the alarm text, in a box over the band */
 function SegmentTooltip({ segment, left }: { segment: StateSegment; left: number }) {
   return (
-    <div
-      className="pointer-events-none absolute bottom-full mb-2 flex flex-col gap-0.5 rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs"
-      style={{ left }}
-    >
+    <ChartTooltip style={{ left }} className="bottom-full mb-2">
       <strong className="flex items-center gap-1.5">
         <StateSwatch state={segment.state} />
-        {TIMELINE_STATE_LABELS[segment.state]} · {formatDuration(segment.end - segment.start)}
+        {STATE_LABELS[segment.state]} · {lengthText(segment.end - segment.start)}
       </strong>
       <span className="font-mono text-zinc-300">
         {new Date(segment.start).toLocaleString()} – {new Date(segment.end).toLocaleTimeString()}
       </span>
-      {segment.program && <span className="text-zinc-300">Program <span className="font-mono text-zinc-50">{segment.program}</span></span>}
+      {segment.program && (
+        <span className="text-zinc-300">
+          Program <span className="font-mono text-zinc-50">{segment.program}</span>
+        </span>
+      )}
       {segment.detail && <span className="text-alarm-soft">{segment.detail}</span>}
-    </div>
+    </ChartTooltip>
   );
 }

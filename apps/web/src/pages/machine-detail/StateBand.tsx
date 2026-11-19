@@ -1,26 +1,14 @@
-import type { TimelineState } from '@local-chatter/shared';
+import { TIMELINE_STATES, type TimelineState } from '@local-chatter/shared';
 import { cn } from '@toolpath/ui';
 import { useId } from 'react';
+import { STATE_FILL_COLORS } from '../../components/MachineStateMark';
+import { STATE_LABELS } from '../../machines/machineStatus';
 import type { StateSegment } from './stateTimeline';
-
-export const TIMELINE_STATE_LABELS: Record<TimelineState, string> = {
-  running: 'Running',
-  idle: 'Idle',
-  alarm: 'Alarm',
-  offline: 'Offline',
-};
 
 const STATE_FILLS: Record<Exclude<TimelineState, 'offline'>, string> = {
   running: 'fill-running',
   idle: 'fill-idle',
   alarm: 'fill-alarm',
-};
-
-/** Full class names, so Tailwind finds them */
-const SWATCH_COLORS: Record<Exclude<TimelineState, 'offline'>, string> = {
-  running: 'bg-running',
-  idle: 'bg-idle',
-  alarm: 'bg-alarm',
 };
 
 /** A short alarm is still drawn at least this wide, so it does not vanish in a 7-day band */
@@ -45,9 +33,9 @@ export function StateBand({ segments, x, y, height }: StateBandProps) {
       <defs>
         <OfflineStripes id={stripesId} />
       </defs>
-      {segments.map(segment => (
+      {segments.map((segment, index) => (
         <rect
-          key={segment.start}
+          key={`${segment.start}-${segment.state}-${index}`}
           x={x(segment.start)}
           y={y}
           width={Math.max(MIN_SEGMENT_WIDTH, x(segment.end) - x(segment.start))}
@@ -80,5 +68,27 @@ export function StateSwatch({ state, className }: { state: TimelineState; classN
       />
     );
   }
-  return <span aria-hidden="true" className={cn('size-2.5 shrink-0 rounded-sm', SWATCH_COLORS[state], className)} />;
+  return <span aria-hidden="true" className={cn('size-2.5 shrink-0 rounded-sm', STATE_FILL_COLORS[state], className)} />;
+}
+
+/** What each state means, for the legend of the full state chart */
+const STATE_MEANINGS: Record<TimelineState, string> = {
+  running: 'Running: a program runs',
+  idle: 'Idle: connected, no program runs',
+  alarm: 'Alarm: shows over Running',
+  offline: 'Offline: no answer, or Chatter was off',
+};
+
+/** The states and their colors in words. `explain` adds what each state means. */
+export function StateLegend({ explain = false, className }: { explain?: boolean; className?: string }) {
+  return (
+    <ul aria-label="Machine state" className={cn('m-0 flex list-none flex-wrap gap-x-3 gap-y-1 p-0 text-xs text-zinc-300', className)}>
+      {TIMELINE_STATES.map(state => (
+        <li key={state} className="inline-flex items-center gap-1.5">
+          <StateSwatch state={state} />
+          {explain ? STATE_MEANINGS[state] : STATE_LABELS[state]}
+        </li>
+      ))}
+    </ul>
+  );
 }

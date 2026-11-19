@@ -5,7 +5,9 @@ import type { HistoryPoint } from '../../api/history';
 import { CHOICE_HEIGHT, ChoiceMenu } from '../../components/ui/ChoiceMenu';
 import { RangeButtons } from '../../components/ui/RangeButtons';
 import { useBoxSize } from '../../hooks/useBoxSize';
+import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
+import { AXIS_LABEL_CLASS, ChartTooltip, TimeLabels } from './ChartParts';
 import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
   axisTicks,
@@ -15,14 +17,12 @@ import {
   messageFor,
   nearestPoint,
   stepPoints,
-  timeLabelAnchor,
   timeLabels,
   type ChartRange,
-  type TimeLabel,
 } from './historyChart';
-import { StateBand, StateSwatch, TIMELINE_STATE_LABELS } from './StateBand';
+import { StateBand, StateLegend, StateSwatch } from './StateBand';
 import { StateChart } from './StateChart';
-import { liveStateOf, segmentAt, type StateSegment } from './stateTimeline';
+import { clipSegments, liveStateOf, segmentAt, type StateSegment } from './stateTimeline';
 import { useChartHistory } from './useChartHistory';
 import { useStateTimeline } from './useStateTimeline';
 
@@ -38,7 +38,6 @@ const TIME_LABEL_BOTTOM = 6;
 const TOOLTIP_GAP = 12;
 /** About the width of the tooltip, so a tooltip near the right edge stays inside the chart */
 const TOOLTIP_WIDTH = 190;
-const AXIS_LABEL_CLASS = 'fill-zinc-300 font-mono text-[0.6875rem]';
 /** The newest value from the live machine events, or null when the machine is not connected */
 function livePointOf(machine: Machine, value: ChartValue): HistoryPoint | null {
   const liveValue = value.liveValueOf(machine);
@@ -81,23 +80,24 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
   );
 }
 
-/** A machine value as a line */
 /** A machine value as a line, with the machine state as a thin strip under it */
 function ValueChart({ machine, value, range }: { machine: Machine; value: ChartValue; range: ChartRange }) {
   const livePoint = livePointOf(machine, value);
   const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range);
   const { segments } = useStateTimeline(machine.id, liveStateOf(machine), range);
   const { ref, width, height } = useBoxSize<HTMLDivElement>();
+  const showPlot = points.length > 0 && width > 0;
 
   return (
     <>
       {/* The box sets the chart height in rem, so the chart follows the page scale */}
       <div ref={ref} className="relative h-[13.75rem]">
-        {points.length > 0 && width > 0 ? (
+        {showPlot ? (
           <ChartPlot
             points={points}
             value={value}
-            stateSegments={segments}
+            // The strip ends at the same "now" as the line
+            stateSegments={clipSegments(segments, now - range.ms, now)}
             now={now}
             range={range}
             gapMs={gapMs}
@@ -109,25 +109,13 @@ function ValueChart({ machine, value, range }: { machine: Machine; value: ChartV
           <p className="m-0 flex h-full items-center justify-center text-center text-zinc-300">{messageFor(status, value.name, range)}</p>
         )}
       </div>
-      <StripLegend />
+      {showPlot && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs" style={{ marginLeft: MARGIN.left }}>
+          <span aria-hidden="true" className="text-zinc-400">Machine state:</span>
+          <StateLegend />
+        </div>
+      )}
     </>
-  );
-}
-
-/** The colors of the state strip, in words */
-function StripLegend() {
-  return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-300" style={{ marginLeft: MARGIN.left }}>
-      <span aria-hidden="true" className="text-zinc-400">Machine state:</span>
-      <ul aria-label="Machine state" className="m-0 flex list-none flex-wrap gap-x-3 gap-y-1 p-0">
-        {(['running', 'idle', 'alarm', 'offline'] as const).map(state => (
-          <li key={state} className="inline-flex items-center gap-1.5">
-            <StateSwatch state={state} />
-            {TIMELINE_STATE_LABELS[state]}
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }
 
@@ -191,7 +179,7 @@ function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected,
         className="block"
       >
         <ValueAxis ticks={ticks} scale={scale} width={width} />
-        <TimeAxis labels={timeLabels(range.ms, now)} scale={scale} height={height} />
+        <TimeLabels labels={timeLabels(range.ms, now)} x={scale.x} y={height - TIME_LABEL_BOTTOM} />
         {drawnParts.map(part => (
           <path key={part[0].time} d={linePath(part, scale)} fill="none" strokeWidth={2} strokeLinejoin="round" className="stroke-primary" />
         ))}
@@ -275,25 +263,6 @@ function ValueAxis({ ticks, scale, width }: { ticks: number[]; scale: ChartScale
   );
 }
 
-/** The time labels under the plot. The first and the last label stay inside the chart. */
-function TimeAxis({ labels, scale, height }: { labels: TimeLabel[]; scale: ChartScale; height: number }) {
-  return (
-    <>
-      {labels.map(({ time, text }, index) => (
-        <text
-          key={index}
-          x={scale.x(time)}
-          y={height - TIME_LABEL_BOTTOM}
-          textAnchor={timeLabelAnchor(index, labels.length)}
-          className={AXIS_LABEL_CLASS}
-        >
-          {text}
-        </text>
-      ))}
-    </>
-  );
-}
-
 /** A line down from the top of the plot, and a dot on the hovered point */
 function HoverMarker({ point, scale }: { point: HistoryPoint; scale: ChartScale }) {
   const pointX = scale.x(point.time);
@@ -316,20 +285,17 @@ interface HoverTooltipProps {
 /** The value and the time of the hovered point, and the machine state and program then, in a box over the chart */
 function HoverTooltip({ point, value, segment, left }: HoverTooltipProps) {
   return (
-    <div
-      className="pointer-events-none absolute flex flex-col gap-0.5 rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs"
-      style={{ left, top: MARGIN.top }}
-    >
+    <ChartTooltip style={{ left, top: MARGIN.top }}>
       <strong className="font-mono">{value.format(point.value)}</strong>
       <span className="text-zinc-300">{new Date(point.time).toLocaleString()}</span>
       {segment && (
         <span className="flex items-center gap-1.5 text-zinc-300">
           <StateSwatch state={segment.state} />
-          {TIMELINE_STATE_LABELS[segment.state]}
+          {STATE_LABELS[segment.state]}
           {segment.program && <span className="font-mono text-zinc-50">{segment.program}</span>}
         </span>
       )}
-    </div>
+    </ChartTooltip>
   );
 }
 

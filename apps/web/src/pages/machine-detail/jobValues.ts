@@ -9,7 +9,7 @@ const OFFLINE_ROWS: Omit<JobValue, 'value'>[] = [
   { label: 'Program' },
   { label: 'Parts', chartValue: 'part-count' },
   { label: 'Spindle', chartValue: 'spindle-speed' },
-  { label: 'Tool' },
+  { label: 'Tool', chartValue: 'tool-number' },
 ];
 
 export interface JobValue {
@@ -108,7 +108,7 @@ function allJobValuesOf(machine: Machine): JobValue[] {
     { label: 'Parts', value: parts?.text ?? NO_VALUE, fraction: parts?.fraction, chartValue: 'part-count' },
     { label: 'Spindle', value: spindleSpeedText(data) ?? NO_VALUE, chartValue: 'spindle-speed' },
     ...spindleLoadValues(data),
-    { label: 'Tool', value: toolText(data) ?? NO_VALUE },
+    { label: 'Tool', value: toolText(data) ?? NO_VALUE, chartValue: 'tool-number' },
     ...(machine.type === 'fanuc' ? pathValues(machine.data.paths) : []),
   ];
   if (machine.type === 'fanuc' && machine.data.operatorMessage) {

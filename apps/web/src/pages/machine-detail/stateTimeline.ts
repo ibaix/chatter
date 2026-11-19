@@ -1,17 +1,9 @@
 import { TIMELINE_STATES, type TimelineState } from '@local-chatter/shared';
+import type { StateSegment } from '../../api/stateTimeline';
 import { machineStateOf, type MachineState } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 
-/** One time when the machine had one state. Times are in milliseconds since 1970. */
-export interface StateSegment {
-  state: TimelineState;
-  start: number;
-  end: number;
-  /** The alarm code and text of an alarm */
-  detail?: string;
-  /** The program that was open, when the machine sent one */
-  program?: string;
-}
+export type { StateSegment };
 
 /** What the machine does now, from the live machine events */
 export interface LiveState {
@@ -46,15 +38,19 @@ export function withLiveState(segments: StateSegment[], live: LiveState, time: n
   return [...held, { ...live, start: time, end: time }];
 }
 
-/** The segments from `from` to `now`. The last state holds until now, because the live events tell when it changes. */
+/**
+ * The segments from `from` to `now`. The last state holds until now, because the live events tell when it changes.
+ * The last segment stays also when it has no length yet: it is the state now, which just changed.
+ */
 export function clipSegments(segments: StateSegment[], from: number, now: number): StateSegment[] {
+  const lastIndex = segments.length - 1;
   return segments
     .map((segment, index) => ({
       ...segment,
       start: Math.max(segment.start, from),
-      end: index === segments.length - 1 ? now : Math.min(segment.end, now),
+      end: index === lastIndex ? Math.max(now, segment.start) : Math.min(segment.end, now),
     }))
-    .filter(segment => segment.end > segment.start);
+    .filter((segment, index) => segment.end > segment.start || (index === lastIndex && segment.end >= from));
 }
 
 export interface StateTotal {
@@ -70,7 +66,8 @@ export function stateTotals(segments: StateSegment[]): StateTotal[] {
   }));
 }
 
-/** The segment at a time, for the hover box */
+/** The segment at a time, for the hover box. The last segment includes its end, which is the newest live time. */
 export function segmentAt(segments: StateSegment[], time: number): StateSegment | undefined {
-  return segments.find(segment => segment.start <= time && time < segment.end);
+  const last = segments[segments.length - 1];
+  return segments.find(segment => segment.start <= time && (time < segment.end || (segment === last && time === segment.end)));
 }

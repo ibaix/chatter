@@ -56,6 +56,12 @@ describe('clipSegments', () => {
 
     expect(clipSegments(segments, 60, 200)).toEqual([segment('running', 60, 100), segment('idle', 100, 200)]);
   });
+
+  it('keeps a state that just changed, before it has any length', () => {
+    const segments = [segment('idle', 0, 150), segment('running', 150, 150)];
+
+    expect(clipSegments(segments, 0, 150)).toEqual([segment('idle', 0, 150), segment('running', 150, 150)]);
+  });
 });
 
 describe('stateTotals', () => {
@@ -77,5 +83,12 @@ describe('segmentAt', () => {
 
     expect(segmentAt(segments, 40)).toEqual(segment('idle', 40, 100));
     expect(segmentAt(segments, 200)).toBeUndefined();
+  });
+
+  it('finds the last segment at its end, which is the newest live time', () => {
+    const segments = [segment('running', 0, 40), segment('idle', 40, 100)];
+
+    expect(segmentAt(segments, 40)?.state).toBe('idle');
+    expect(segmentAt(segments, 100)?.state).toBe('idle');
   });
 });
