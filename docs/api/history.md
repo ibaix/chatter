@@ -35,6 +35,22 @@ Query parameters:
 The reply is `{ machineId, range, data: [{ kind, value, start, end }], more }`, newest first. One reply has at most 1000 periods; `more` is true when older ones were left out.
 The periods are kept in `chatter.db` for 1 year. When the machine stops answering, its periods end.
 
+## State timeline
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/machine/:id/state-timeline` | What the machine did over a range: running, idle, alarm, or offline |
+
+Query parameter `range`: how far back, for example `-1h` or `-7d` (default `-24h`).
+
+The reply is `{ machineId, range, from, to, data: [{ state, start, end, detail }], more }`, oldest first. The segments cover the full time from `from` to `to`, with no gaps. Chatter makes them from the periods, with the same rule as the dashboard:
+- `alarm`: an alarm is on. An alarm shows over running. `detail` is the alarm code and text.
+- `running`: a program runs.
+- `idle`: the machine answers, but no program runs. A machine that does not tell if a program runs (for example a Haas with no query port) shows `idle`.
+- `offline`: the machine did not answer, or Chatter did not run.
+
+A segment has `detail` only for an alarm. When a range has more than 50,000 periods, `from` moves to the oldest period that Chatter read, and `more` is true.
+
 ## Report
 
 | Method | Endpoint | Description |
