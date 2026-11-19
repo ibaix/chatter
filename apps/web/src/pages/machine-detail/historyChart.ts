@@ -1,5 +1,9 @@
 import type { HistoryPoint } from '../../api/history';
-import type { HistoryStatus } from './useChartHistory';
+
+export type HistoryStatus = 'loading' | 'ready' | 'failed';
+
+/** The charts move on this often, also when no new value comes */
+export const CHART_CLOCK_TICK_MS = 5000;
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;

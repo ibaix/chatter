@@ -1,26 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchStateTimeline } from '../../api/stateTimeline';
 import { useNow } from '../../hooks/useNow';
-import type { ChartRange } from './historyChart';
+import { CHART_CLOCK_TICK_MS, type ChartRange, type HistoryStatus } from './historyChart';
 import { clipSegments, withLiveState, type LiveState, type StateSegment } from './stateTimeline';
-import type { HistoryStatus } from './useChartHistory';
-
-/** The band moves on this often, also when the state does not change */
-const CLOCK_TICK_MS = 5000;
 
 /**
  * The machine state over the chart's range: the saved timeline first, then each live state change.
  * `live` is undefined while the machine connects, so the band does not show a state that is not known.
+ * A new machine or range starts again from no segments, so the old ones never show under the new ones.
  */
 export function useStateTimeline(machineId: string, live: LiveState | undefined, range: ChartRange) {
   const [segments, setSegments] = useState<StateSegment[]>([]);
   const [status, setStatus] = useState<HistoryStatus>('loading');
-  const now = useNow(CLOCK_TICK_MS);
+  const now = useNow(CHART_CLOCK_TICK_MS);
+  // The newest live state, so a new machine or range starts with it and does not wait for the next change
   const latestLive = useRef(live);
   latestLive.current = live;
 
   useEffect(() => {
     let stopped = false;
+    const startLive = latestLive.current;
+    setSegments(startLive ? withLiveState([], startLive, Date.now()) : []);
     setStatus('loading');
     fetchStateTimeline(machineId, range.query)
       .then(loaded => {
