@@ -551,6 +551,15 @@ describe('API Routes', () => {
       expect(history.windowAverages.mock.calls[0][0].metric).toBe('chatter_part_count');
     });
 
+    it('asks for the last value in each window of the tool number, and the average of the spindle speed', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      await call('GET', `/api/machine/${machine.id}/history/tool-number`);
+      await call('GET', `/api/machine/${machine.id}/history/spindle-speed`);
+
+      expect(history.windowAverages.mock.calls.map(([query]) => query.windowValue)).toEqual(['last', 'average']);
+    });
+
     it('counts the extra window at the start in the most points of one reply', async () => {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
 

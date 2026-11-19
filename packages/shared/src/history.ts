@@ -25,3 +25,14 @@ export type HistoryValue = typeof HISTORY_VALUES[number];
 export const STATE_PERIOD_KINDS = ['program', 'alarm', 'mode', 'run-state', 'tool'] as const;
 
 export type StatePeriodKind = typeof STATE_PERIOD_KINDS[number];
+
+/** The values whose history is the last value in each window, not the average: a counter, or a number with no middle */
+const LAST_VALUE_HISTORY: readonly HistoryValue[] = ['part-count', 'part-goal', 'tool-number'];
+
+/**
+ * How one window of the history gets its one value.
+ * 'average' for a measured value and for a 1-or-0 state, 'last' for a counter or a tool number (T7.4 means nothing).
+ */
+export function historyWindowValue(value: HistoryValue): 'average' | 'last' {
+  return LAST_VALUE_HISTORY.includes(value) ? 'last' : 'average';
+}

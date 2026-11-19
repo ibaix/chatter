@@ -1,3 +1,4 @@
+import { historyWindowValue } from '@local-chatter/shared';
 import { Hono } from 'hono';
 import type { HardwarePoller } from '../polling/poller.js';
 import type { HistorySource } from '../recording/MetricsReader.js';
@@ -74,7 +75,9 @@ export function historyRoutes(poller: HardwarePoller, history: HistorySource, pe
       const from = alignedWindowStart(to - rangeMs, windowMs);
       let points;
       try {
-        points = await history.windowAverages({ metric: historyMetricName(value), machineId, from, to, windowMs });
+        points = await history.windowAverages({
+          metric: historyMetricName(value), machineId, from, to, windowMs, windowValue: historyWindowValue(value),
+        });
       } catch (error) {
         return historyUnavailable(c, '[History]', error);
       }

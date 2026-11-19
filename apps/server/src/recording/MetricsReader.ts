@@ -26,6 +26,8 @@ export interface WindowQuery {
   from: number;
   to: number;
   windowMs: number;
+  /** 'average' (the default) or 'last': the last raw value in each window, for a counter or a tool number */
+  windowValue?: 'average' | 'last';
 }
 
 export interface StateTime {
@@ -79,11 +81,12 @@ export class MetricsReader implements HistorySource {
    * the window ends and each answer moves back by one window.
    * A window of whole minutes reads the minute averages, which is much faster for a long range.
    * The newest minute average comes about 1 minute late, so the live values from the web app fill that gap.
+   * With `windowValue: 'last'` each point is the last raw value in its window, not the average.
    */
-  async windowAverages({ metric, machineId, from, to, windowMs }: WindowQuery): Promise<HistoryPoint[]> {
+  async windowAverages({ metric, machineId, from, to, windowMs, windowValue = 'average' }: WindowQuery): Promise<HistoryPoint[]> {
     const windowCount = Math.max(1, Math.ceil((to - from) / windowMs));
     const params = new URLSearchParams({
-      query: `avg(avg_over_time(${averageSeries(metric, windowMs)}${machineSelector(machineId)}[${windowMs}ms]))`,
+      query: windowQuery(metric, machineSelector(machineId), windowMs, windowValue),
       start: toSeconds(from + windowMs),
       end: toSeconds(from + windowCount * windowMs),
       step: toSeconds(windowMs),
@@ -142,6 +145,15 @@ export class MetricsReader implements HistorySource {
     }
     return reply.data?.result ?? [];
   }
+}
+
+/**
+ * The query for one value in each window. The last value reads the raw points, because a minute average is not a value
+ * that the machine sent. max() makes the series of a machine one series, as avg() does for the average.
+ */
+function windowQuery(metric: string, selector: string, windowMs: number, windowValue: 'average' | 'last'): string {
+  if (windowValue === 'last') return `max(last_over_time(${metric}${selector}[${windowMs}ms]))`;
+  return `avg(avg_over_time(${averageSeries(metric, windowMs)}${selector}[${windowMs}ms]))`;
 }
 
 /**
