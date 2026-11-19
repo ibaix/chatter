@@ -6,7 +6,7 @@ import { ChartTooltip, TimeLabels } from './ChartParts';
 import { messageFor, timeLabels, type ChartRange } from './historyChart';
 import { formatDuration, formatShare } from './reportView';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
-import { liveStateOf, segmentAt, stateTotals, type StateSegment, type StateTotal } from './stateTimeline';
+import { liveStateOf, segmentAt, segmentTimesText, stateTotals, type StateSegment, type StateTotal } from './stateTimeline';
 import { useStateTimeline } from './useStateTimeline';
 
 const BAND_HEIGHT = 88;
@@ -74,13 +74,15 @@ interface StatePlotProps {
 }
 
 function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) {
-  const [hovered, setHovered] = useState<StateSegment | undefined>();
+  // The hovered time, not the segment: the live segment grows, so the segment is found again on each render
+  const [hoveredTime, setHoveredTime] = useState<number | undefined>();
+  const hovered = hoveredTime === undefined ? undefined : segmentAt(segments, hoveredTime);
   const startTime = now - range.ms;
   const x = (time: number) => ((time - startTime) / range.ms) * width;
 
   const showSegment = (event: PointerEvent<SVGSVGElement>) => {
     const offsetX = event.clientX - event.currentTarget.getBoundingClientRect().left;
-    setHovered(segmentAt(segments, startTime + (offsetX / width) * range.ms));
+    setHoveredTime(startTime + (offsetX / width) * range.ms);
   };
 
   return (
@@ -91,11 +93,11 @@ function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) 
         role="img"
         aria-label={`Machine state in the last ${range.words}. ${totalsText}.`}
         onPointerMove={showSegment}
-        onPointerLeave={() => setHovered(undefined)}
+        onPointerLeave={() => setHoveredTime(undefined)}
         className="block"
       >
         <rect width={width} height={BAND_HEIGHT} rx={6} className="fill-zinc-800" />
-        <StateBand segments={segments} x={x} y={0} height={BAND_HEIGHT} />
+        <StateBand segments={segments} startTime={startTime} rangeMs={range.ms} left={0} width={width} y={0} height={BAND_HEIGHT} />
         {hovered && (
           <rect
             x={x(hovered.start)}
@@ -123,7 +125,7 @@ function SegmentTooltip({ segment, left }: { segment: StateSegment; left: number
         {STATE_LABELS[segment.state]} · {lengthText(segment.end - segment.start)}
       </strong>
       <span className="font-mono text-zinc-300">
-        {new Date(segment.start).toLocaleString()} – {new Date(segment.end).toLocaleTimeString()}
+        {segmentTimesText(segment.start, segment.end)}
       </span>
       {segment.program && (
         <span className="text-zinc-300">

@@ -1,6 +1,6 @@
 import { TIMELINE_STATES, type TimelineState } from '@local-chatter/shared';
 import { cn } from '@toolpath/ui';
-import { useId } from 'react';
+import { memo, useId } from 'react';
 import { STATE_FILL_COLORS } from '../../components/MachineStateMark';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { StateSegment } from './stateTimeline';
@@ -16,8 +16,12 @@ const MIN_SEGMENT_WIDTH = 1;
 
 interface StateBandProps {
   segments: StateSegment[];
-  /** The x position of a time */
-  x: (time: number) => number;
+  /** The time at the left edge of the band */
+  startTime: number;
+  rangeMs: number;
+  /** The x position and the width of the band in the <svg> */
+  left: number;
+  width: number;
   y: number;
   height: number;
 }
@@ -25,9 +29,12 @@ interface StateBandProps {
 /**
  * The machine state as colored blocks along the time axis, inside an <svg>.
  * Offline has stripes, so it is not told apart by color only.
+ * It takes plain numbers, not a function, so memo can skip the redraw when only the hover moves:
+ * a 7-day band can have thousands of blocks.
  */
-export function StateBand({ segments, x, y, height }: StateBandProps) {
+export const StateBand = memo(function StateBand({ segments, startTime, rangeMs, left, width, y, height }: StateBandProps) {
   const stripesId = useId();
+  const x = (time: number) => left + ((time - startTime) / rangeMs) * width;
   return (
     <g aria-hidden="true">
       <defs>
@@ -46,7 +53,7 @@ export function StateBand({ segments, x, y, height }: StateBandProps) {
       ))}
     </g>
   );
-}
+});
 
 function OfflineStripes({ id }: { id: string }) {
   return (

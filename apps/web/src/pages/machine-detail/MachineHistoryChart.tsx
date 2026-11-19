@@ -22,7 +22,7 @@ import {
 } from './historyChart';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
 import { StateChart } from './StateChart';
-import { clipSegments, liveStateOf, segmentAt, type StateSegment } from './stateTimeline';
+import { liveStateOf, segmentAt, type StateSegment } from './stateTimeline';
 import { useChartHistory } from './useChartHistory';
 import { useStateTimeline } from './useStateTimeline';
 
@@ -84,7 +84,8 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
 function ValueChart({ machine, value, range }: { machine: Machine; value: ChartValue; range: ChartRange }) {
   const livePoint = livePointOf(machine, value);
   const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range);
-  const { segments, status: stateStatus } = useStateTimeline(machine.id, liveStateOf(machine), range);
+  // The chart's clock, so the strip ends where the line ends
+  const { segments: stripSegments, status: stateStatus } = useStateTimeline(machine.id, liveStateOf(machine), range, now);
   const { ref, width, height } = useBoxSize<HTMLDivElement>();
   const showPlot = points.length > 0 && width > 0;
 
@@ -96,8 +97,7 @@ function ValueChart({ machine, value, range }: { machine: Machine; value: ChartV
           <ChartPlot
             points={points}
             value={value}
-            // The strip ends at the same "now" as the line
-            stateSegments={clipSegments(segments, now - range.ms, now)}
+            stateSegments={stripSegments}
             now={now}
             range={range}
             gapMs={gapMs}
@@ -190,7 +190,15 @@ function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected,
         {drawnParts.map(part => (
           <path key={part[0].time} d={linePath(part, scale)} fill="none" strokeWidth={2} strokeLinejoin="round" className="stroke-primary" />
         ))}
-        <StateBand segments={stateSegments} x={scale.x} y={scale.y(0) + STRIP_GAP} height={STRIP_HEIGHT} />
+        <StateBand
+          segments={stateSegments}
+          startTime={now - range.ms}
+          rangeMs={range.ms}
+          left={MARGIN.left}
+          width={width - MARGIN.left - MARGIN.right}
+          y={scale.y(0) + STRIP_GAP}
+          height={STRIP_HEIGHT}
+        />
         {hovered && <HoverMarker point={hovered} scale={scale} />}
       </svg>
       {hovered && (
