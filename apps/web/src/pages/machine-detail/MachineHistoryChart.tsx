@@ -1,10 +1,11 @@
-import { historyWindowValue } from '@local-chatter/shared';
+import { historyWindowValue, type TimelineState } from '@local-chatter/shared';
 import { cn } from '@toolpath/ui';
 import { useState, type PointerEvent } from 'react';
 import type { HistoryPoint } from '../../api/history';
 import { CHOICE_HEIGHT, ChoiceMenu } from '../../components/ui/ChoiceMenu';
 import { RangeButtons } from '../../components/ui/RangeButtons';
 import { useBoxSize } from '../../hooks/useBoxSize';
+import { machineStateOf } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
@@ -20,10 +21,16 @@ import {
   type ChartRange,
   type TimeLabel,
 } from './historyChart';
+import { StateBand, StateSwatch, TIMELINE_STATE_LABELS } from './StateBand';
 import { StateChart } from './StateChart';
+import { segmentAt, timelineStateOf, type StateSegment } from './stateTimeline';
 import { useChartHistory } from './useChartHistory';
+import { useStateTimeline } from './useStateTimeline';
 
-const MARGIN = { top: 12, right: 16, bottom: 26, left: 52 };
+const MARGIN = { top: 12, right: 16, bottom: 38, left: 52 };
+/** The machine state strip under the plot, above the time labels */
+const STRIP_GAP = 5;
+const STRIP_HEIGHT = 6;
 /** The space between a value label and the left end of its grid line */
 const VALUE_LABEL_GAP = 8;
 /** The distance from the bottom of the chart to the time labels */
@@ -76,28 +83,51 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
 }
 
 /** A machine value as a line */
+/** A machine value as a line, with the machine state as a thin strip under it */
 function ValueChart({ machine, value, range }: { machine: Machine; value: ChartValue; range: ChartRange }) {
   const livePoint = livePointOf(machine, value);
   const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range);
+  const { segments } = useStateTimeline(machine.id, timelineStateOf(machineStateOf(machine)), range);
   const { ref, width, height } = useBoxSize<HTMLDivElement>();
 
   return (
-    // The box sets the chart height in rem, so the chart follows the page scale
-    <div ref={ref} className="relative h-[13.75rem]">
-      {points.length > 0 && width > 0 ? (
-        <ChartPlot
-          points={points}
-          value={value}
-          now={now}
-          range={range}
-          gapMs={gapMs}
-          connected={machine.connected}
-          width={width}
-          height={height}
-        />
-      ) : (
-        <p className="m-0 flex h-full items-center justify-center text-center text-zinc-300">{messageFor(status, value.name, range)}</p>
-      )}
+    <>
+      {/* The box sets the chart height in rem, so the chart follows the page scale */}
+      <div ref={ref} className="relative h-[13.75rem]">
+        {points.length > 0 && width > 0 ? (
+          <ChartPlot
+            points={points}
+            value={value}
+            stateSegments={segments}
+            now={now}
+            range={range}
+            gapMs={gapMs}
+            connected={machine.connected}
+            width={width}
+            height={height}
+          />
+        ) : (
+          <p className="m-0 flex h-full items-center justify-center text-center text-zinc-300">{messageFor(status, value.name, range)}</p>
+        )}
+      </div>
+      <StripLegend />
+    </>
+  );
+}
+
+/** The colors of the state strip, in words */
+function StripLegend() {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-300" style={{ marginLeft: MARGIN.left }}>
+      <span aria-hidden="true" className="text-zinc-400">Machine state:</span>
+      <ul aria-label="Machine state" className="m-0 flex list-none flex-wrap gap-x-3 gap-y-1 p-0">
+        {(['running', 'idle', 'alarm', 'offline'] as const).map(state => (
+          <li key={state} className="inline-flex items-center gap-1.5">
+            <StateSwatch state={state} />
+            {TIMELINE_STATE_LABELS[state]}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -126,6 +156,8 @@ function ChartTitle({ choices, choice, onChoose }: ChartTitleProps) {
 interface ChartPlotProps {
   points: HistoryPoint[];
   value: ChartValue;
+  /** The machine state over the range, for the strip under the plot */
+  stateSegments: StateSegment[];
   now: number;
   range: ChartRange;
   gapMs: number;
@@ -134,7 +166,7 @@ interface ChartPlotProps {
   height: number;
 }
 
-function ChartPlot({ points, value, now, range, gapMs, connected, width, height }: ChartPlotProps) {
+function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected, width, height }: ChartPlotProps) {
   const [hovered, setHovered] = useState<HistoryPoint | undefined>();
   const ticks = axisTicks(highestValue(points), value.smallestAxisTop);
   const scale = chartScale({ width, height, startTime: now - range.ms, rangeMs: range.ms, topValue: ticks[ticks.length - 1] });
@@ -164,10 +196,16 @@ function ChartPlot({ points, value, now, range, gapMs, connected, width, height 
         {drawnParts.map(part => (
           <path key={part[0].time} d={linePath(part, scale)} fill="none" strokeWidth={2} strokeLinejoin="round" className="stroke-primary" />
         ))}
+        <StateBand segments={stateSegments} x={scale.x} y={scale.y(0) + STRIP_GAP} height={STRIP_HEIGHT} />
         {hovered && <HoverMarker point={hovered} scale={scale} />}
       </svg>
       {hovered && (
-        <HoverTooltip point={hovered} value={value} left={Math.min(scale.x(hovered.time) + TOOLTIP_GAP, width - TOOLTIP_WIDTH)} />
+        <HoverTooltip
+          point={hovered}
+          value={value}
+          state={segmentAt(stateSegments, hovered.time)?.state}
+          left={Math.min(scale.x(hovered.time) + TOOLTIP_GAP, width - TOOLTIP_WIDTH)}
+        />
       )}
     </>
   );
@@ -268,8 +306,16 @@ function HoverMarker({ point, scale }: { point: HistoryPoint; scale: ChartScale 
   );
 }
 
-/** The value and the time of the hovered point, in a box over the chart */
-function HoverTooltip({ point, value, left }: { point: HistoryPoint; value: ChartValue; left: number }) {
+interface HoverTooltipProps {
+  point: HistoryPoint;
+  value: ChartValue;
+  /** The machine state at the time of the point, when it is known */
+  state?: TimelineState;
+  left: number;
+}
+
+/** The value and the time of the hovered point, and the machine state then, in a box over the chart */
+function HoverTooltip({ point, value, state, left }: HoverTooltipProps) {
   return (
     <div
       className="pointer-events-none absolute flex flex-col gap-0.5 rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs"
@@ -277,6 +323,12 @@ function HoverTooltip({ point, value, left }: { point: HistoryPoint; value: Char
     >
       <strong className="font-mono">{value.format(point.value)}</strong>
       <span className="text-zinc-300">{new Date(point.time).toLocaleString()}</span>
+      {state && (
+        <span className="flex items-center gap-1.5 text-zinc-300">
+          <StateSwatch state={state} />
+          {TIMELINE_STATE_LABELS[state]}
+        </span>
+      )}
     </div>
   );
 }

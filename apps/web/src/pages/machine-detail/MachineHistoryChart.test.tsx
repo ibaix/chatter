@@ -68,6 +68,13 @@ describe('MachineHistoryChart', () => {
     }
   });
 
+  it('shows the machine state as a thin strip under a value chart, on the same time axis', async () => {
+    render(<ChartWithMenu machine={testMachine({}, { spindleSpeed: 1200 })} />);
+
+    await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledWith('m1', '-10m'));
+    expect(screen.getByRole('list', { name: 'Machine state' })).toHaveTextContent('RunningIdleAlarmOffline');
+  });
+
   it('loads the history of the value that the user picks', async () => {
     render(<ChartWithMenu machine={testMachine({}, { spindleSpeed: 1200, spindleLoad: 30 })} />);
     expect(fetchValueHistory).toHaveBeenCalledWith('m1', 'spindle-speed', '-10m', '5s');
