@@ -41,10 +41,13 @@ function useBoxSize<T extends HTMLElement>() {
   return { ref, ...size };
 }
 
-/** The newest value from the live machine events, or null when the machine is not connected */
+/**
+ * The newest value from the live machine events, or null when the machine is not connected.
+ * A connecting machine has old values (also while the page cannot reach Chatter), so it gives none.
+ */
 function livePointOf(machine: Machine, value: ChartValue): HistoryPoint | null {
   const liveValue = value.liveValueOf(machine);
-  if (!machine.connected || !machine.lastPollTime || liveValue === undefined) return null;
+  if (!machine.connected || machine.connecting || !machine.lastPollTime || liveValue === undefined) return null;
   return { time: Date.parse(machine.lastPollTime), value: liveValue };
 }
 
@@ -79,7 +82,8 @@ function MachineHistoryChart({ machine, values, value, onChoose, className }: Ma
       </div>
       {/* The box sets the chart height in rem, so the chart follows the page scale */}
       <div ref={ref} className="relative h-[13.75rem]">
-        {points.length > 0 && width > 0 ? (
+        {/* A failed load shows its message, also when live values came, so the user knows that history is missing */}
+        {status !== 'failed' && points.length > 0 && width > 0 ? (
           <ChartPlot
             points={points}
             value={value}
@@ -161,9 +165,14 @@ function ChartPlot({ points, value, now, range, gapMs, connected, width, height 
       >
         <ValueAxis ticks={ticks} scale={scale} width={width} />
         <TimeAxis labels={timeLabels(range.ms, now)} scale={scale} height={height} />
-        {parts.map(part => (
-          <path key={part[0].time} d={linePath(part, scale)} fill="none" strokeWidth={2} strokeLinejoin="round" className="stroke-primary" />
-        ))}
+        {parts.map(part =>
+          part.length === 1 ? (
+            // A value with no neighbor in its part has no line, so it shows as a dot
+            <circle key={part[0].time} cx={scale.x(part[0].time)} cy={scale.y(part[0].value)} r={2.5} className="fill-primary" />
+          ) : (
+            <path key={part[0].time} d={linePath(part, scale)} fill="none" strokeWidth={2} strokeLinejoin="round" className="stroke-primary" />
+          ),
+        )}
         {hovered && <HoverMarker point={hovered} scale={scale} />}
       </svg>
       {hovered && (
