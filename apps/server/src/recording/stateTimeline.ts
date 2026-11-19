@@ -1,12 +1,16 @@
 import { isRunningStateText, type TimelineState } from '@local-chatter/shared';
 import type { StatePeriod } from './StatePeriodStore.js';
 
-/** One time when the machine had one state. `detail` is the alarm code and text of an alarm. */
+/**
+ * One time when the machine had one state and one program. `detail` is the alarm code and text of an alarm.
+ * `program` is the program that was open, when the machine sent one.
+ */
 export interface TimelineSegment {
   state: TimelineState;
   start: number;
   end: number;
   detail?: string;
+  program?: string;
 }
 
 /**
@@ -17,6 +21,7 @@ export interface TimelineSegment {
  * - idle: any other period is open, so the machine was connected. A machine that sends no run state
  *   (a Haas with no query port) still has program or tool periods, so it shows idle, not offline.
  * - offline: no period is open. The periods close when the machine stops answering and when ChatterBox stops.
+ * A new program starts a new segment, also when the state stays the same, so each segment has one program.
  */
 export function stateTimeline(periods: StatePeriod[], from: number, to: number): TimelineSegment[] {
   const clipped = periods
@@ -33,9 +38,16 @@ export function stateTimeline(periods: StatePeriod[], from: number, to: number):
     const start = times[index];
     open = open.filter(period => period.end > start);
     while (next < clipped.length && clipped[next].start <= start) open.push(clipped[next++]);
-    addSegment(segments, { ...stateOf(open), start, end: times[index + 1] });
+    addSegment(segments, { ...valuesOf(open), start, end: times[index + 1] });
   }
   return segments;
+}
+
+type SegmentValues = Pick<TimelineSegment, 'state' | 'detail' | 'program'>;
+
+function valuesOf(open: StatePeriod[]): SegmentValues {
+  const program = open.find(period => period.kind === 'program')?.value;
+  return { ...stateOf(open), ...(program === undefined ? {} : { program }) };
 }
 
 function stateOf(open: StatePeriod[]): Pick<TimelineSegment, 'state' | 'detail'> {
@@ -45,12 +57,13 @@ function stateOf(open: StatePeriod[]): Pick<TimelineSegment, 'state' | 'detail'>
   return { state: open.length > 0 ? 'idle' : 'offline' };
 }
 
-/** Add the segment, or make the last one longer when it has the same state and the same alarm */
+/** Add the segment, or make the last one longer when it has the same state, alarm and program */
 function addSegment(segments: TimelineSegment[], segment: TimelineSegment): void {
   const last = segments[segments.length - 1];
-  if (last && last.state === segment.state && last.detail === segment.detail && last.end === segment.start) {
+  const same = last && last.state === segment.state && last.detail === segment.detail && last.program === segment.program;
+  if (same && last.end === segment.start) {
     last.end = segment.end;
     return;
   }
-  segments.push(segment.detail === undefined ? { state: segment.state, start: segment.start, end: segment.end } : segment);
+  segments.push(segment);
 }

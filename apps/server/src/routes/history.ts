@@ -47,12 +47,13 @@ function periodReply(period: StatePeriod) {
   };
 }
 
-function segmentReply({ state, start, end, detail }: TimelineSegment) {
+function segmentReply({ state, start, end, detail, program }: TimelineSegment) {
   return {
     state,
     start: new Date(start).toISOString(),
     end: new Date(end).toISOString(),
     ...(detail === undefined ? {} : { detail }),
+    ...(program === undefined ? {} : { program }),
   };
 }
 

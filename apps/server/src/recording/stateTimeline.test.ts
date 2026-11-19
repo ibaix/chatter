@@ -38,7 +38,7 @@ describe('stateTimeline', () => {
 
     expect(stateTimeline(periods, 0, 100)).toEqual([
       { state: 'offline', start: 0, end: 10 },
-      { state: 'idle', start: 10, end: 60 },
+      { state: 'idle', start: 10, end: 60, program: 'O1234' },
       { state: 'offline', start: 60, end: 100 },
     ]);
   });
@@ -57,5 +57,18 @@ describe('stateTimeline', () => {
 
   it('cuts the periods at the start and the end of the range', () => {
     expect(stateTimeline([period('run-state', 'START', -50, 150)], 0, 100)).toEqual([{ state: 'running', start: 0, end: 100 }]);
+  });
+
+  it('gives each segment the program that was open, and starts a new segment when the program changes', () => {
+    const periods = [
+      period('run-state', 'START', 0),
+      period('program', 'O1001', 0, 40),
+      period('program', 'O1002', 40),
+    ];
+
+    expect(stateTimeline(periods, 0, 100)).toEqual([
+      { state: 'running', start: 0, end: 40, program: 'O1001' },
+      { state: 'running', start: 40, end: 100, program: 'O1002' },
+    ]);
   });
 });
