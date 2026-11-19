@@ -8,7 +8,7 @@ import { StateBand, StateSwatch, TIMELINE_STATE_LABELS } from './StateBand';
 import { segmentAt, stateTotals, timelineStateOf, type StateSegment } from './stateTimeline';
 import { useStateTimeline } from './useStateTimeline';
 
-const BAND_HEIGHT = 48;
+const BAND_HEIGHT = 88;
 /** The space between the band and the time labels */
 const TIME_LABEL_GAP = 18;
 const SVG_HEIGHT = BAND_HEIGHT + TIME_LABEL_GAP + 4;

@@ -48,6 +48,26 @@ describe('MachineHistoryChart', () => {
     expect(screen.getByText('Running: a program runs')).toBeInTheDocument();
   });
 
+  it('draws the state band after the timeline loads', async () => {
+    // The page measures the chart box. jsdom has no ResizeObserver, so this one gives every box a width.
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() { this.callback([{ contentRect: { width: 600, height: 200 } } as ResizeObserverEntry], this as never); }
+      disconnect() {}
+    });
+    const now = Date.now();
+    vi.mocked(fetchStateTimeline).mockResolvedValue([{ state: 'running', start: now - 10 * 60_000, end: now }]);
+    try {
+      render(<ChartWithMenu machine={testMachine({ connected: true }, { spindleSpeed: 1200, execution: 'ACTIVE' })} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Value in the chart: Spindle speed' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Machine state' }));
+
+      expect(await screen.findByRole('img', { name: /^Machine state in the last 10 minutes\. Running 100%/ })).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('loads the history of the value that the user picks', async () => {
     render(<ChartWithMenu machine={testMachine({}, { spindleSpeed: 1200, spindleLoad: 30 })} />);
     expect(fetchValueHistory).toHaveBeenCalledWith('m1', 'spindle-speed', '-10m', '5s');
