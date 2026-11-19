@@ -4,7 +4,7 @@ import type { HardwarePoller } from '../polling/poller.js';
 import type { HistorySource } from '../recording/MetricsReader.js';
 import { historyMetricName } from '../recording/metricLines.js';
 import type { StatePeriod, StatePeriodStore } from '../recording/StatePeriodStore.js';
-import { stateTimeline, type TimelineSegment } from '../recording/stateTimeline.js';
+import { readTimelinePeriods, stateTimeline, type TimelineSegment } from '../recording/stateTimeline.js';
 import { checkedParam, checkedQuery } from './checks.js';
 import { durationMs } from './duration.js';
 import { historyUnavailable, notFound } from './responses.js';
@@ -20,7 +20,7 @@ const MAX_PERIODS = 1000;
 const DEFAULT_TIMELINE_RANGE = '-24h';
 /**
  * The state timeline reads at most this many periods. A machine that changes state every 30 seconds for 7 days
- * has fewer. With more, the timeline starts at the oldest period it read, and `more` is true.
+ * has fewer. With more, the timeline starts at the oldest period it read, and `more` is true (readTimelinePeriods).
  */
 const MAX_TIMELINE_PERIODS = 50_000;
 
@@ -80,18 +80,14 @@ export function historyRoutes(poller: HardwarePoller, history: HistorySource, pe
 
       const { range = DEFAULT_TIMELINE_RANGE } = c.req.valid('query');
       const to = Date.now();
-      const found = periods.read({ machineId, from: to - durationMs(range), to, limit: MAX_TIMELINE_PERIODS + 1 });
-      const more = found.length > MAX_TIMELINE_PERIODS;
-      const read = found.slice(0, MAX_TIMELINE_PERIODS);
-      // The periods are newest first. When some were left out, the time before the oldest one read is not known.
-      const from = more ? read[read.length - 1].start : to - durationMs(range);
+      const read = readTimelinePeriods(periods, { machineId, from: to - durationMs(range), to, limit: MAX_TIMELINE_PERIODS });
       return c.json({
         machineId,
         range,
-        from: new Date(from).toISOString(),
+        from: new Date(read.from).toISOString(),
         to: new Date(to).toISOString(),
-        data: stateTimeline(read, from, to).map(segmentReply),
-        more,
+        data: stateTimeline(read.periods, read.from, to).map(segmentReply),
+        more: read.more,
       });
     })
     .get('/machine/:id/history/:value', checkedParam(historyParams), checkedQuery(historyQuery), async c => {

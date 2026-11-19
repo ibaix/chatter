@@ -415,6 +415,17 @@ describe('API Routes', () => {
       expect(badRange.status).toBe(400);
       expect(noMachine.status).toBe(404);
     });
+
+    it('returns 400 for a range longer than 31 days', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      const tooLong = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-32d`);
+      const longest = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-31d`);
+
+      expect(tooLong.status).toBe(400);
+      expect(tooLong.body.error).toBe('range can go back at most 31 days');
+      expect(longest.status).toBe(200);
+    });
   });
 
   describe('GET /api/machine/:id/periods', () => {

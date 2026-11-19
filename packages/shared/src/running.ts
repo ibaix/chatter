@@ -47,5 +47,5 @@ export function combinedRunState(pathRunStates: readonly (string | undefined)[])
  * else the MTConnect execution (see stateValuesOf on the server), so this is isMachineRunning for either word.
  */
 export function isRunningStateText(text: string): boolean {
-  return RUNNING_RUN_STATES.includes(text) || text === RUNNING_EXECUTION;
+  return isMachineRunning({ runState: text }) === true || isMachineRunning({ execution: text }) === true;
 }

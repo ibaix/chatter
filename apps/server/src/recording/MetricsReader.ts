@@ -150,6 +150,7 @@ export class MetricsReader implements HistorySource {
 /**
  * The query for one value in each window. The last value reads the raw points, because a minute average is not a value
  * that the machine sent. max() makes the series of a machine one series, as avg() does for the average.
+ * A machine has one series for each value (a FANUC with two paths saves the tool of the main path), so max() picks nothing.
  */
 function windowQuery(metric: string, selector: string, windowMs: number, windowValue: 'average' | 'last'): string {
   if (windowValue === 'last') return `max(last_over_time(${metric}${selector}[${windowMs}ms]))`;
