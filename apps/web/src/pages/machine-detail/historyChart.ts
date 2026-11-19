@@ -92,6 +92,17 @@ export function lineParts(points: HistoryPoint[], now: number, connected: boolea
 }
 
 /**
+ * The points of a step line: each value holds until the next point, then the line goes straight up or down.
+ * For a counter or a tool number, because a slope between T3 and T4 is not a value that the machine had.
+ */
+export function stepPoints(points: HistoryPoint[]): HistoryPoint[] {
+  return points.flatMap((point, index) => {
+    const previous = points[index - 1];
+    return previous && previous.value !== point.value ? [{ time: point.time, value: previous.value }, point] : [point];
+  });
+}
+
+/**
  * Round numbers for the value axis, from 0 to just above the biggest value.
  * The axis goes at least to `smallestTop`. A `smallestTop` of 20 or more keeps the steps whole numbers.
  */

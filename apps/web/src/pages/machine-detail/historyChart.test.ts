@@ -10,6 +10,7 @@ import {
   mergeHistory,
   nearestPoint,
   recentPoints,
+  stepPoints,
   timeLabels,
   withLivePoint,
 } from './historyChart';
@@ -59,6 +60,18 @@ describe('lineParts', () => {
   it('does not hold the last value when the machine is not connected or the value is old', () => {
     expect(lineParts([point(0, 8000)], 4000, false)).toEqual([[point(0, 8000)]]);
     expect(lineParts([point(0, 8000)], GAP_MS + 1, true)).toEqual([[point(0, 8000)]]);
+  });
+});
+
+describe('stepPoints', () => {
+  it('holds each value until the next point, so a counter draws as steps and not as slopes', () => {
+    expect(stepPoints([point(0, 3), point(10, 4), point(20, 4), point(30, 7)])).toEqual([
+      point(0, 3), point(10, 3), point(10, 4), point(20, 4), point(30, 4), point(30, 7),
+    ]);
+  });
+
+  it('keeps one point as it is', () => {
+    expect(stepPoints([point(0, 3)])).toEqual([point(0, 3)]);
   });
 });
 

@@ -1,3 +1,4 @@
+import { historyWindowValue } from '@local-chatter/shared';
 import { cn } from '@toolpath/ui';
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import type { HistoryPoint } from '../../api/history';
@@ -11,6 +12,7 @@ import {
   formatChartNumber,
   lineParts,
   nearestPoint,
+  stepPoints,
   timeLabels,
   type ChartRange,
   type TimeLabel,
@@ -141,6 +143,8 @@ function ChartPlot({ points, value, now, range, gapMs, connected, width, height 
   const ticks = axisTicks(highestValue(points), value.smallestAxisTop);
   const scale = chartScale({ width, height, startTime: now - range.ms, rangeMs: range.ms, topValue: ticks[ticks.length - 1] });
   const parts = lineParts(points, now, connected, gapMs);
+  // A counter or a tool number holds its value until it changes, so it draws as steps
+  const drawnParts = historyWindowValue(value.id) === 'last' ? parts.map(stepPoints) : parts;
   const newest = points[points.length - 1];
 
   const showNearest = (event: PointerEvent<SVGSVGElement>) => {
@@ -161,7 +165,7 @@ function ChartPlot({ points, value, now, range, gapMs, connected, width, height 
       >
         <ValueAxis ticks={ticks} scale={scale} width={width} />
         <TimeAxis labels={timeLabels(range.ms, now)} scale={scale} height={height} />
-        {parts.map(part => (
+        {drawnParts.map(part => (
           <path key={part[0].time} d={linePath(part, scale)} fill="none" strokeWidth={2} strokeLinejoin="round" className="stroke-primary" />
         ))}
         {hovered && <HoverMarker point={hovered} scale={scale} />}

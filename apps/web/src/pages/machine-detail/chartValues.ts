@@ -41,6 +41,16 @@ const SPINDLE_LOAD: ChartValue = {
   format: value => `${formatChartNumber(value)}%`,
 };
 
+const FEEDRATE: ChartValue = {
+  id: 'feedrate',
+  name: 'Feedrate',
+  // No unit: the control sends mm/min or in/min, and it does not tell which
+  description: 'How fast the axes moved',
+  smallestAxisTop: 100,
+  liveValueOf: machine => numberOf(machine.data.feedrate),
+  format: value => formatChartNumber(value),
+};
+
 const PART_COUNT: ChartValue = {
   id: 'part-count',
   name: 'Part count',
@@ -48,6 +58,15 @@ const PART_COUNT: ChartValue = {
   smallestAxisTop: 20,
   liveValueOf: machine => numberOf(machine.data.partCount),
   format: value => `${formatChartNumber(value)} parts`,
+};
+
+const TOOL_NUMBER: ChartValue = {
+  id: 'tool-number',
+  name: 'Tool number',
+  description: 'The tool in the spindle',
+  smallestAxisTop: 20,
+  liveValueOf: machine => numberOf(machine.data.toolNumber),
+  format: value => `T${Math.round(value)}`,
 };
 
 /** The value the user chose, or the spindle speed when the machine does not send the chosen value now */
@@ -60,6 +79,6 @@ export function shownChartValue(values: ChartValue[], chosenId: HistoryValue): C
  * The others show only for a machine that sends them, so the dropdown has no empty charts.
  */
 export function chartValuesFor(machine: Machine): ChartValue[] {
-  const others = [SPINDLE_LOAD, PART_COUNT].filter(value => value.liveValueOf(machine) !== undefined);
+  const others = [SPINDLE_LOAD, FEEDRATE, PART_COUNT, TOOL_NUMBER].filter(value => value.liveValueOf(machine) !== undefined);
   return [SPINDLE_SPEED, ...others];
 }
