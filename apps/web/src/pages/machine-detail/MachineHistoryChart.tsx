@@ -84,7 +84,7 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
 function ValueChart({ machine, value, range }: { machine: Machine; value: ChartValue; range: ChartRange }) {
   const livePoint = livePointOf(machine, value);
   const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range);
-  const { segments } = useStateTimeline(machine.id, liveStateOf(machine), range);
+  const { segments, status: stateStatus } = useStateTimeline(machine.id, liveStateOf(machine), range);
   const { ref, width, height } = useBoxSize<HTMLDivElement>();
   const showPlot = points.length > 0 && width > 0;
 
@@ -111,8 +111,15 @@ function ValueChart({ machine, value, range }: { machine: Machine; value: ChartV
       </div>
       {showPlot && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs" style={{ marginLeft: MARGIN.left }}>
-          <span aria-hidden="true" className="text-zinc-400">Machine state:</span>
-          <StateLegend />
+          {/* A failed load leaves only the live state in the strip, so the legend would tell too little */}
+          {stateStatus === 'failed' ? (
+            <span className="text-zinc-300">Could not load the machine state. Reload the page to try again.</span>
+          ) : (
+            <>
+              <span aria-hidden="true" className="text-zinc-400">Machine state:</span>
+              <StateLegend />
+            </>
+          )}
         </div>
       )}
     </>

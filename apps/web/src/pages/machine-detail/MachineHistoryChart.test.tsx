@@ -123,6 +123,15 @@ describe('MachineHistoryChart', () => {
       expect(await screen.findByRole('list', { name: 'Machine state' })).toHaveTextContent('RunningIdleAlarmOffline');
     });
 
+    it('tells that the machine state did not load, in place of the strip legend', async () => {
+      vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: Date.now() - MINUTE, value: 1000 }], window: '5s' });
+      vi.mocked(fetchStateTimeline).mockRejectedValue(new Error('Chatter cannot be reached'));
+      render(<ChartWithMenu machine={runningMachine()} />);
+
+      expect(await screen.findByText('Could not load the machine state. Reload the page to try again.')).toBeInTheDocument();
+      expect(screen.queryByRole('list', { name: 'Machine state' })).not.toBeInTheDocument();
+    });
+
     it('shows the machine state and the program at the newest point in the hover box', async () => {
       const now = Date.now();
       vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: now - 5 * MINUTE, value: 1000 }], window: '5s' });
