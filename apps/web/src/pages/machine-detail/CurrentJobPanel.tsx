@@ -1,4 +1,4 @@
-import type { HistoryValue } from '@local-chatter/shared';
+import type { ChartChoiceId } from './chartValues';
 import { ProgressBar } from '../../components/MachineStateMark';
 import type { MachineState } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
@@ -10,7 +10,7 @@ interface CurrentJobPanelProps {
   state: MachineState;
   now: number;
   /** The value that the chart shows. Its row is left out, so it is not on the page twice. */
-  chartValue: HistoryValue;
+  chartValue: ChartChoiceId;
 }
 
 /** The live values of the machine, one row each. The rows share the height of the card. */

@@ -69,9 +69,25 @@ const TOOL_NUMBER: ChartValue = {
   format: value => `T${Math.round(value)}`,
 };
 
-/** The value the user chose, or the spindle speed when the machine does not send the chosen value now */
-export function shownChartValue(values: ChartValue[], chosenId: HistoryValue): ChartValue {
-  return values.find(value => value.id === chosenId) ?? SPINDLE_SPEED;
+/** The machine state over time (running, idle, alarm, offline), as a colored band and not as a line */
+export const MACHINE_STATE = {
+  id: 'machine-state',
+  name: 'Machine state',
+  description: 'What the machine did',
+} as const;
+
+/** One choice in the chart menu: a machine value, or the machine state */
+export type ChartChoice = ChartValue | typeof MACHINE_STATE;
+export type ChartChoiceId = ChartChoice['id'];
+
+/** The choice the user made, or the spindle speed when the machine does not send the chosen value now */
+export function shownChartChoice(choices: ChartChoice[], chosenId: ChartChoiceId): ChartChoice {
+  return choices.find(choice => choice.id === chosenId) ?? SPINDLE_SPEED;
+}
+
+/** The chart menu: the machine state first, then the values that the machine sends */
+export function chartChoicesFor(machine: Machine): ChartChoice[] {
+  return [MACHINE_STATE, ...chartValuesFor(machine)];
 }
 
 /**

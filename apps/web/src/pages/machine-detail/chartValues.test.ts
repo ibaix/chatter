@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { testMachine } from '../../test/testMachine';
-import { chartValuesFor } from './chartValues';
+import { chartChoicesFor, chartValuesFor, shownChartChoice, SPINDLE_SPEED } from './chartValues';
 
 const idsFor = (data: Parameters<typeof testMachine>[1]) => chartValuesFor(testMachine({}, data)).map(value => value.id);
 
@@ -30,5 +30,17 @@ describe('chart value formats', () => {
     const [, feedrate, tool] = chartValuesFor(testMachine({}, { feedrate: 1500.4, toolNumber: 12 }));
     expect(feedrate.format(1500.4)).toBe('1,500');
     expect(tool.format(12)).toBe('T12');
+  });
+});
+
+describe('chartChoicesFor', () => {
+  it('offers the machine state first, then the values', () => {
+    expect(chartChoicesFor(testMachine({}, { spindleSpeed: 1200 })).map(choice => choice.id)).toEqual(['machine-state', 'spindle-speed']);
+  });
+
+  it('shows the spindle speed when the chosen value is not sent now', () => {
+    const choices = chartChoicesFor(testMachine({}, { spindleSpeed: 1200 }));
+    expect(shownChartChoice(choices, 'spindle-load')).toBe(SPINDLE_SPEED);
+    expect(shownChartChoice(choices, 'machine-state').id).toBe('machine-state');
   });
 });

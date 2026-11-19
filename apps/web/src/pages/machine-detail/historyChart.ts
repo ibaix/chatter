@@ -1,4 +1,5 @@
 import type { HistoryPoint } from '../../api/history';
+import type { HistoryStatus } from './useChartHistory';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -150,4 +151,19 @@ export function timeLabels(rangeMs: number, now: number): TimeLabel[] {
     const time = now - (rangeMs * quarter) / 4;
     return { time, text: quarter === 0 ? 'Now' : format(time) };
   });
+}
+
+/** The text in place of the chart while the history loads, when it fails, or when it is empty */
+export function messageFor(status: HistoryStatus, valueName: string, range: ChartRange): string {
+  const name = valueName.toLowerCase();
+  if (status === 'loading') return `Loading the ${name} history…`;
+  if (status === 'failed') return `Could not load the ${name} history. Reload the page to try again.`;
+  return `No ${name} in the last ${range.words}. Chatter saves it while the machine is connected.`;
+}
+
+/** The first time label starts at the left edge and the last one ends at the right edge, so both stay inside the chart */
+export function timeLabelAnchor(index: number, labelCount: number): 'start' | 'middle' | 'end' {
+  if (index === 0) return 'start';
+  if (index === labelCount - 1) return 'end';
+  return 'middle';
 }
