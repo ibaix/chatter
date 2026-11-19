@@ -20,7 +20,7 @@ export interface TimelineSegment {
  * - running: a run-state period means that a program runs (isRunningStateText)
  * - idle: any other period is open, so the machine was connected. A machine that sends no run state
  *   (a Haas with no query port) still has program or tool periods, so it shows idle, not offline.
- * - offline: no period is open. The periods close when the machine stops answering and when ChatterBox stops.
+ * - offline: no period is open. The periods close when the machine stops answering and when Chatter stops.
  * A new program starts a new segment, also when the state stays the same, so each segment has one program.
  */
 export function stateTimeline(periods: StatePeriod[], from: number, to: number): TimelineSegment[] {
