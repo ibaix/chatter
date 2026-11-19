@@ -138,6 +138,8 @@ export const periodQuery = z.object({
   kind: z.enum(STATE_PERIOD_KINDS, { error: `kind must be one of: ${STATE_PERIOD_KINDS.join(', ')}` }).optional(),
 });
 
+export const timelineQuery = z.object({ range: historyQuery.shape.range });
+
 /** VictoriaMetrics keeps the history 1 year, so a longer report has no more data */
 const MAX_REPORT_DAYS = 366;
 const REPORT_UNIT_DAYS: Record<string, number> = { m: 1 / 1440, h: 1 / 24, d: 1, w: 7 };

@@ -4,10 +4,11 @@ import type { HardwarePoller } from '../polling/poller.js';
 import type { HistorySource } from '../recording/MetricsReader.js';
 import { historyMetricName } from '../recording/metricLines.js';
 import type { StatePeriod, StatePeriodStore } from '../recording/StatePeriodStore.js';
+import { stateTimeline, type TimelineSegment } from '../recording/stateTimeline.js';
 import { checkedParam, checkedQuery } from './checks.js';
 import { durationMs } from './duration.js';
 import { historyUnavailable, notFound } from './responses.js';
-import { historyParams, historyQuery, periodQuery } from './schemas.js';
+import { historyParams, historyQuery, periodQuery, timelineQuery } from './schemas.js';
 
 const DEFAULT_PERIOD_RANGE = '-1d';
 const DEFAULT_HISTORY_RANGE = '-1h';
@@ -15,6 +16,13 @@ const DEFAULT_HISTORY_RANGE = '-1h';
 const MAX_POINTS = 5000;
 /** One reply has at most this many state periods. `more` tells that older ones were left out. */
 const MAX_PERIODS = 1000;
+
+const DEFAULT_TIMELINE_RANGE = '-24h';
+/**
+ * The state timeline reads at most this many periods. A machine that changes state every 30 seconds for 7 days
+ * has fewer. With more, the timeline starts at the oldest period it read, and `more` is true.
+ */
+const MAX_TIMELINE_PERIODS = 50_000;
 
 /** Without a window, use the smallest of these that keeps the reply within the point limit below */
 const AUTO_WINDOWS = ['10s', '30s', '1m', '5m', '15m', '1h', '6h', '1d'];
@@ -39,6 +47,15 @@ function periodReply(period: StatePeriod) {
   };
 }
 
+function segmentReply({ state, start, end, detail }: TimelineSegment) {
+  return {
+    state,
+    start: new Date(start).toISOString(),
+    end: new Date(end).toISOString(),
+    ...(detail === undefined ? {} : { detail }),
+  };
+}
+
 /** Machine values over time: numbers from VictoriaMetrics, and state periods from SQLite */
 export function historyRoutes(poller: HardwarePoller, history: HistorySource, periods: StatePeriodStore) {
   return new Hono()
@@ -54,6 +71,26 @@ export function historyRoutes(poller: HardwarePoller, history: HistorySource, pe
         range,
         data: found.slice(0, MAX_PERIODS).map(periodReply),
         more: found.length > MAX_PERIODS,
+      });
+    })
+    .get('/machine/:id/state-timeline', checkedQuery(timelineQuery), c => {
+      const machineId = c.req.param('id');
+      if (!poller.getMachine(machineId)) return notFound(c);
+
+      const { range = DEFAULT_TIMELINE_RANGE } = c.req.valid('query');
+      const to = Date.now();
+      const found = periods.read({ machineId, from: to - durationMs(range), to, limit: MAX_TIMELINE_PERIODS + 1 });
+      const more = found.length > MAX_TIMELINE_PERIODS;
+      const read = found.slice(0, MAX_TIMELINE_PERIODS);
+      // The periods are newest first. When some were left out, the time before the oldest one read is not known.
+      const from = more ? read[read.length - 1].start : to - durationMs(range);
+      return c.json({
+        machineId,
+        range,
+        from: new Date(from).toISOString(),
+        to: new Date(to).toISOString(),
+        data: stateTimeline(read, from, to).map(segmentReply),
+        more,
       });
     })
     .get('/machine/:id/history/:value', checkedParam(historyParams), checkedQuery(historyQuery), async c => {

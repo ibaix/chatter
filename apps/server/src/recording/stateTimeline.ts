@@ -1,0 +1,56 @@
+import { isRunningStateText, type TimelineState } from '@local-chatter/shared';
+import type { StatePeriod } from './StatePeriodStore.js';
+
+/** One time when the machine had one state. `detail` is the alarm code and text of an alarm. */
+export interface TimelineSegment {
+  state: TimelineState;
+  start: number;
+  end: number;
+  detail?: string;
+}
+
+/**
+ * The machine state from `from` to `to`, made from the saved state periods.
+ * The rule is the one of the dashboard (machineStateOf in the web app):
+ * - alarm: an alarm period is open. An alarm shows over running.
+ * - running: a run-state period means that a program runs (isRunningStateText)
+ * - idle: any other period is open, so the machine was connected. A machine that sends no run state
+ *   (a Haas with no query port) still has program or tool periods, so it shows idle, not offline.
+ * - offline: no period is open. The periods close when the machine stops answering and when ChatterBox stops.
+ */
+export function stateTimeline(periods: StatePeriod[], from: number, to: number): TimelineSegment[] {
+  const clipped = periods
+    .map(period => ({ ...period, start: Math.max(period.start, from), end: Math.min(period.end ?? to, to) }))
+    .filter(period => period.start < period.end)
+    .sort((a, b) => a.start - b.start);
+  const times = [...new Set([from, to, ...clipped.flatMap(period => [period.start, period.end])])].sort((a, b) => a - b);
+
+  // A sweep over the times: `open` holds only the periods open now (a few, one per kind), so 7 days stay fast
+  const segments: TimelineSegment[] = [];
+  let open: typeof clipped = [];
+  let next = 0;
+  for (let index = 0; index < times.length - 1; index++) {
+    const start = times[index];
+    open = open.filter(period => period.end > start);
+    while (next < clipped.length && clipped[next].start <= start) open.push(clipped[next++]);
+    addSegment(segments, { ...stateOf(open), start, end: times[index + 1] });
+  }
+  return segments;
+}
+
+function stateOf(open: StatePeriod[]): Pick<TimelineSegment, 'state' | 'detail'> {
+  const alarm = open.find(period => period.kind === 'alarm');
+  if (alarm) return { state: 'alarm', detail: alarm.value };
+  if (open.some(period => period.kind === 'run-state' && isRunningStateText(period.value))) return { state: 'running' };
+  return { state: open.length > 0 ? 'idle' : 'offline' };
+}
+
+/** Add the segment, or make the last one longer when it has the same state and the same alarm */
+function addSegment(segments: TimelineSegment[], segment: TimelineSegment): void {
+  const last = segments[segments.length - 1];
+  if (last && last.state === segment.state && last.detail === segment.detail && last.end === segment.start) {
+    last.end = segment.end;
+    return;
+  }
+  segments.push(segment.detail === undefined ? { state: segment.state, start: segment.start, end: segment.end } : segment);
+}

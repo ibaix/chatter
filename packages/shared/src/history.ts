@@ -36,3 +36,8 @@ const LAST_VALUE_HISTORY: readonly HistoryValue[] = ['part-count', 'part-goal', 
 export function historyWindowValue(value: HistoryValue): 'average' | 'last' {
   return LAST_VALUE_HISTORY.includes(value) ? 'last' : 'average';
 }
+
+/** The machine states in the state timeline. Offline also covers a time when ChatterBox did not run. */
+export const TIMELINE_STATES = ['running', 'idle', 'alarm', 'offline'] as const;
+
+export type TimelineState = typeof TIMELINE_STATES[number];

@@ -41,3 +41,11 @@ export function isMachineRunning(values: RunningValues): boolean | undefined {
 export function combinedRunState(pathRunStates: readonly (string | undefined)[]): string | undefined {
   return pathRunStates.find(runState => runState !== undefined && RUNNING_RUN_STATES.includes(runState)) ?? pathRunStates[0];
 }
+
+/**
+ * True when a saved run-state period means that a program ran. The period keeps the FANUC run state,
+ * else the MTConnect execution (see stateValuesOf on the server), so this is isMachineRunning for either word.
+ */
+export function isRunningStateText(text: string): boolean {
+  return RUNNING_RUN_STATES.includes(text) || text === RUNNING_EXECUTION;
+}
