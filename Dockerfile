@@ -47,6 +47,8 @@ WORKDIR /app
 COPY --from=server-packages /app/node_modules node_modules
 COPY --from=server-packages /app/apps/server/node_modules apps/server/node_modules
 COPY package.json ./
+# The MIT license stays in the image, so a copy of Chatter keeps its copyright notice.
+COPY LICENSE ./
 COPY packages/shared/package.json packages/shared/
 COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY apps/server/package.json apps/server/

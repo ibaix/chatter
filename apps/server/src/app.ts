@@ -35,6 +35,7 @@ import { memoryCheckSettingStore, ReleaseWatcher, releasesRepo } from './updates
 import { updateRoutes } from './routes/updates.js';
 import { Notifications } from './notifications/Notifications.js';
 import { notificationRoutes } from './routes/notifications.js';
+import { SIDECAR_OFF, type SidecarFlags } from './sidecarConfig.js';
 
 /** Every API address starts with this */
 export const API_PREFIX = '/api';
@@ -64,6 +65,8 @@ export interface AppParts {
   updates?: UpdateService;
   /** The messages that go out when an alert starts or ends. Without it, the channels are kept in memory only. */
   notifications?: Notifications;
+  /** Aginte sidecar limits. Without them, update checks and notification sends stay on. */
+  sidecar?: SidecarFlags;
 }
 
 /**
@@ -85,6 +88,7 @@ export function createApp({
   version = chatterVersion(),
   updates = new UpdateService(UpdateFolder.fromEnvironment(), version, new ReleaseWatcher({ repo: releasesRepo(), store: memoryCheckSettingStore() })),
   notifications = Notifications.inMemory(),
+  sidecar = SIDECAR_OFF,
 }: AppParts) {
   const loginGuard = { auth, limiter: new LoginLimiter(), loginLog, proxySettings };
   const api = new Hono()
@@ -108,8 +112,8 @@ export function createApp({
     .route('/', loginSettingsRoutes(loginGuard))
     .route('/', userSettingsRoutes(accounts))
     .route('/', focasLibraryRoutes(focasLibrary))
-    .route('/', updateRoutes(updates))
-    .route('/', notificationRoutes(notifications));
+    .route('/', updateRoutes(updates, { blockOutbound: sidecar.disableUpdateCheck }))
+    .route('/', notificationRoutes(notifications, { blockOutbound: sidecar.disableHistory }));
 
   // No CORS headers: only pages from this server can call the API from a browser
   return new Hono()

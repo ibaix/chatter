@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { parseSidecarFlags } from './sidecarConfig.js';
+import { describe, expect, it, vi } from 'vitest';
+import { parseSidecarFlags, startOutboundNotifications } from './sidecarConfig.js';
 
 describe('parseSidecarFlags', () => {
   it('leaves CHATTER_DISABLE_HISTORY, CHATTER_DISABLE_UPDATE_CHECK, and CHATTER_DISABLE_WEB_UI off when they are unset', () => {
@@ -49,5 +49,32 @@ describe('parseSidecarFlags', () => {
         disableWebUi: false,
       });
     }
+  });
+});
+
+describe('startOutboundNotifications', () => {
+  it('starts the sender when CHATTER_DISABLE_HISTORY is off', () => {
+    const start = vi.fn();
+
+    expect(startOutboundNotifications({ start }, parseSidecarFlags({}))).toBe(true);
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it('starts the sender when only the update check is off', () => {
+    const start = vi.fn();
+
+    expect(startOutboundNotifications({ start }, parseSidecarFlags({ CHATTER_DISABLE_UPDATE_CHECK: 'true' }))).toBe(true);
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it('leaves the sender stopped when CHATTER_DISABLE_HISTORY is on, so a saved queue is not polled', () => {
+    const start = vi.fn();
+
+    expect(startOutboundNotifications({ start }, parseSidecarFlags({
+      CHATTER_DISABLE_HISTORY: '1',
+      CHATTER_DISABLE_UPDATE_CHECK: '1',
+      CHATTER_DISABLE_WEB_UI: '1',
+    }))).toBe(false);
+    expect(start).not.toHaveBeenCalled();
   });
 });

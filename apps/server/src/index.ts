@@ -36,7 +36,7 @@ import { chatterVersion } from './updates/chatterVersion.js';
 import { ReleaseWatcher, releasesRepo, sqliteCheckSettingStore } from './updates/ReleaseWatcher.js';
 import { createLogger } from './logging/logger.js';
 import { ConnectionLog } from './logging/ConnectionLog.js';
-import { parseSidecarFlags } from './sidecarConfig.js';
+import { parseSidecarFlags, startOutboundNotifications } from './sidecarConfig.js';
 
 const log = createLogger('server');
 
@@ -99,7 +99,10 @@ async function start(): Promise<void> {
       db: getDb(), settingsTable: settings, machineName: machineId => poller.getMachine(machineId)?.name ?? null,
     });
     poller.addRemovalListener(notifications);
-    notifications.start();
+    // A chatter.db from an earlier start can still hold queued messages. The sender stays stopped, so it never polls them.
+    if (!startOutboundNotifications(notifications, sidecar)) {
+      log.info('Outbound notifications disabled by CHATTER_DISABLE_HISTORY');
+    }
     // The alert rules of each machine. Chatter writes them to a file that vmalert reads.
     const alertRules = new AlertRuleService({
       store: new AlertRuleStore(getDb()),
@@ -138,6 +141,7 @@ async function start(): Promise<void> {
     const app = createApp({
       poller, auth, accounts, history, statePeriods, alerts, alertRules, proxySettings, loginLog: new LoginLog(getDb()), version, updates,
       notifications,
+      sidecar,
     });
     if (WEB_DIR && !sidecar.disableWebUi) app.route('/', webAppRoutes(WEB_DIR));
     if (sidecar.disableWebUi) log.info('Web UI disabled by CHATTER_DISABLE_WEB_UI (headless protocol gateway mode)');

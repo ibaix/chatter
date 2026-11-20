@@ -1,6 +1,8 @@
 import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { createMiddleware } from 'hono/factory';
 import { createLogger } from '../logging/logger.js';
+import { SIDECAR_OUTBOUND_STATUS } from '../sidecarConfig.js';
 
 const log = createLogger('api');
 
@@ -18,6 +20,17 @@ export function notFound(c: Context, thing = 'Machine') {
 export function historyUnavailable(c: Context, logTag: string, error: unknown) {
   log.error('Could not read the machine history', { route: logTag, error });
   return c.json({ error: 'The machine history is not available now. Try again later.' }, 503);
+}
+
+/**
+ * Reply 503 when sidecar mode refuses an action that would call another computer.
+ * A role without permission still gets 403 from the permission check, which runs first.
+ */
+export function refuseSidecarOutbound(blocked: boolean, error: string) {
+  return createMiddleware(async (c, next) => {
+    if (!blocked) return next();
+    return c.json({ error }, SIDECAR_OUTBOUND_STATUS);
+  });
 }
 
 /** The reply for an error that the route did not catch */
