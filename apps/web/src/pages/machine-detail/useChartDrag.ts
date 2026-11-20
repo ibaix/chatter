@@ -43,6 +43,11 @@ export function useChartDrag({ rangeMs, end, now, margins, onMove }: ChartDragOp
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (dragStart && dragStart.plotWidth > 0) setShiftMs(dragMs(event.clientX - dragStart.x, dragStart.plotWidth));
   };
+  /** The browser took the pointer, for example to scroll the page. The time does not move. */
+  const onPointerCancel = () => {
+    setDragStart(null);
+    setShiftMs(0);
+  };
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
     const start = dragStart;
     setDragStart(null);
@@ -78,6 +83,6 @@ export function useChartDrag({ rangeMs, end, now, margins, onMove }: ChartDragOp
     bodyRef,
     shiftMs,
     dragging: dragStart !== null,
-    handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp },
+    handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel },
   };
 }

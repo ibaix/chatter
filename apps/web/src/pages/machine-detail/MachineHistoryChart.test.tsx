@@ -387,6 +387,21 @@ describe('MachineHistoryChart', () => {
       expect(await screen.findByText(`How fast the spindle turned ${pastText(10 * MINUTE, NOW + 70_000 - 5 * MINUTE)}.`)).toBeInTheDocument();
     });
 
+    it('does not move the time when the browser cancels a drag, for example to scroll the page on a touch screen', async () => {
+      await overviewOfStateView();
+      const body = chartBody();
+
+      fireEvent.pointerDown(body, { button: 0, clientX: 100, pointerId: 1 });
+      fireEvent.pointerMove(body, { clientX: 400, pointerId: 1 });
+      fireEvent.pointerCancel(body, { clientX: 400, pointerId: 1 });
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: /^Machine state in the last 10 minutes/ })).toBeInTheDocument();
+      expect(body).toHaveClass('cursor-grab');
+      expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
+    });
+
     it('shows a closed hand while the user holds the chart', async () => {
       await overviewOfStateView();
       const body = chartBody();
