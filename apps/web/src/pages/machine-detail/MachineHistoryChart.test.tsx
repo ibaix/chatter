@@ -428,6 +428,20 @@ describe('MachineHistoryChart', () => {
       expect(body).toHaveClass('cursor-grab');
     });
 
+    it('goes on in time with Later, and is live again when it gets to now', async () => {
+      await overviewOfStateView();
+      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 10 * MINUTE)}.`);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+      expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
+    });
+
     it('goes back to the live chart when the user picks another range', async () => {
       render(<ChartWithMenu machine={runningMachine()} />);
       fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
@@ -560,13 +574,54 @@ describe('MachineHistoryChart', () => {
       const overview = await screen.findByRole('img', { name: /^Overview/ });
       // A zoom in the past, so a click at the right end of the strip moves the chart
       drag(overview, 100, 200);
-      await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledTimes(2));
+      const zoomText = await screen.findByText(/^How fast the spindle turned from /);
 
+      // A click in the margin right of the strip does nothing
       drag(overview, BOX_WIDTH - PLOT_RIGHT_MARGIN / 2, BOX_WIDTH - PLOT_RIGHT_MARGIN / 2);
-      expect(fetchValueHistory).toHaveBeenCalledTimes(2);
+      expect(zoomText).toBeInTheDocument();
+      expect(screen.getByText(/^How fast the spindle turned from /)).toBe(zoomText);
 
+      // A click at the right end of the strip moves the chart to now
       drag(overview, BOX_WIDTH - PLOT_RIGHT_MARGIN - 1, BOX_WIDTH - PLOT_RIGHT_MARGIN - 1);
-      await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledTimes(3));
+      expect(await screen.findByText(/^How fast the spindle turned in the last \d+ seconds\.$/)).toBeInTheDocument();
+    });
+
+    it('zooms to the end of the strip when the user drags past the end of the band', async () => {
+      const overview = await overviewOfStateView();
+
+      drag(overview, BOX_WIDTH / 2, BOX_WIDTH + 400);
+      expect(await screen.findByText('What the machine did in the last 5 minutes.')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: '10m' }));
+      drag(screen.getByRole('img', { name: /^Overview/ }), BOX_WIDTH / 2, -400);
+      expect(await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
+    });
+
+    it('moves the strip with the chart when the chart goes out of it, and shows the times of the strip', async () => {
+      await overviewOfStateView();
+
+      // The chart shows from 15 to 5 minutes ago. The 10-minute strip goes back with it.
+      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+
+      const overview = await screen.findByRole('img', { name: name => name.startsWith(`Overview ${viewText(CHART_RANGES[0], NOW - 5 * MINUTE)}.`) });
+      const labels = [...overview.querySelectorAll('text')].map(label => label.textContent);
+      expect(labels).toHaveLength(5);
+      expect(labels).not.toContain('Now');
+      expect(labels.at(-1)).toBe(new Date(NOW - 5 * MINUTE).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }));
+    });
+
+    it('clears a zoom in a strip in the past to the time of the strip', async () => {
+      await overviewOfStateView();
+      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      const overview = await screen.findByRole('img', { name: /^Overview from / });
+      // The strip goes from 15 to 5 minutes ago. The zoom is the middle 5 minutes.
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      expect(await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 7.5 * MINUTE)}.`)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear the zoom' }));
+
+      expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Now' })).toBeEnabled();
     });
   });
 });
