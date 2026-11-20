@@ -60,6 +60,13 @@ describe('AlertRulesTab', () => {
     expect(limitBox()).toHaveValue(90);
   });
 
+  it('puts a space between "min," and "raise a"', async () => {
+    await renderTab();
+
+    const rows = within(screen.getByRole('list', { name: 'Alert rules' })).getAllByRole('listitem');
+    for (const row of rows) expect(row.textContent).toContain('min, raise a');
+  });
+
   it('shows "program ended" as an event, with no limit and no minutes', async () => {
     await renderTab([{ id: 'r3', kind: 'simple', enabled: true, subject: 'program-ended', check: 'above', limit: 0, forMinutes: 0, severity: 'warning' }]);
 

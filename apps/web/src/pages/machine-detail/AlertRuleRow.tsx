@@ -128,7 +128,7 @@ function MinutesAndSeverity({ rule, canChange, onChange }: Pick<AlertRuleRowProp
   return (
     <>
       <NumberBox label="Minutes" value={rule.forMinutes} canChange={canChange} onChange={forMinutes => onChange({ forMinutes })} />
-      min,
+      {'min, '}
       <Severity rule={rule} canChange={canChange} onChange={onChange} />
     </>
   );
