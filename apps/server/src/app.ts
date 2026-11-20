@@ -49,6 +49,7 @@ import { INSTANCE_ID } from './diagnostics/instance.js';
 import { HistoryBackup } from './history-backup/HistoryBackup.js';
 import { VictoriaHistory } from './history-backup/victoriaHistory.js';
 import { historyBackupRoutes } from './routes/historyBackup.js';
+import { SIDECAR_OFF, type SidecarFlags } from './sidecarConfig.js';
 
 /** Every API address starts with this */
 export const API_PREFIX = '/api';
@@ -88,6 +89,8 @@ export interface AppParts {
   historyHealthUrls?: Record<string, string>;
   /** The backup and restore of the history of one machine. Without it, the files go to data/history-backup. */
   historyBackup?: HistoryBackup;
+  /** Aginte sidecar limits. Without them, update checks and notification sends stay on. */
+  sidecar?: SidecarFlags;
 }
 
 /**
@@ -113,6 +116,7 @@ export function createApp({
     // Read at the first backup, from DATABASE_PATH
     folder: historyBackupFolder, history: new VictoriaHistory(DEFAULT_VICTORIA_METRICS_URL), statePeriods, alertRules, version,
   }),
+  sidecar = SIDECAR_OFF,
   ...diagnostics
 }: AppParts) {
   const loginGuard = { auth, limiter: new LoginLimiter(), loginLog, proxySettings };
@@ -138,8 +142,8 @@ export function createApp({
     .route('/', loginSettingsRoutes(loginGuard))
     .route('/', userSettingsRoutes(accounts))
     .route('/', focasLibraryRoutes(focasLibrary))
-    .route('/', updateRoutes(updates))
-    .route('/', notificationRoutes(notifications))
+    .route('/', updateRoutes(updates, { blockOutbound: sidecar.disableUpdateCheck }))
+    .route('/', notificationRoutes(notifications, { blockOutbound: sidecar.disableHistory }))
     .route('/', diagnosticRoutes({ poller, updates, version, notifications }, diagnostics));
 
   // No CORS headers: only pages from this server can call the API from a browser

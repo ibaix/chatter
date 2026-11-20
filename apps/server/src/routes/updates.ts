@@ -4,6 +4,8 @@ import { requirePermission, type LoggedInEnv } from '../auth/authRoutes.js';
 import { checkedJson } from './checks.js';
 import { rawFileUpload } from './rawFileUpload.js';
 import { updateSettingsSchema } from './schemas.js';
+import { refuseSidecarOutbound } from './responses.js';
+import { UPDATE_OUTBOUND_ERROR } from '../sidecarConfig.js';
 import { LIMIT_MESSAGE, UpdateRefusedError, type UpdateService, type UpdatesReport } from '../updates/UpdateService.js';
 import { allowLongUpload } from '../webServerOptions.js';
 
@@ -23,9 +25,12 @@ async function reportOrRefusal(c: Context, action: () => Promise<UpdatesReport>)
  * Settings > Updates: see the version and the update status, upload or download an update file,
  * ask the helper to check or install it, and turn the check on GitHub on or off.
  * Only an admin can do this.
+ * When `blockOutbound` is true, a GitHub download and a change of the GitHub check answer 503.
+ * A file upload, a local check, and an install stay available. They do not call GitHub.
  */
-export function updateRoutes(updates: UpdateService) {
+export function updateRoutes(updates: UpdateService, { blockOutbound = false }: { blockOutbound?: boolean } = {}) {
   const canManageUpdates = requirePermission('manage-updates');
+  const noGitHub = refuseSidecarOutbound(blockOutbound, UPDATE_OUTBOUND_ERROR);
   return new Hono<LoggedInEnv>()
     .get('/updates/status', canManageUpdates, async c => c.json(await updates.report()))
 
@@ -36,9 +41,9 @@ export function updateRoutes(updates: UpdateService) {
       return reportOrRefusal(c, () => updates.receiveFile(body, size, c.var.user.username));
     })
 
-    .post('/updates/download', canManageUpdates, c => reportOrRefusal(c, () => updates.download(c.var.user.username)))
+    .post('/updates/download', canManageUpdates, noGitHub, c => reportOrRefusal(c, () => updates.download(c.var.user.username)))
 
-    .put('/updates/settings', canManageUpdates, checkedJson(updateSettingsSchema), async c =>
+    .put('/updates/settings', canManageUpdates, noGitHub, checkedJson(updateSettingsSchema), async c =>
       c.json(await updates.setCheckGitHub(c.req.valid('json').checkGitHub)))
 
     .post('/updates/check', canManageUpdates, c => reportOrRefusal(c, () => updates.request('check', c.var.user.username)))

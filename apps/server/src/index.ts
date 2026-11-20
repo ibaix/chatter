@@ -41,7 +41,7 @@ import { ReleaseWatcher, releasesRepo, sqliteCheckSettingStore } from './updates
 import { createLogger } from './logging/logger.js';
 import { ConnectionLog } from './logging/ConnectionLog.js';
 import { startServerLog } from './logging/startServerLog.js';
-import { parseSidecarFlags } from './sidecarConfig.js';
+import { parseSidecarFlags, startOutboundNotifications } from './sidecarConfig.js';
 
 const log = createLogger('server');
 
@@ -111,7 +111,10 @@ async function start(): Promise<void> {
       db: getDb(), settingsTable: settings, machineName: machineId => poller.getMachine(machineId)?.name ?? null,
     });
     poller.addRemovalListener(notifications);
-    notifications.start();
+    // A chatter.db from an earlier start can still hold queued messages. The sender stays stopped, so it never polls them.
+    if (!startOutboundNotifications(notifications, sidecar)) {
+      log.info('Outbound notifications disabled by CHATTER_DISABLE_HISTORY');
+    }
     // vmalert does not send again a resolve that Chatter could not get, for example during a restart
     const alertSync = new VmalertAlertSync({ url: VMALERT_URL, store: alerts, afterSync: () => notifications.findAlertChanges() });
     alertSync.start();
@@ -158,7 +161,7 @@ async function start(): Promise<void> {
     const updates = new UpdateService(updateFolder, version, releases);
     const app = createApp({
       poller, auth, accounts, history, statePeriods, alerts, alertRules, proxySettings, loginLog: new LoginLog(getDb()), version, updates,
-      notifications, serverLog, connections, historyBackup,
+      notifications, serverLog, connections, historyBackup, sidecar,
       historyHealthUrls: { victoriaMetrics: `${VICTORIA_METRICS_URL}/health`, vmalert: `${VMALERT_URL}/health` },
     });
     if (WEB_DIR && !sidecar.disableWebUi) app.route('/', webAppRoutes(WEB_DIR));
