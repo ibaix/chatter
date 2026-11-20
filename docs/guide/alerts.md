@@ -7,22 +7,23 @@ Each machine has its own rules. You set them in the **Alert rules** tab of the m
 
 ## The starter rules
 
-Each machine starts with 3 rules:
+Each new machine starts with 2 rules:
 
 | Rule | Level |
 | --- | --- |
-| The machine is not connected for 10 minutes | warning |
-| The machine is in alarm for 5 minutes | critical alert |
-| The spindle load is above 90% for 1 minute | warning |
+| The machine is in alarm for 0 minutes | critical alert |
+| The machine is in emergency stop for 0 minutes | critical alert |
 
+0 minutes means that the alert fires at once.
 You can change, turn off, or remove each of them.
+A machine that you added before keeps its rules. Chatter does not change them.
 
 ## Open the rules
 
 1. On the **Machines** page, click the machine.
 2. Click the **Alert rules** tab. The number next to the name is how many rules the machine has.
 
-![The Alert rules tab: 3 starter rules as sentences, and a custom query](../images/chatter-alert-rules-tab.png)
+![The Alert rules tab: rules as sentences, and a custom query](../images/chatter-alert-rules-tab.png)
 
 Each user can see the rules. Only an **Admin** can change them.
 
