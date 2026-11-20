@@ -119,6 +119,103 @@ describe('AlertNotifier', () => {
     expect(queued()).toEqual([]);
   });
 
+  describe('ignore patterns', () => {
+    function statuses(): string[] {
+      return outbox.list({}).reverse().map(message => `${message.channelId} ${message.kind} ${message.status}: ${message.detail}`);
+    }
+
+    function sendWaiting(): void {
+      for (const entry of outbox.takeDue(NOW)) outbox.markSent(entry.id, 'Sent', NOW);
+    }
+
+    it('does not send a start message whose text matches a pattern of the channel, and keeps it as ignored', () => {
+      channels = [channel('phones', { ignorePatterns: ['Program 9', 'haas vf-2: in*'] }), channel('slack')];
+
+      notifier.alertChanged(change('started'));
+
+      expect(statuses()).toEqual([
+        'phones started ignored: Ignored by the pattern "haas vf-2: in*"',
+        'slack started waiting: null',
+      ]);
+    });
+
+    it('ignores the end of an alert whose start was ignored, also when the end text does not match', () => {
+      channels = [channel('phones', { ignorePatterns: ['Started 9:02'] })];
+      notifier.alertChanged(change('started'));
+
+      notifier.alertChanged(change('ended'));
+
+      expect(statuses()).toEqual([
+        'phones started ignored: Ignored by the pattern "Started 9:02"',
+        'phones ended ignored: Ignored, because the start of this alert was ignored',
+      ]);
+      expect(outbox.takeDue(NOW)).toEqual([]);
+    });
+
+    it('turns a waiting start into one ignored combined message when the combined text matches', () => {
+      channels = [channel('phones', { ignorePatterns: ['ended 9:03'] })];
+      notifier.alertChanged(change('started'));
+
+      notifier.alertChanged(change('ended'));
+
+      expect(statuses()).toEqual(['phones combined ignored: Ignored by the pattern "ended 9:03"']);
+      expect(outbox.takeDue(NOW)).toEqual([]);
+    });
+
+    it('combines a waiting start as before when the combined text does not match', () => {
+      channels = [channel('phones', { ignorePatterns: ['Program 9'] })];
+      notifier.alertChanged(change('started'));
+
+      notifier.alertChanged(change('ended'));
+
+      expect(statuses()).toEqual(['phones combined waiting: null']);
+    });
+
+    it('ignores the end of an alert whose start was sent, when the end text matches', () => {
+      channels = [channel('phones', { ignorePatterns: ['ended at'] })];
+      notifier.alertChanged(change('started'));
+      sendWaiting();
+
+      notifier.alertChanged(change('ended'));
+
+      expect(statuses()).toEqual([
+        'phones started sent: Sent',
+        'phones ended ignored: Ignored by the pattern "ended at"',
+      ]);
+    });
+
+    it('sends the end of an alert whose start was sent, when the end text does not match', () => {
+      channels = [channel('phones', { ignorePatterns: ['Program 9'] })];
+      notifier.alertChanged(change('started'));
+      sendWaiting();
+
+      notifier.alertChanged(change('ended'));
+
+      expect(statuses()).toEqual(['phones started sent: Sent', 'phones ended waiting: null']);
+    });
+
+    it('checks the end text alone when the start is being sent', () => {
+      channels = [channel('phones', { ignorePatterns: ['ended at'] })];
+      notifier.alertChanged(change('started'));
+      outbox.takeDue(NOW);
+
+      notifier.alertChanged(change('ended'));
+
+      expect(statuses()).toEqual([
+        'phones started waiting: null',
+        'phones ended ignored: Ignored by the pattern "ended at"',
+      ]);
+    });
+
+    it('sends no end message, not even an ignored one, when the channel did not get the start', () => {
+      channels = [channel('phones', { ignorePatterns: ['OK'] })];
+
+      notifier.alertChanged(change('ended'));
+
+      expect(statuses()).toEqual([]);
+    });
+  });
+
   it('sends an alert that is not about one machine only to the channels for all machines', () => {
     channels = [channel('all'), channel('one-machine', { machineIds: ['haas-vf2'] })];
 

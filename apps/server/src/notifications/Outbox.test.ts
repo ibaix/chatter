@@ -164,27 +164,86 @@ describe('Outbox', () => {
     });
   });
 
-  describe('hasStartMessage', () => {
-    it('is true when the channel got the start message of the alert, also when it waits, failed, or went in a "more" message', () => {
+  describe('startStatus', () => {
+    it('gives the status of the start message of the alert on the channel', () => {
       queue('waiting', 1);
       const failed = queue('failed', 1);
       outbox.takeDue(NOW);
       outbox.markFailed(failed, 'Twilio refused the login.');
+      outbox.keepIgnored({ channelId: 'ignored', alertId: 1, message: alertMessage('started') }, 'Ignored by the pattern "alarm"', NOW);
       sendMessages('grouped', SEND_LIMIT - 1, NOW);
       [1, 2].forEach(alertId => queue('grouped', alertId, alertMessage('started'), NOW + MINUTE));
       outbox.takeDue(NOW + MINUTE);
 
-      expect(outbox.hasStartMessage('waiting', 1)).toBe(true);
-      expect(outbox.hasStartMessage('failed', 1)).toBe(true);
-      expect(outbox.list({ channelId: 'grouped' }).find(message => message.alertId === 1)?.status).toBe('grouped');
-      expect(outbox.hasStartMessage('grouped', 1)).toBe(true);
+      expect(outbox.startStatus('waiting', 1)).toBe('waiting');
+      expect(outbox.startStatus('failed', 1)).toBe('failed');
+      expect(outbox.startStatus('ignored', 1)).toBe('ignored');
+      expect(outbox.startStatus('grouped', 1)).toBe('grouped');
     });
 
-    it('is false for another channel or another alert', () => {
+    it('is null for another channel or another alert', () => {
       queue('phones', 1);
 
-      expect(outbox.hasStartMessage('slack', 1)).toBe(false);
-      expect(outbox.hasStartMessage('phones', 2)).toBe(false);
+      expect(outbox.startStatus('slack', 1)).toBeNull();
+      expect(outbox.startStatus('phones', 2)).toBeNull();
+    });
+  });
+
+  describe('ignored messages', () => {
+    const IGNORED = 'Ignored by the pattern "alarm"';
+
+    function keepIgnored(channelId: string, alertId: number, message = alertMessage('started'), now = NOW): void {
+      outbox.keepIgnored({ channelId, alertId, message }, IGNORED, now);
+    }
+
+    it('keeps an ignored message in the list, with the reason', () => {
+      keepIgnored('phones', 7);
+
+      expect(outbox.list({})).toEqual([expect.objectContaining({
+        channelId: 'phones', alertId: 7, kind: 'started', status: 'ignored', detail: IGNORED, attempts: 0, sentAt: null,
+      })]);
+    });
+
+    it('never gives an ignored message to the sender', () => {
+      keepIgnored('phones', 7);
+      const next = queue('phones', 8);
+
+      expect(outbox.takeDue(NOW).map(entry => entry.id)).toEqual([next]);
+    });
+
+    it('does not count an ignored message in the limit of the channel', () => {
+      sendMessages('phones', SEND_LIMIT - 2, NOW);
+      for (let alertId = 1; alertId <= 5; alertId += 1) keepIgnored('phones', alertId);
+      queue('phones', 6, alertMessage('started'), NOW + MINUTE);
+      queue('phones', 7, alertMessage('started'), NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE)).toEqual([expect.objectContaining({ message: alertMessage('started') })]);
+    });
+
+    it('never puts an ignored message into a "more" message', () => {
+      sendMessages('phones', SEND_LIMIT - 1, NOW);
+      keepIgnored('phones', 1, alertMessage('started'), NOW + MINUTE);
+      [2, 3].forEach(alertId => queue('phones', alertId, alertMessage('started'), NOW + MINUTE));
+
+      expect(outbox.takeDue(NOW + MINUTE)[0].message).toEqual(moreAlerts(2));
+      expect(outbox.list({}).find(message => message.alertId === 1)).toMatchObject({ status: 'ignored', detail: IGNORED });
+    });
+
+    it('deletes old ignored messages like the other finished messages', () => {
+      keepIgnored('phones', 1, alertMessage('started'), NOW - 31 * DAY);
+
+      outbox.cleanUp(NOW);
+
+      expect(outbox.list({})).toEqual([]);
+    });
+
+    it('turns a waiting start message into an ignored combined message', () => {
+      const id = queue('phones', 7, alertMessage('started'));
+
+      expect(outbox.combineWithWaitingStart('phones', 7, alertMessage('combined'), IGNORED)).toBe(true);
+
+      expect(outbox.list({})).toEqual([expect.objectContaining({ id, kind: 'combined', status: 'ignored', detail: IGNORED })]);
+      expect(outbox.takeDue(NOW)).toEqual([]);
     });
   });
 

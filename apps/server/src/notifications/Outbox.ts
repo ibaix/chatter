@@ -8,7 +8,7 @@ import type { OutgoingMessage } from './channels/ChannelType.js';
 /** A channel gets at most this many messages in SEND_LIMIT_WINDOW_MS */
 export const SEND_LIMIT = 10;
 export const SEND_LIMIT_WINDOW_MS = 10 * 60_000;
-/** The message list keeps at most this many sent, failed and grouped messages */
+/** The message list keeps at most this many sent, failed, grouped and ignored messages */
 export const MAX_KEPT_MESSAGES = 1000;
 
 const KEEP_MS = NOTIFICATION_MESSAGE_DAYS * 24 * 60 * 60_000;
@@ -100,25 +100,41 @@ export class Outbox implements MachineRemovalListener {
   }
 
   /**
-   * When the start message of the alert still waits, it becomes `combined`, so the channel gets one message.
-   * Returns false when the start message went, or is being sent. Then queue the end message.
+   * A message that matched an ignore pattern of the channel. It stays in the list with the reason, as a finished message:
+   * the sender never takes it, it does not count in the limit, and it never goes into a "more" message.
    */
-  combineWithWaitingStart(channelId: string, alertId: number, combined: OutgoingMessage): boolean {
-    return this.db.prepare(`
-      UPDATE notification_messages SET kind = ?, payload = ?
-      WHERE channel_id = ? AND alert_id = ? AND kind = 'started' AND status = 'waiting' AND sending = 0
-    `).run(combined.kind, JSON.stringify(combined), channelId, alertId).changes > 0;
+  keepIgnored(item: QueuedMessage, detail: string, now: number): void {
+    const id = this.insert(item, null, now);
+    this.db.prepare("UPDATE notification_messages SET status = 'ignored', detail = ? WHERE id = ?").run(detail, id);
   }
 
   /**
-   * True when the channel got the start message of the alert, in any status. A channel without it gets no end message,
-   * for example a channel that the admin added while the alert was on. The clean-up can delete the start message of an
-   * alert that is still on (after 30 days, or over MAX_KEPT_MESSAGES), so that alert gets no end message.
+   * When the start message of the alert still waits, it becomes `combined`, so the channel gets one message.
+   * With `ignoredDetail`, the combined message is ignored, with that reason, and the channel gets no message.
+   * Returns false when the start message went, or is being sent. Then queue the end message.
    */
-  hasStartMessage(channelId: string, alertId: number): boolean {
+  combineWithWaitingStart(channelId: string, alertId: number, combined: OutgoingMessage, ignoredDetail?: string): boolean {
     return this.db.prepare(`
-      SELECT 1 FROM notification_messages WHERE channel_id = ? AND alert_id = ? AND kind = 'started'
-    `).get(channelId, alertId) !== undefined;
+      UPDATE notification_messages SET kind = @kind, payload = @payload,
+        status = CASE WHEN @ignoredDetail IS NULL THEN status ELSE 'ignored' END,
+        detail = COALESCE(@ignoredDetail, detail)
+      WHERE channel_id = @channelId AND alert_id = @alertId AND kind = 'started' AND status = 'waiting' AND sending = 0
+    `).run({
+      kind: combined.kind, payload: JSON.stringify(combined), ignoredDetail: ignoredDetail ?? null, channelId, alertId,
+    }).changes > 0;
+  }
+
+  /**
+   * The status of the start message of the alert on the channel, or null when the channel did not get it.
+   * A channel without it gets no end message, for example a channel that the admin added while the alert was on.
+   * The clean-up can delete the start message of an alert that is still on (after 30 days, or over MAX_KEPT_MESSAGES),
+   * so that alert gets no end message.
+   */
+  startStatus(channelId: string, alertId: number): MessageStatus | null {
+    const row = this.db.prepare(`
+      SELECT status FROM notification_messages WHERE channel_id = ? AND alert_id = ? AND kind = 'started' ORDER BY id DESC LIMIT 1
+    `).get(channelId, alertId) as { status: MessageStatus } | undefined;
+    return row?.status ?? null;
   }
 
   /** A test goes at once, not through the outbox. Its result goes in the message list, so the admin sees it there too. */

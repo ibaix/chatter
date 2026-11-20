@@ -277,6 +277,14 @@ describe('NotificationsTab', () => {
     expect(within(screen.getByRole('region', { name: 'Messages' })).getByText('Twilio says: unverified number.')).toBeInTheDocument();
   });
 
+  it('shows an ignored message as Ignored, with the pattern that matched', async () => {
+    await renderTab([message({ status: 'ignored', detail: 'Ignored by the pattern "In alarm"', attempts: 0, sentAt: null })]);
+
+    const messages = within(screen.getByRole('region', { name: 'Messages' }));
+    expect(messages.getByText('Ignored')).toBeInTheDocument();
+    expect(messages.getByText('Ignored by the pattern "In alarm"')).toBeInTheDocument();
+  });
+
   it('fills the time zone from the browser when none is saved', async () => {
     vi.mocked(fetchNotificationSettings).mockResolvedValue({ linkBaseUrl: null, timeZone: null });
     await renderTab();

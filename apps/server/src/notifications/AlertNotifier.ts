@@ -1,16 +1,24 @@
-import { type AlertSeverity, channelWantsAlert, type NotificationChannel } from '@local-chatter/shared';
+import { type AlertSeverity, channelWantsAlert, firstMatchingPattern, type NotificationChannel } from '@local-chatter/shared';
 import type { Alert } from '../alerts/AlertStore.js';
 import { createLogger } from '../logging/logger.js';
 import type { AlertChange, AlertChangeListener } from './AlertChangeFinder.js';
 import { severityOf, type TextOptions } from './messageText.js';
 import type { Outbox } from './Outbox.js';
+import type { OutgoingMessage } from './channels/ChannelType.js';
 import { alertOutgoingMessage } from './outgoingMessages.js';
 
 const log = createLogger('notifications');
 
+const START_IGNORED = 'Ignored, because the start of this alert was ignored';
+
+/** The reason in the message list */
+function ignoredBy(pattern: string): string {
+  return `Ignored by the pattern "${pattern}"`;
+}
+
 export interface NotifierOptions {
   channels: { list(): NotificationChannel[] };
-  outbox: Pick<Outbox, 'queue' | 'combineWithWaitingStart' | 'hasStartMessage'>;
+  outbox: Pick<Outbox, 'queue' | 'keepIgnored' | 'combineWithWaitingStart' | 'startStatus'>;
   /** null when the machine is not there any more */
   machineName: (machineId: string) => string | null;
   textOptions: () => TextOptions;
@@ -21,6 +29,9 @@ export interface NotifierOptions {
  * Queues the messages of each alert change, one for each channel that wants the alert.
  * When an alert ends while its start message still waits, the channel gets one combined message.
  * A channel that did not get the start message gets no end message, so nobody reads "OK" for an alert they never saw.
+ *
+ * A message whose text matches an ignore pattern of the channel stays in the list as "ignored", and the channel does not get it.
+ * When the start of an alert was ignored, its end is ignored too.
  */
 export class AlertNotifier implements AlertChangeListener {
   constructor(private readonly options: NotifierOptions) {}
@@ -43,11 +54,29 @@ export class AlertNotifier implements AlertChangeListener {
     const message = (messageKind: 'started' | 'ended' | 'combined') =>
       alertOutgoingMessage({ kind: messageKind, alert, machineName }, textOptions());
     for (const channel of this.channelsThatWant(alert)) {
-      if (kind === 'ended') {
-        if (!outbox.hasStartMessage(channel.id, alertId)) continue;
-        if (outbox.combineWithWaitingStart(channel.id, alertId, message('combined'))) continue;
+      const queueOrIgnore = (outgoing: OutgoingMessage) => {
+        const item = { channelId: channel.id, alertId, message: outgoing };
+        const pattern = firstMatchingPattern(channel.ignorePatterns, outgoing.text);
+        if (pattern === null) outbox.queue(item, now());
+        else outbox.keepIgnored(item, ignoredBy(pattern), now());
+      };
+      if (kind === 'started') {
+        queueOrIgnore(message('started'));
+        continue;
       }
-      outbox.queue({ channelId: channel.id, alertId, message: message(kind) }, now());
+      const startStatus = outbox.startStatus(channel.id, alertId);
+      if (startStatus === null) continue;
+      if (startStatus === 'ignored') {
+        outbox.keepIgnored({ channelId: channel.id, alertId, message: message('ended') }, START_IGNORED, now());
+        continue;
+      }
+      if (startStatus === 'waiting') {
+        const combined = message('combined');
+        const pattern = firstMatchingPattern(channel.ignorePatterns, combined.text);
+        if (outbox.combineWithWaitingStart(channel.id, alertId, combined, pattern === null ? undefined : ignoredBy(pattern))) continue;
+      }
+      // The start went, failed, went in a "more" message, or is being sent now
+      queueOrIgnore(message('ended'));
     }
   }
 

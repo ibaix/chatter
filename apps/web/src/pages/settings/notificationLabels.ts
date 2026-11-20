@@ -19,13 +19,16 @@ export const KIND_LABELS: Record<NotificationKind, string> = {
   test: 'Test',
 };
 
-export const STATUS_TONES: Record<MessageStatus, StatusTone> = { waiting: 'check', sent: 'good', failed: 'bad', grouped: 'good' };
+export const STATUS_TONES: Record<MessageStatus, StatusTone> = {
+  waiting: 'check', sent: 'good', failed: 'bad', grouped: 'good', ignored: 'neutral',
+};
 
 export const STATUS_LABELS: Record<MessageStatus, string> = {
   waiting: 'Waiting',
   sent: 'Sent',
   failed: 'Failed',
   grouped: 'In an "And more alerts" message',
+  ignored: 'Ignored',
 };
 
 /** For example "Text message (Twilio) · 2 phones" */

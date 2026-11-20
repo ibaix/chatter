@@ -96,8 +96,9 @@ export type NotificationKind = typeof NOTIFICATION_KINDS[number];
 /**
  * "waiting" is in the outbox. "failed" means that Chatter stopped trying.
  * "grouped" means that the message went into one "more" message, because the channel was at its limit.
+ * "ignored" means that Chatter did not send the message, because its text matched an ignore pattern of the channel.
  */
-export const MESSAGE_STATUSES = ['waiting', 'sent', 'failed', 'grouped'] as const;
+export const MESSAGE_STATUSES = ['waiting', 'sent', 'failed', 'grouped', 'ignored'] as const;
 export type MessageStatus = typeof MESSAGE_STATUSES[number];
 
 /** One message in the list, from GET /api/notification-messages */
