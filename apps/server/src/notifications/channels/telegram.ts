@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ChannelDefinition, SendResult } from './ChannelType.js';
-import { networkFailure } from './networkFailure.js';
+import { type Answer, cutText, postJson, statusResult } from './http.js';
 
 const TELEGRAM_API = 'https://api.telegram.org';
 /** Telegram refuses a longer text */
@@ -35,44 +35,44 @@ export const telegramChannel: ChannelDefinition<TelegramSettings> = {
   ],
   note: 'Telegram does not let a bot write first. Send a message to the bot, or add the bot to the group or channel, before you send a test.',
   settings: telegramSettings,
-  async send(settings, message, { fetch, signal }) {
-    try {
-      // A redirect would change the POST to a GET, so Chatter does not follow it
-      const response = await fetch(`${TELEGRAM_API}/bot${settings.token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ chat_id: settings.chatId, text: cut(message.text) }),
-        redirect: 'manual',
-        signal,
-      });
-      // Chatter does not read the answer. A failure to close it must not send the message again.
-      response.body?.cancel().catch(() => {});
-      return resultOf(response.status);
-    } catch (error) {
-      return networkFailure(error, 'Telegram');
-    }
+  send(settings, message, context) {
+    const request = {
+      url: `${TELEGRAM_API}/bot${settings.token}/sendMessage`,
+      body: { chat_id: settings.chatId, text: cutText(message.text, MAX_TEXT) },
+      readJson: true,
+    };
+    return postJson(context, 'Telegram', request, answer => resultOf(answer, settings.token));
   },
 };
 
-/** Cuts the text to the limit, but not in the middle of an emoji */
-function cut(text: string): string {
-  return text.length > MAX_TEXT ? text.slice(0, MAX_TEXT).replace(/[\uD800-\uDBFF]$/, '') : text;
+/** The error answer of the Bot API: https://core.telegram.org/bots/api#making-requests */
+interface TelegramError {
+  description?: unknown;
+  parameters?: { migrate_to_chat_id?: unknown };
 }
 
-function resultOf(status: number): SendResult {
-  if (status >= 200 && status < 300) return { ok: true, detail: 'Telegram sent it' };
-  if (status === 401 || status === 404) {
-    return { ok: false, retry: false, error: 'Telegram refused the bot token. Check the bot token.' };
+/** Telegram tells the reason in English. A long reason is cut, and the bot token never shows. */
+const MAX_REASON = 200;
+
+function resultOf({ status, json }: Answer, token: string): SendResult {
+  const answer = (typeof json === 'object' && json !== null ? json : {}) as TelegramError;
+  return statusResult(status, {
+    answered: `Telegram answered ${status}`,
+    sent: 'Telegram sent it',
+    moved: 'A proxy of the shop network can cause this.',
+    refused: () => refusalOf(status, answer, token),
+  });
+}
+
+function refusalOf(status: number, answer: TelegramError, token: string): string {
+  if (status === 401 || status === 404) return 'Telegram refused the bot token. Check the bot token.';
+  if (status === 403) return 'The bot cannot write to the chat. Send a message to the bot, or add the bot to the group or channel.';
+  if (status !== 400) return `Telegram answered ${status}.`;
+  const newChatId = answer.parameters?.migrate_to_chat_id;
+  if (typeof newChatId === 'number') {
+    return `The group is now a supergroup, and it has a new chat ID. Change the chat ID to ${newChatId}.`;
   }
-  if (status === 400) return { ok: false, retry: false, error: 'Telegram cannot find the chat. Check the chat ID.' };
-  if (status === 403) {
-    return {
-      ok: false, retry: false,
-      error: 'The bot cannot write to the chat. Send a message to the bot, or add the bot to the group or channel.',
-    };
-  }
-  if (status === 408 || status === 429 || status >= 500) {
-    return { ok: false, retry: true, error: `Telegram answered ${status}. Chatter tries again later.` };
-  }
-  return { ok: false, retry: false, error: `Telegram answered ${status}.` };
+  const reason = typeof answer.description === 'string' ? answer.description : '';
+  if (!reason || /chat not found/i.test(reason)) return 'Telegram cannot find the chat. Check the chat ID.';
+  return `Telegram refused the message: ${cutText(reason.replaceAll(token, '(bot token)'), MAX_REASON).replace(/\.$/, '')}.`;
 }

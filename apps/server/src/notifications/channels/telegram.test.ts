@@ -36,6 +36,11 @@ async function resultFor(status: number) {
   return telegramChannel.send(settings, MESSAGE, fakeFetch(() => new Response(null, { status })).context());
 }
 
+async function resultForJson(status: number, answer: unknown) {
+  const json = () => new Response(JSON.stringify(answer), { status, headers: { 'content-type': 'application/json' } });
+  return telegramChannel.send(settings, MESSAGE, fakeFetch(json).context());
+}
+
 function firstProblem(values: unknown): string | undefined {
   return telegramChannel.settings.safeParse(values).error?.issues[0].message;
 }
@@ -100,6 +105,35 @@ describe('telegramChannel', () => {
     expect(await resultFor(400)).toEqual({ ok: false, retry: false, error: 'Telegram cannot find the chat. Check the chat ID.' });
   });
 
+  it('tells that the chat ID is wrong when Telegram cannot find the chat', async () => {
+    expect(await resultForJson(400, { ok: false, error_code: 400, description: 'Bad Request: chat not found' }))
+      .toEqual({ ok: false, retry: false, error: 'Telegram cannot find the chat. Check the chat ID.' });
+  });
+
+  it('gives the new chat ID when a group became a supergroup', async () => {
+    const answer = {
+      ok: false, error_code: 400,
+      description: 'Bad Request: group chat was upgraded to a supergroup chat',
+      parameters: { migrate_to_chat_id: -1009876543210 },
+    };
+
+    expect(await resultForJson(400, answer)).toEqual({
+      ok: false, retry: false,
+      error: 'The group is now a supergroup, and it has a new chat ID. Change the chat ID to -1009876543210.',
+    });
+  });
+
+  it('gives the reason of Telegram for another 400', async () => {
+    expect(await resultForJson(400, { ok: false, error_code: 400, description: 'Bad Request: message text is empty' }))
+      .toEqual({ ok: false, retry: false, error: 'Telegram refused the message: Bad Request: message text is empty.' });
+  });
+
+  it('keeps the bot token out of the reason of Telegram', async () => {
+    const text = textOf(await resultForJson(400, { ok: false, description: `Bad Request: bad bot ${TOKEN}` }));
+
+    expect(text).not.toContain(TOKEN);
+  });
+
   it('stops at once when Telegram answers 403, and tells how to let the bot write to the chat', async () => {
     expect(await resultFor(403)).toEqual({
       ok: false,
@@ -112,8 +146,13 @@ describe('telegramChannel', () => {
     expect(await resultFor(status)).toEqual({ ok: false, retry: true, error: `Telegram answered ${status}. Chatter tries again later.` });
   });
 
-  it.each([302, 409])('stops at once when Telegram answers %i', async status => {
-    expect(await resultFor(status)).toEqual({ ok: false, retry: false, error: `Telegram answered ${status}.` });
+  it('stops at once when Telegram answers 409', async () => {
+    expect(await resultFor(409)).toEqual({ ok: false, retry: false, error: 'Telegram answered 409.' });
+  });
+
+  it('stops at once when Telegram answers with a redirect', async () => {
+    expect(await resultFor(302))
+      .toEqual({ ok: false, retry: false, error: 'Telegram answered 302 and points to another address. A proxy of the shop network can cause this.' });
   });
 
   it('gives the result of the send, also when Chatter cannot close the answer', async () => {

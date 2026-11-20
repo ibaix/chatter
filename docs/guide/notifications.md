@@ -252,6 +252,8 @@ The **Messages** panel shows each message of the last 30 days, the newest first.
 | **Failed:** Discord answered 400 and refused the message | Check the **Mention** box. Empty it, and send a test. |
 | **Failed:** Telegram refused the bot token | The bot token is wrong. Copy it again from @BotFather. |
 | **Failed:** Telegram cannot find the chat | The chat ID is wrong. Look in `getUpdates` again. |
+| **Failed:** The group is now a supergroup | Telegram gave the group a new chat ID. Type the new chat ID from the message in **Chat ID**. |
+| **Failed:** Telegram refused the message: ... | The text after the colon is the reason from Telegram. |
 | **Failed:** The bot cannot write to the chat | Send a message to the bot, or add the bot to the group or channel. For a channel, make the bot an admin. |
 | **Failed:** Chatter could not reach Apprise | Apprise API is not running, or the address is wrong. Chatter tries again for 24 hours. |
 | **Waiting:** Apprise did not answer in time | Apprise needs more than 60 seconds to send to your services. Look in the Apprise log for a slow service. Chatter tries again later. |
