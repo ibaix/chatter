@@ -41,6 +41,7 @@ import { ReleaseWatcher, releasesRepo, sqliteCheckSettingStore } from './updates
 import { createLogger } from './logging/logger.js';
 import { ConnectionLog } from './logging/ConnectionLog.js';
 import { startServerLog } from './logging/startServerLog.js';
+import { parseSidecarFlags } from './sidecarConfig.js';
 
 const log = createLogger('server');
 
@@ -72,6 +73,8 @@ const VMALERT_URL = process.env.VMALERT_URL || 'http://localhost:8880';
 const { serverLog } = startServerLog(dataFolder());
 
 async function start(): Promise<void> {
+  // The Aginte sidecar sets these. With them unset, startup stays the same.
+  const sidecar = parseSidecarFlags(process.env);
   try {
     await initDatabase();
 
@@ -82,11 +85,16 @@ async function start(): Promise<void> {
     const poller = new HardwarePoller(getDb());
     await poller.loadFromDatabase();
 
-    // The machine values over time (for the charts)
-    const metrics = new MetricsWriter({ url: VICTORIA_METRICS_URL });
-    poller.addRecorder(metrics);
-    metrics.start();
-    log.info('Machine history saved in VictoriaMetrics', { url: VICTORIA_METRICS_URL });
+    // The machine values over time (for the charts). The sidecar skips this and vmalert.
+    let metrics: MetricsWriter | undefined;
+    if (sidecar.disableHistory) {
+      log.info('History and vmalert disabled by CHATTER_DISABLE_HISTORY');
+    } else {
+      metrics = new MetricsWriter({ url: VICTORIA_METRICS_URL });
+      poller.addRecorder(metrics);
+      metrics.start();
+      log.info('Machine history saved in VictoriaMetrics', { url: VICTORIA_METRICS_URL });
+    }
     // One log line when a machine connects, goes offline, comes back, or reports a new problem
     const connections = new ConnectionLog(undefined, undefined, id => poller.isConnecting(id));
     poller.addRecorder(connections);
@@ -115,11 +123,14 @@ async function start(): Promise<void> {
       queries: new VictoriaQueryChecker({ url: VICTORIA_METRICS_URL }),
     });
     await alertRules.addStarterRulesOnFirstStart(poller.getMachines().map(machine => machine.id));
-    poller.addAddListener(alertRules);
-    poller.addRemovalListener(alertRules);
-    // At each start, so the file matches the saved rules, also after an update
-    void alertRules.publish();
-    log.info('Alert rules written', { folder: ALERT_RULES_DIR, vmalert: VMALERT_URL });
+    // At each start, so the file matches the saved rules, also after an update.
+    // The sidecar skips the listeners too: a new machine would ask them to call vmalert.
+    if (!sidecar.disableHistory) {
+      poller.addAddListener(alertRules);
+      poller.addRemovalListener(alertRules);
+      void alertRules.publish();
+      log.info('Alert rules written', { folder: ALERT_RULES_DIR, vmalert: VMALERT_URL });
+    }
 
     const users = new UserStore(getDb());
     const sessions = new SessionStore(getDb());
@@ -142,14 +153,16 @@ async function start(): Promise<void> {
     if (TWILIO_ADDRESS.warning) log.warn(TWILIO_ADDRESS.warning);
     // Asks GitHub once a day for the newest release, while the Admin has the check on (the default)
     const releases = new ReleaseWatcher({ repo: releasesRepo(), store: sqliteCheckSettingStore(settings) });
-    releases.start();
+    if (sidecar.disableUpdateCheck) log.info('GitHub update check disabled by CHATTER_DISABLE_UPDATE_CHECK');
+    else releases.start();
     const updates = new UpdateService(updateFolder, version, releases);
     const app = createApp({
       poller, auth, accounts, history, statePeriods, alerts, alertRules, proxySettings, loginLog: new LoginLog(getDb()), version, updates,
       notifications, serverLog, connections, historyBackup,
       historyHealthUrls: { victoriaMetrics: `${VICTORIA_METRICS_URL}/health`, vmalert: `${VMALERT_URL}/health` },
     });
-    if (WEB_DIR) app.route('/', webAppRoutes(WEB_DIR));
+    if (WEB_DIR && !sidecar.disableWebUi) app.route('/', webAppRoutes(WEB_DIR));
+    if (sidecar.disableWebUi) log.info('Web UI disabled by CHATTER_DISABLE_WEB_UI (headless protocol gateway mode)');
     // A large upload gets a long time limit. Each other request gets a short one.
     const server = startWebServer(app, PORT, {
       onListening: () => {
@@ -157,29 +170,34 @@ async function start(): Promise<void> {
         poller.start();
       },
     });
-    const receiver = alertReceiverApp(alerts, {
-      isKnownMachine: machineId => poller.getMachine(machineId) !== null,
-      afterSave: () => notifications.findAlertChanges(),
-    });
-    const alertServer = serve({ fetch: receiver.fetch, port: ALERT_PORT, hostname: ALERT_HOST }, () => {
-      log.info('Alerts from vmalert received', { url: `http://${ALERT_HOST}:${ALERT_PORT}/api/v2/alerts` });
-    }) as Server;
-    // Without this, a port that is in use stops the whole server
-    alertServer.on('error', error => {
-      log.error('Could not listen for alerts. Chatter runs, but it gets no alerts', { host: ALERT_HOST, port: ALERT_PORT, error });
-    });
+    let alertServer: Server | undefined;
+    if (!sidecar.disableHistory) {
+      const receiver = alertReceiverApp(alerts, {
+        isKnownMachine: machineId => poller.getMachine(machineId) !== null,
+        afterSave: () => notifications.findAlertChanges(),
+      });
+      alertServer = serve({ fetch: receiver.fetch, port: ALERT_PORT, hostname: ALERT_HOST }, () => {
+        log.info('Alerts from vmalert received', { url: `http://${ALERT_HOST}:${ALERT_PORT}/api/v2/alerts` });
+      }) as Server;
+      // Without this, a port that is in use stops the whole server
+      alertServer.on('error', error => {
+        log.error('Could not listen for alerts. Chatter runs, but it gets no alerts', { host: ALERT_HOST, port: ALERT_PORT, error });
+      });
+    }
 
     const shutDown = async () => {
       log.info('Shutting down');
       poller.stop();
       // After poller.stop(), so the disconnects it sent end first. It takes at most a few seconds.
       const focasStopped = focasThreads.shutDown();
-      releases.stop();
+      if (!sidecar.disableUpdateCheck) releases.stop();
       alertSync.stop();
-      alertServer.close();
-      alertServer.closeAllConnections();
+      if (alertServer) {
+        alertServer.close();
+        alertServer.closeAllConnections();
+      }
       await notifications.stop();
-      await metrics.stop();
+      if (metrics) await metrics.stop();
       try {
         stateRecorder.stop();
       } catch (error) {
