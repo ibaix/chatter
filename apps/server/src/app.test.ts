@@ -691,6 +691,28 @@ describe('API Routes', () => {
       expect(query.from).toBe(Date.UTC(2026, 10, 19, 10, 20));
     });
 
+    it('reads an `end` with an offset as that time, and an `end` in the future as now', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      await call('GET', `/api/machine/${machine.id}/history/spindle-speed?range=-10m&window=10s&end=2026-11-19T10:30:00%2B01:00`);
+      await call('GET', `/api/machine/${machine.id}/history/spindle-speed?range=-10m&window=10s&end=2999-01-01T00:00:00Z`);
+
+      expect(history.windowAverages.mock.calls[0][0].to).toBe(Date.UTC(2026, 10, 19, 9, 30));
+      expect(history.windowAverages.mock.calls[1][0].to).toBeLessThanOrEqual(Date.now());
+    });
+
+    it('returns 400 for an `end` that is not a time with a zone', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      const bad = await call('GET', `/api/machine/${machine.id}/history/spindle-speed?range=-10m&end=yesterday`);
+      const noZone = await call('GET', `/api/machine/${machine.id}/history/spindle-speed?range=-10m&end=2026-11-19T10:30:00`);
+
+      expect(bad.status).toBe(400);
+      expect(bad.body.error).toBe('end must be a time with a zone, such as 2026-11-19T15:00:00Z');
+      expect(noZone.status).toBe(400);
+      expect(history.windowAverages).not.toHaveBeenCalled();
+    });
+
     it('returns 503 when the history cannot be read', async () => {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
       history.windowAverages.mockRejectedValue(new Error('fetch failed'));
