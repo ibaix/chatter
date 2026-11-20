@@ -17,6 +17,7 @@ import {
   lineParts,
   messageFor,
   nearestPoint,
+  pointsWithin,
   stepPoints,
   timeLabels,
   timeScale,
@@ -151,7 +152,7 @@ function ValueChart({ machine, value, range, end, clockNow, shiftMs, selection }
   const { ref, width, height } = useBoxSize<HTMLDivElement>();
   // The chart keeps the old points while a new time loads. They show only when some of them are in the time that shows.
   const shownEnd = now + shiftMs;
-  const hasShownPoints = points.some(point => point.time >= shownEnd - range.ms && point.time <= shownEnd);
+  const hasShownPoints = pointsWithin(points, shownEnd - range.ms, shownEnd).length > 0;
   const showPlot = status !== 'failed' && hasShownPoints && width > 0;
 
   return (
@@ -249,13 +250,12 @@ function ChartPlot({ points, value, stateSegments, now, shiftMs, range, gapMs, c
   const parts = lineParts(points, now, connected, gapMs);
   // A counter or a tool number holds its value until it changes, so it draws as steps
   const drawnParts = historyWindowValue(value.id) === 'last' ? parts.map(stepPoints) : parts;
+  const shownPoints = pointsWithin(points, startTime, shownEnd);
   // The chart loads time after a chart in the past, so the newest point that shows can be before the last point
-  const newest = points.filter(point => point.time <= shownEnd).at(-1) ?? points[0];
+  const newest = shownPoints.at(-1) ?? points[0];
 
   const showNearest = (event: PointerEvent<SVGSVGElement>) => {
-    const offsetX = offsetXOf(event);
-    const shownPoints = points.filter(point => point.time >= startTime && point.time <= shownEnd);
-    setHovered(nearestPoint(shownPoints, scale.timeAt(offsetX)));
+    setHovered(nearestPoint(shownPoints, scale.timeAt(offsetXOf(event))));
   };
 
   return (

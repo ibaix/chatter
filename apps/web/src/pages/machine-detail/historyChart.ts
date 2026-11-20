@@ -2,6 +2,9 @@ import type { HistoryPoint } from '../../api/history';
 
 export type HistoryStatus = 'loading' | 'ready' | 'failed';
 
+/** A drag shorter than this, in pixels, is a click, for example to see a hover box */
+export const MIN_DRAG_PX = 5;
+
 /** The charts move on this often, also when no new value comes */
 export const CHART_CLOCK_TICK_MS = 5000;
 
@@ -76,6 +79,11 @@ function windowOf(time: number, windowMs: number): number {
 export function mergeHistory(history: HistoryPoint[], live: HistoryPoint[]): HistoryPoint[] {
   const historyEnd = history[history.length - 1]?.time ?? -Infinity;
   return [...history, ...live.filter(point => point.time > historyEnd)];
+}
+
+/** The points from `from` to `to`, both included: for example the points in the time that a chart shows */
+export function pointsWithin(points: HistoryPoint[], from: number, to: number): HistoryPoint[] {
+  return points.filter(point => point.time >= from && point.time <= to);
 }
 
 /** The points from `from` on. The points after the end of a chart in the past stay, because a drag can show them. */

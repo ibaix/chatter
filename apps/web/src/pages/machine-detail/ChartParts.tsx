@@ -1,6 +1,6 @@
 import { cn } from '@toolpath/ui';
-import { ChevronLeftIcon, ChevronRightIcon } from '../../components/ui/icons';
 import type { CSSProperties, PointerEvent, ReactNode } from 'react';
+import { ChevronLeftIcon, ChevronRightIcon } from '../../components/ui/icons';
 import { timeLabelAnchor, type TimeLabel } from './historyChart';
 
 /** The text of the axis labels of both charts */
@@ -66,9 +66,6 @@ export function PanButtons({ canGoLater, onEarlier, onLater, onNow }: PanButtons
 export function offsetXOf(event: PointerEvent<Element>): number {
   return event.clientX - event.currentTarget.getBoundingClientRect().left;
 }
-
-/** A drag shorter than this, in pixels, is a click, for example to see a hover box */
-export const MIN_DRAG_PX = 5;
 
 /** A time that the user highlights on the overview strip, to zoom in */
 export interface ZoomSelection {

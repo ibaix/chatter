@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react';
-import { MIN_DRAG_PX } from './ChartParts';
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from 'react';
+import { MIN_DRAG_PX } from './historyChart';
 
 /** One step of a sideways scroll moves the time by a quarter of the range */
 const WHEEL_STEP = 0.25;
@@ -72,12 +72,17 @@ export function useChartDrag({ rangeMs, end, now, margins, onMove }: ChartDragOp
     onMove(Math.sign(wheelDelta.current) * WHEEL_STEP * rangeMs);
     wheelDelta.current = 0;
   };
+  // The listener stays the same, and calls the newest handler, which knows the newest range and end
+  const scrollHandler = useRef(scrollTime);
+  useLayoutEffect(() => { scrollHandler.current = scrollTime; });
   // React listens to the wheel passively, so its handler cannot stop the scroll
   useEffect(() => {
     const body = bodyRef.current;
-    body?.addEventListener('wheel', scrollTime, { passive: false });
-    return () => body?.removeEventListener('wheel', scrollTime);
-  });
+    if (!body) return;
+    const listener = (event: WheelEvent) => scrollHandler.current(event);
+    body.addEventListener('wheel', listener, { passive: false });
+    return () => body.removeEventListener('wheel', listener);
+  }, []);
 
   return {
     bodyRef,

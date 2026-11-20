@@ -11,6 +11,7 @@ import {
   nearestPoint,
   pannedEnd,
   pointsFrom,
+  pointsWithin,
   stepPoints,
   CHART_RANGES,
   timeLabels,
@@ -42,6 +43,13 @@ describe('mergeHistory', () => {
     const live = [point(4000, 9), point(7000, 3)];
 
     expect(mergeHistory(history, live)).toEqual([point(0, 1), point(5000, 2), point(7000, 3)]);
+  });
+});
+
+describe('pointsWithin', () => {
+  it('keeps the points from one time to another, both included', () => {
+    const points = [point(0, 1), point(5000, 2), point(9000, 3), point(12_000, 4)];
+    expect(pointsWithin(points, 5000, 9000)).toEqual([point(5000, 2), point(9000, 3)]);
   });
 });
 
