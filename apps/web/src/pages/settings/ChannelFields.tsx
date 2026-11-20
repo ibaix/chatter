@@ -3,9 +3,9 @@ import { useState, type ReactNode } from 'react';
 import type { ChannelTypeInfo } from '../../api/notifications';
 import { Button } from '../../components/ui/Button';
 import { Field, TextInput } from '../../components/ui/fields';
-import { CloseIcon, PlusIcon } from '../../components/ui/icons';
 import type { ChannelFormState } from './channelFormState';
 import { randomWords } from './randomWords';
+import { TextList } from './TextList';
 
 const SAVED_SECRET_PLACEHOLDER = 'Saved. Leave it empty to keep it.';
 
@@ -163,39 +163,17 @@ interface PhoneListFieldProps {
 }
 
 function PhoneListField({ field, phones, onChange }: PhoneListFieldProps) {
-  const setPhone = (index: number, phone: string) => onChange(phones.map((entry, at) => (at === index ? phone : entry)));
   return (
-    <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
-      <legend className="mb-1 p-0 text-xs font-semibold text-zinc-300">{field.label}</legend>
-      {phones.map((phone, index) => (
-        // The boxes have no id of their own, so the place in the list is the key
-        <div key={index} className="flex items-center gap-2">
-          <TextInput
-            type="tel"
-            mono={field.mono}
-            className="flex-1"
-            value={phone}
-            placeholder="+15551234567"
-            aria-label={`Phone number ${index + 1}`}
-            onChange={event => setPhone(index, event.target.value)}
-            autoComplete="off"
-          />
-          {phones.length > 1 && (
-            <Button
-              variant="quiet"
-              size="icon"
-              aria-label={`Remove phone number ${index + 1}`}
-              onClick={() => onChange(phones.filter((_, at) => at !== index))}
-            >
-              <CloseIcon size={14} />
-            </Button>
-          )}
-        </div>
-      ))}
-      <div>
-        <Button size="sm" onClick={() => onChange([...phones, ''])}><PlusIcon /> Add a number</Button>
-      </div>
-      {field.hint && <p className="m-0 text-xs text-zinc-300">{field.hint}</p>}
-    </fieldset>
+    <TextList
+      legend={field.label}
+      values={phones}
+      onChange={onChange}
+      itemLabel="Phone number"
+      addLabel="Add a number"
+      inputType="tel"
+      placeholder="+15551234567"
+      mono={field.mono}
+      hint={field.hint}
+    />
   );
 }
