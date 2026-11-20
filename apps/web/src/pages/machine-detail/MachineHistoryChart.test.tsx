@@ -207,6 +207,20 @@ describe('MachineHistoryChart', () => {
       expect(await screen.findByText('No spindle speed in the last 10 minutes. Chatter saves it while the machine is connected.')).toBeInTheDocument();
     });
 
+    it('tells the newest value in the shown time, not in the time after it', async () => {
+      const now = Date.now();
+      // After Earlier, the chart shows the 10 minutes that end 5 minutes ago, and loads the 5 minutes after them
+      vi.mocked(fetchValueHistory).mockResolvedValue({
+        points: [{ time: now - 7 * MINUTE, value: 1000 }, { time: now - 2 * MINUTE, value: 2000 }],
+        window: '5s',
+      });
+      render(<ChartWithMenu machine={runningMachine()} />);
+      await screen.findByRole('img', { name: /^Spindle speed in the last 10 minutes/ });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+
+      expect(await screen.findByRole('img', { name: /^Spindle speed from .*Newest value: 1,000 RPM\.$/ })).toBeInTheDocument();
+    });
   });
 
   /** The part of the chart that moves in time with a drag */

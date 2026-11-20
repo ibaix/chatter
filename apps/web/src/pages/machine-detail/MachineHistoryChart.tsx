@@ -325,7 +325,8 @@ function ChartPlot({ points, value, stateSegments, now, shiftMs, range, gapMs, c
   const parts = lineParts(points, now, connected, gapMs);
   // A counter or a tool number holds its value until it changes, so it draws as steps
   const drawnParts = historyWindowValue(value.id) === 'last' ? parts.map(stepPoints) : parts;
-  const newest = points[points.length - 1];
+  // The chart loads time after a chart in the past, so the newest point that shows can be before the last point
+  const newest = points.filter(point => point.time <= shownEnd).at(-1) ?? points[0];
 
   const showNearest = (event: PointerEvent<SVGSVGElement>) => {
     const offsetX = event.clientX - event.currentTarget.getBoundingClientRect().left;
