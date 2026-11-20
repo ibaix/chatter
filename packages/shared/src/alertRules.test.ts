@@ -96,10 +96,11 @@ describe('ruleName', () => {
 });
 
 describe('STARTER_RULES', () => {
-  it('are in alarm and emergency stop, both at once (0 min), critical and on', () => {
+  it('are in alarm and emergency stop (critical), and program ended (warning), all at once (0 min) and on', () => {
     expect(STARTER_RULES.map(rule => [ruleName({ ...rule, id: '' }), rule.forMinutes, rule.severity, rule.enabled])).toEqual([
       ['In alarm', 0, 'critical', true],
       ['Emergency stop', 0, 'critical', true],
+      ['Program ended', 0, 'warning', true],
     ]);
   });
 });

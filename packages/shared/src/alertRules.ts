@@ -109,6 +109,7 @@ export const MAX_ALERT_FOR_MINUTES = 1440;
 export const STARTER_RULES: readonly NewAlertRule[] = [
   { kind: 'simple', enabled: true, subject: 'in-alarm', check: 'above', limit: 0, forMinutes: 0, severity: 'critical' },
   { kind: 'simple', enabled: true, subject: 'emergency-stop', check: 'above', limit: 0, forMinutes: 0, severity: 'critical' },
+  { kind: 'simple', enabled: true, subject: 'program-ended', check: 'above', limit: 0, forMinutes: 0, severity: 'warning' },
 ];
 
 /** The MetricsQL query that vmalert runs for the rule on one machine */

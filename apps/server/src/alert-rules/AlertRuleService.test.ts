@@ -137,9 +137,9 @@ describe('AlertRuleService', () => {
 
     service.machineAdded('haas_1');
     await service.publish();
-    expect(service.rulesOf('haas_1')).toHaveLength(2);
+    expect(service.rulesOf('haas_1')).toHaveLength(3);
     expect(lastFile().groups[0].rules.map((rule: { alert: string }) => rule.alert))
-      .toEqual(['In alarm', 'Emergency stop']);
+      .toEqual(['In alarm', 'Emergency stop', 'Program ended']);
 
     service.removeMachine('haas_1');
     await service.publish();
