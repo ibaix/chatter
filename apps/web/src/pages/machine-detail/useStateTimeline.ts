@@ -4,6 +4,23 @@ import { useNow } from '../../hooks/useNow';
 import { CHART_CLOCK_TICK_MS, type ChartRange, type HistoryStatus } from './historyChart';
 import { clipSegments, withLiveState, type LiveState, type StateSegment } from './stateTimeline';
 
+/** The timelines that load now. Two charts that ask for the same timeline at the same time share one request. */
+const loading = new Map<string, Promise<StateSegment[]>>();
+
+/**
+ * Loads a timeline, or joins the request for it that is already open.
+ * Until the user zooms, the overview strip and the chart show the same time, so the server reads it once.
+ */
+function sharedTimeline(key: string, machineId: string, query: string, end: number | null): Promise<StateSegment[]> {
+  let request = loading.get(key);
+  if (!request) {
+    request = (end === null ? fetchStateTimeline(machineId, query) : fetchStateTimeline(machineId, query, end))
+      .finally(() => loading.delete(key));
+    loading.set(key, request);
+  }
+  return request;
+}
+
 /**
  * The machine state over the chart's range: the saved timeline first, then each live state change.
  * `live` is undefined while the state is not known (the machine connects, or the page lost Chatter). The band then
@@ -41,7 +58,8 @@ export function useStateTimeline(
     setSegmentsKey(key);
     setStatus('loading');
     lastKnownAt.current = undefined;
-    (end === null ? fetchStateTimeline(machineId, range.query) : fetchStateTimeline(machineId, range.query, end))
+    const request = sharedTimeline(key, machineId, range.query, end);
+    request
       .then(loaded => {
         if (stopped) return;
         const current = latestLive.current;
@@ -51,7 +69,11 @@ export function useStateTimeline(
       .catch(() => {
         if (!stopped) setStatus('failed');
       });
-    return () => { stopped = true; };
+    return () => {
+      stopped = true;
+      // A request that never ends must not hold up a later chart
+      if (loading.get(key) === request) loading.delete(key);
+    };
   }, [machineId, range, end]);
 
   // `live` is a new object on each render, so the effect runs only when its values change

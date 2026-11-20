@@ -132,4 +132,16 @@ describe('useStateTimeline', () => {
     await waitFor(() => expect(result.current.status).toBe('ready'));
     expect(result.current.segments.at(-1)?.end).toBe(chartNow);
   });
+
+  it('sends one request when two charts ask for the same timeline at the same time', async () => {
+    vi.mocked(fetchStateTimeline).mockResolvedValue([]);
+    const { result } = renderHook(() => [
+      useStateTimeline('m1', undefined, TEN_MINUTES),
+      useStateTimeline('m1', undefined, TEN_MINUTES),
+      useStateTimeline('m1', undefined, ONE_HOUR),
+    ]);
+
+    await waitFor(() => expect(result.current.every(timeline => timeline.status === 'ready')).toBe(true));
+    expect(fetchStateTimeline).toHaveBeenCalledTimes(2);
+  });
 });
