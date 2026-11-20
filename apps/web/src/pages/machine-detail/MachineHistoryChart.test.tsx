@@ -11,6 +11,8 @@ import MachineHistoryChart from './MachineHistoryChart';
 
 /** The width that the fake ResizeObserver gives each chart box */
 const BOX_WIDTH = 600;
+/** The plot starts this far from the left edge of the box (MARGIN.left in the chart) */
+const PLOT_LEFT_MARGIN = 52;
 /** The plot ends this far from the right edge of the box (MARGIN.right in the chart) */
 const PLOT_RIGHT_MARGIN = 16;
 const MINUTE = 60_000;
@@ -331,6 +333,21 @@ describe('MachineHistoryChart', () => {
       fireEvent.pointerMove(chartBody(), { clientX: 0, pointerId: 1 });
 
       expect(screen.getByRole('img', { name: name => name.startsWith(`Machine state ${pastText(10 * MINUTE, NOW)}.`) })).toBeInTheDocument();
+    });
+
+    it('moves the live chart from the time that it draws, also when the clock of the machine is ahead', async () => {
+      // The page clock is 12:00:50. The last value came at 12:01:10 by the clock of Chatter, so the chart ends then.
+      vi.setSystemTime(NOW + 50_000);
+      const machine = testMachine({ connected: true, lastPollTime: new Date(NOW + 70_000).toISOString() }, { spindleSpeed: 1200 });
+      vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: NOW, value: 1000 }], window: '5s' });
+      render(<ChartWithMenu machine={machine} />);
+      await screen.findByRole('img', { name: /^Spindle speed in the last 10 minutes/ });
+
+      // Half the plot: 5 minutes back from 12:01:10
+      const plotWidth = BOX_WIDTH - PLOT_LEFT_MARGIN - PLOT_RIGHT_MARGIN;
+      drag(chartBody(), 100, 100 + plotWidth / 2);
+
+      expect(await screen.findByText(`How fast the spindle turned ${pastText(10 * MINUTE, NOW + 70_000 - 5 * MINUTE)}.`)).toBeInTheDocument();
     });
 
     it('shows a closed hand while the user holds the chart', async () => {

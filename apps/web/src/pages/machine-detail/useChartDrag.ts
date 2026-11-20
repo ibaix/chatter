@@ -29,6 +29,11 @@ export function useChartDrag({ rangeMs, end, margins, onMove }: ChartDragOptions
   /** How far a drag moves the time, in milliseconds: negative goes back */
   const [shiftMs, setShiftMs] = useState(0);
   const wheelDelta = useRef(0);
+  /**
+   * The end of the live chart as the chart draws it. The chart sets it. Its clock can be ahead of the page clock
+   * (the time of the newest value comes from Chatter), so a drag ends where the chart drew it.
+   */
+  const drawnNow = useRef<number | null>(null);
 
   /** The time that a drag of `x` pixels moves. A drag to the right goes back. A drag cannot go after now. */
   const dragMs = (x: number, plotWidth: number) => Math.min((-x / plotWidth) * rangeMs, end === null ? 0 : Date.now() - end);
@@ -49,7 +54,9 @@ export function useChartDrag({ rangeMs, end, margins, onMove }: ChartDragOptions
     // A small move is a click, for example to see a hover box
     if (Math.abs(event.clientX - start.x) < MIN_DRAG_PX) return;
     const moved = dragMs(event.clientX - start.x, start.plotWidth);
-    if (moved !== 0) onMove(moved);
+    if (moved === 0) return;
+    // onMove moves a live chart from the page clock, so add the time between the page clock and the drawn end
+    onMove(end === null && drawnNow.current !== null ? moved + drawnNow.current - Date.now() : moved);
   };
 
   /**
@@ -75,6 +82,7 @@ export function useChartDrag({ rangeMs, end, margins, onMove }: ChartDragOptions
   return {
     bodyRef,
     shiftMs,
+    drawnNow,
     dragging: dragStart !== null,
     handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp },
   };
