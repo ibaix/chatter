@@ -11,7 +11,7 @@ export function alertTone(alert: MachineAlert): StatusTone {
   return alert.labels.severity === 'critical' ? 'bad' : 'check';
 }
 
-/** The alerts that fire now come first. Each group stays newest first. */
-export function firingFirst(alerts: MachineAlert[]): MachineAlert[] {
-  return [...alerts.filter(alert => alert.firing), ...alerts.filter(alert => !alert.firing)];
+/** The alerts that fire now, and the alerts that ended. Each group stays newest first. */
+export function splitFiring(alerts: MachineAlert[]): { firing: MachineAlert[]; past: MachineAlert[] } {
+  return { firing: alerts.filter(alert => alert.firing), past: alerts.filter(alert => !alert.firing) };
 }

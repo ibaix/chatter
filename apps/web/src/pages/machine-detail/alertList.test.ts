@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MachineAlert } from '../../api/alerts';
-import { alertText, alertTone, firingFirst } from './alertList';
+import { alertText, alertTone, splitFiring } from './alertList';
 
 function alert(values: Partial<MachineAlert> = {}): MachineAlert {
   return {
@@ -31,8 +31,8 @@ describe('alertTone', () => {
   });
 });
 
-describe('firingFirst', () => {
-  it('puts the firing alerts first, and keeps the order in each group', () => {
+describe('splitFiring', () => {
+  it('splits the firing alerts from the past alerts, and keeps the order in each group', () => {
     const alerts = [
       alert({ name: 'Ended new', firing: false }),
       alert({ name: 'Firing new' }),
@@ -40,6 +40,9 @@ describe('firingFirst', () => {
       alert({ name: 'Firing old' }),
     ];
 
-    expect(firingFirst(alerts).map(found => found.name)).toEqual(['Firing new', 'Firing old', 'Ended new', 'Ended old']);
+    const { firing, past } = splitFiring(alerts);
+
+    expect(firing.map(found => found.name)).toEqual(['Firing new', 'Firing old']);
+    expect(past.map(found => found.name)).toEqual(['Ended new', 'Ended old']);
   });
 });
