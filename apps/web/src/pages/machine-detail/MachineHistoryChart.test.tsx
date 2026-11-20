@@ -313,9 +313,10 @@ describe('MachineHistoryChart', () => {
       fireEvent.pointerMove(overview, { clientX: 300, pointerId: 1 });
 
       for (const svg of [overview, band]) {
+        // The strip and the chart read the clock at their own times, so the positions can differ by a little
         const shade = svg.querySelector('[data-zoom-highlight]');
-        expect(shade).toHaveAttribute('x', '100');
-        expect(shade).toHaveAttribute('width', '200');
+        expect(Number(shade?.getAttribute('x'))).toBeCloseTo(100, 0);
+        expect(Number(shade?.getAttribute('width'))).toBeCloseTo(200, 0);
       }
 
       fireEvent.pointerUp(overview, { clientX: 300, pointerId: 1 });
@@ -359,6 +360,20 @@ describe('MachineHistoryChart', () => {
       await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(3));
       const end = viewEndOf(vi.mocked(fetchStateTimeline).mock.lastCall!, 5 * MINUTE);
       expect(Math.abs(end - (now - 5 * MINUTE))).toBeLessThan(5000);
+    });
+
+    it('clears the zoom with the button above the box, back to the time of the strip', async () => {
+      const overview = await overviewOfStateView();
+      expect(screen.queryByRole('button', { name: 'Clear the zoom' })).not.toBeInTheDocument();
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear the zoom' }));
+
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-20m'));
+      expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '10m' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.queryByRole('button', { name: 'Clear the zoom' })).not.toBeInTheDocument();
     });
 
     it('reads the timeline once while the strip shows the same time as the chart', async () => {

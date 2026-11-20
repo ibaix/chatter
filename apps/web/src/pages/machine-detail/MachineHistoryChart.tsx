@@ -100,7 +100,9 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
     end: pannedEnd(shownEnd, deltaMs / shownRange.ms, shownRange.ms, Date.now()),
   }));
   const pan = (step: number) => moveBy(step * range.ms);
-  /** Shows the time that the user highlighted. The range buttons show the wider times again. */
+  /** Shows the full time of the overview strip again, at the place in time where the strip is */
+  const clearZoom = () => setView(current => ({ ...current, range: current.overview, end: current.overviewEnd }));
+  /** Shows the time that the user highlighted. The range buttons and the clear button show the wider times again. */
   const zoomTo = (from: number, to: number) => show(() => zoomView(from, to, Date.now()));
 
   /** A sideways scroll (trackpad, or Shift and the mouse wheel) moves the time. An up or down scroll stays with the page. */
@@ -199,6 +201,7 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
         right={isStateChart ? 0 : MARGIN.right}
         onMove={moveBy}
         onZoom={zoomTo}
+        onClearZoom={range === view.overview ? undefined : clearZoom}
       />
     </section>
   );

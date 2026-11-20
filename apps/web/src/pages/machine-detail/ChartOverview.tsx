@@ -1,4 +1,5 @@
 import { useState, type PointerEvent } from 'react';
+import { CloseIcon } from '../../components/ui/icons';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import type { Machine } from '../../types';
 import { MIN_DRAG_PX, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
@@ -11,6 +12,9 @@ const BAND_HEIGHT = 16;
 /** The space between the band and the time labels */
 const TIME_LABEL_GAP = 15;
 const SVG_HEIGHT = BAND_HEIGHT + TIME_LABEL_GAP + 3;
+/** The row above the band for the button that clears the zoom. It is always there, so the chart does not jump. */
+const CLEAR_ROW_HEIGHT = 18;
+const CLEAR_BUTTON_SIZE = 16;
 
 interface ChartOverviewProps {
   machine: Machine;
@@ -31,11 +35,14 @@ interface ChartOverviewProps {
   onMove: (deltaMs: number) => void;
   /** Shows the time from `from` to `to` in the chart */
   onZoom: (from: number, to: number) => void;
+  /** Shows the full time of the strip again. Undefined while the chart is not zoomed in. */
+  onClearZoom?: () => void;
 }
 
 /**
  * A thin machine state band of the full range under the chart, with a box on the time that the chart shows.
  * Drag on the band to highlight a time and zoom in to it. Click the band to move the chart there.
+ * While the chart is zoomed in, a button above the box clears the zoom.
  */
 export function ChartOverview({ machine, overview, overviewEnd, ...plotProps }: ChartOverviewProps) {
   const { segments, now } = useStateTimeline(machine.id, liveStateOf(machine), overview, undefined, overviewEnd);
@@ -57,7 +64,7 @@ interface OverviewPlotProps extends Omit<ChartOverviewProps, 'machine' | 'overvi
 }
 
 function OverviewPlot(props: OverviewPlotProps) {
-  const { segments, overview, live, now, width, view, viewEnd, selection, onSelect, left, right, onMove, onZoom } = props;
+  const { segments, overview, live, now, width, view, viewEnd, selection, onSelect, left, right, onMove, onZoom, onClearZoom } = props;
   /** Where the pointer went down, or null when the user does not drag */
   const [startX, setStartX] = useState<number | null>(null);
   const bandRight = width - right;
@@ -106,37 +113,54 @@ function OverviewPlot(props: OverviewPlotProps) {
     onSelect(null);
   };
 
+  // The button is over the middle of the box, and stays inside the strip
+  const clearLeft = Math.min(Math.max((boxLeft + boxRight - CLEAR_BUTTON_SIZE) / 2, 0), width - CLEAR_BUTTON_SIZE);
+
   return (
-    <svg
-      width={width}
-      height={SVG_HEIGHT}
-      role="img"
-      aria-label={`Overview ${live ? `of the last ${overview.words}` : viewText(overview, now)}. The box shows the time in the chart. Drag on the overview to zoom in. Click it to move the chart there.`}
-      onPointerDown={startDrag}
-      onPointerMove={followDrag}
-      onPointerUp={endDrag}
-      onPointerCancel={cancelDrag}
-      className="block cursor-crosshair touch-none"
-    >
-      <rect x={left} width={bandRight - left} height={BAND_HEIGHT} rx={3} className="fill-zinc-800" />
-      <StateBand segments={segments} startTime={startTime} rangeMs={overview.ms} left={left} width={bandRight - left} y={0} height={BAND_HEIGHT} />
-      {/* The time outside the box is dim, so the time in the chart stands out */}
-      <rect x={left} width={Math.max(0, boxLeft - left)} height={BAND_HEIGHT} className="fill-zinc-950/65" />
-      <rect x={boxRight} width={Math.max(0, bandRight - boxRight)} height={BAND_HEIGHT} className="fill-zinc-950/65" />
-      {boxRight > boxLeft && (
-        <rect
-          x={boxLeft}
-          y={0.75}
-          width={boxRight - boxLeft}
-          height={BAND_HEIGHT - 1.5}
-          rx={2}
-          fill="none"
-          strokeWidth={1.5}
-          className="pointer-events-none stroke-zinc-50"
-        />
+    <div className="relative" style={{ paddingTop: CLEAR_ROW_HEIGHT }}>
+      {onClearZoom && (
+        <button
+          type="button"
+          aria-label="Clear the zoom"
+          title="Clear the zoom"
+          onClick={onClearZoom}
+          className="absolute top-0 inline-flex items-center justify-center rounded-full border-0 bg-zinc-700 p-0 text-zinc-50 hover:bg-zinc-500"
+          style={{ left: clearLeft, width: CLEAR_BUTTON_SIZE, height: CLEAR_BUTTON_SIZE }}
+        >
+          <CloseIcon size={10} />
+        </button>
       )}
-      <ZoomHighlight selection={selection} x={x} left={left} right={bandRight} height={BAND_HEIGHT} />
-      <TimeLabels labels={timeLabels(overview.ms, now, live)} x={x} y={BAND_HEIGHT + TIME_LABEL_GAP} />
-    </svg>
+      <svg
+        width={width}
+        height={SVG_HEIGHT}
+        role="img"
+        aria-label={`Overview ${live ? `of the last ${overview.words}` : viewText(overview, now)}. The box shows the time in the chart. Drag on the overview to zoom in. Click it to move the chart there.`}
+        onPointerDown={startDrag}
+        onPointerMove={followDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={cancelDrag}
+        className="block cursor-crosshair touch-none"
+      >
+        <rect x={left} width={bandRight - left} height={BAND_HEIGHT} rx={3} className="fill-zinc-800" />
+        <StateBand segments={segments} startTime={startTime} rangeMs={overview.ms} left={left} width={bandRight - left} y={0} height={BAND_HEIGHT} />
+        {/* The time outside the box is dim, so the time in the chart stands out */}
+        <rect x={left} width={Math.max(0, boxLeft - left)} height={BAND_HEIGHT} className="fill-zinc-950/65" />
+        <rect x={boxRight} width={Math.max(0, bandRight - boxRight)} height={BAND_HEIGHT} className="fill-zinc-950/65" />
+        {boxRight > boxLeft && (
+          <rect
+            x={boxLeft}
+            y={0.75}
+            width={boxRight - boxLeft}
+            height={BAND_HEIGHT - 1.5}
+            rx={2}
+            fill="none"
+            strokeWidth={1.5}
+            className="pointer-events-none stroke-zinc-50"
+          />
+        )}
+        <ZoomHighlight selection={selection} x={x} left={left} right={bandRight} height={BAND_HEIGHT} />
+        <TimeLabels labels={timeLabels(overview.ms, now, live)} x={x} y={BAND_HEIGHT + TIME_LABEL_GAP} />
+      </svg>
+    </div>
   );
 }
