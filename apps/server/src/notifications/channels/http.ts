@@ -8,11 +8,11 @@ export interface JsonPost {
   /** content-type is always application/json */
   headers?: Record<string, string>;
   body: unknown;
-  /** Read the answer as JSON, for a service that tells the problem in the body. Otherwise Chatter does not read the answer. */
+  /** Read an error answer (not 2xx) as JSON, for a service that tells the problem in the body. Otherwise Chatter does not read the answer. */
   readJson?: boolean;
 }
 
-/** The answer of the service. `json` is undefined when readJson is not set, or when the answer is not JSON. */
+/** The answer of the service. `json` is undefined for a 2xx answer, when readJson is not set, or when the answer is not JSON or is too large. */
 export interface Answer {
   status: number;
   json: unknown;
@@ -39,18 +39,48 @@ export async function postJson(
   } catch (error) {
     return networkFailure(error, target);
   }
-  if (request.readJson) return resultOf({ status: response.status, json: await jsonOf(response) });
+  const sent = response.status >= 200 && response.status < 300;
+  if (request.readJson && !sent) return resultOf({ status: response.status, json: await jsonOf(response) });
   // Chatter does not read the answer. A failure to close it must not send the message again.
   response.body?.cancel().catch(() => {});
   return resultOf({ status: response.status, json: undefined });
 }
 
+/** An error answer is short. A Pi can have 512 MB of RAM, so Chatter reads no more of an answer than this. */
+const MAX_ERROR_BYTES = 64 * 1024;
+
+/** The JSON of the answer, or undefined when it is not JSON, is too large, or stops before its end */
 async function jsonOf(response: Response): Promise<unknown> {
+  const text = await textUpTo(response, MAX_ERROR_BYTES);
+  if (text === undefined) return undefined;
   try {
-    return await response.json();
+    return JSON.parse(text);
   } catch {
     return undefined;
   }
+}
+
+async function textUpTo(response: Response, maxBytes: number): Promise<string | undefined> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        reader.cancel().catch(() => {});
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    // The time limit ended, or the connection closed
+    return undefined;
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 export interface StatusTexts {

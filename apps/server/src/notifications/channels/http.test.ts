@@ -72,6 +72,49 @@ describe('postJson', () => {
     expect(answers).toEqual([{ status: 502, json: undefined }]);
   });
 
+  it('does not read a 2xx answer, also when readJson is set, and closes it', async () => {
+    const answers: Answer[] = [];
+    const response = new Response('{"ok":true}', { status: 200 });
+    let closed = false;
+    response.body!.cancel = async () => { closed = true; };
+
+    await postJson(fakeFetch(() => response).context(), 'the service', { url: 'https://example.com', body: {}, readJson: true }, answer => {
+      answers.push(answer);
+      return sentOk();
+    });
+
+    expect(answers).toEqual([{ status: 200, json: undefined }]);
+    expect(closed).toBe(true);
+  });
+
+  it('reads at most 64 KB of an error answer, so a large answer cannot fill the memory of a Pi', async () => {
+    const answers: Answer[] = [];
+    const chunk = new TextEncoder().encode('x'.repeat(16 * 1024));
+    let readBytes = 0;
+    let closed = false;
+    // Valid JSON of 1 MB: {"error":"xxx…"}
+    const parts = [new TextEncoder().encode('{"error":"'), ...Array.from({ length: 64 }, () => chunk), new TextEncoder().encode('"}')];
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const part = parts.shift();
+        if (!part) return controller.close();
+        readBytes += part.byteLength;
+        controller.enqueue(part);
+      },
+      cancel() { closed = true; },
+    }, { highWaterMark: 0 });
+
+    await postJson(fakeFetch(() => new Response(body, { status: 400 })).context(), 'the service', { url: 'https://example.com', body: {}, readJson: true }, answer => {
+      answers.push(answer);
+      return sentOk();
+    });
+
+    expect(answers.map(answer => answer.status)).toEqual([400]);
+    expect(answers[0].json === undefined).toBe(true);
+    expect(readBytes).toBeLessThanOrEqual(64 * 1024 + chunk.byteLength);
+    expect(closed).toBe(true);
+  });
+
   it('gives the result, also when Chatter cannot close the answer', async () => {
     const response = new Response('ok', { status: 200 });
     response.body!.cancel = () => Promise.reject(new Error('the time limit ended'));
