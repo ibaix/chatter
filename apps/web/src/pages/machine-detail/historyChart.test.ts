@@ -1,3 +1,4 @@
+import { autoHistoryWindow } from '@local-chatter/shared';
 import { describe, expect, it } from 'vitest';
 import {
   axisTicks,
@@ -289,5 +290,20 @@ describe('loadSpan', () => {
     expect(loadSpan(SEVEN_DAYS, NOW - 30 * DAY, NOW).query).toBe('-21d');
     const zoom = zoomView(NOW - 30 * DAY, NOW - 30 * DAY + 4 * DAY + 1000, NOW).range;
     expect(loadSpan(zoom, NOW - 20 * DAY, NOW).query).toMatch(/^-\d{1,6}m$/);
+  });
+
+  it('gives a span that the server takes for each range button and for the biggest zoom', () => {
+    // The limits of the server: 6 digits, 31 days of state timeline, and 5000 points of history (one more for the first window)
+    const biggestZoom = zoomView(NOW - SEVEN_DAYS.ms, NOW - 1000, NOW + DAY).range;
+    for (const range of [...CHART_RANGES, biggestZoom]) {
+      const windowMs = durationMs(range.window ?? autoHistoryWindow(range.ms));
+      // Live, in the past, and in the past near now (a span that ends now, with no whole unit)
+      for (const end of [null, NOW - 100 * range.ms, NOW - range.ms / 2 - 1234]) {
+        const { query } = loadSpan(range, end, NOW);
+        expect(query, `${range.id} ending ${end}`).toMatch(/^-[1-9]\d{0,5}(s|m|h|d|w)$/);
+        expect(durationMs(query)).toBeLessThanOrEqual(31 * DAY);
+        expect(durationMs(query) / windowMs + 1).toBeLessThanOrEqual(5000);
+      }
+    }
   });
 });
