@@ -41,6 +41,16 @@ const SPINDLE_LOAD: ChartValue = {
   format: value => `${formatChartNumber(value)}%`,
 };
 
+const FEEDRATE: ChartValue = {
+  id: 'feedrate',
+  name: 'Feedrate',
+  // No unit: the control sends mm/min or in/min, and it does not tell which
+  description: 'How fast the axes moved',
+  smallestAxisTop: 100,
+  liveValueOf: machine => numberOf(machine.data.feedrate),
+  format: value => formatChartNumber(value),
+};
+
 const PART_COUNT: ChartValue = {
   id: 'part-count',
   name: 'Part count',
@@ -50,9 +60,34 @@ const PART_COUNT: ChartValue = {
   format: value => `${formatChartNumber(value)} parts`,
 };
 
-/** The value the user chose, or the spindle speed when the machine does not send the chosen value now */
-export function shownChartValue(values: ChartValue[], chosenId: HistoryValue): ChartValue {
-  return values.find(value => value.id === chosenId) ?? SPINDLE_SPEED;
+const TOOL_NUMBER: ChartValue = {
+  id: 'tool-number',
+  name: 'Tool number',
+  description: 'The tool in the spindle',
+  smallestAxisTop: 20,
+  liveValueOf: machine => numberOf(machine.data.toolNumber),
+  format: value => `T${Math.round(value)}`,
+};
+
+/** The machine state over time (running, idle, alarm, offline), as a colored band and not as a line */
+export const MACHINE_STATE = {
+  id: 'machine-state',
+  name: 'Machine state',
+  description: 'What the machine did',
+} as const;
+
+/** One choice in the chart menu: a machine value, or the machine state */
+export type ChartChoice = ChartValue | typeof MACHINE_STATE;
+export type ChartChoiceId = ChartChoice['id'];
+
+/** The choice the user made, or the spindle speed when the machine does not send the chosen value now */
+export function shownChartChoice(choices: ChartChoice[], chosenId: ChartChoiceId): ChartChoice {
+  return choices.find(choice => choice.id === chosenId) ?? SPINDLE_SPEED;
+}
+
+/** The chart menu: the machine state first, then the values that the machine sends */
+export function chartChoicesFor(machine: Machine): ChartChoice[] {
+  return [MACHINE_STATE, ...chartValuesFor(machine)];
 }
 
 /**
@@ -60,6 +95,6 @@ export function shownChartValue(values: ChartValue[], chosenId: HistoryValue): C
  * The others show only for a machine that sends them, so the dropdown has no empty charts.
  */
 export function chartValuesFor(machine: Machine): ChartValue[] {
-  const others = [SPINDLE_LOAD, PART_COUNT].filter(value => value.liveValueOf(machine) !== undefined);
+  const others = [SPINDLE_LOAD, FEEDRATE, PART_COUNT, TOOL_NUMBER].filter(value => value.liveValueOf(machine) !== undefined);
   return [SPINDLE_SPEED, ...others];
 }

@@ -3,8 +3,8 @@ import { STATE_LABELS, type MachineState } from '../machines/machineStatus';
 import { AlarmIcon, ConnectingIcon, OfflineIcon } from './ui/icons';
 import { rem } from './ui/units';
 
-/** The fill color of each state, for the dot and the progress bar */
-const STATE_FILL_COLORS: Record<MachineState, string> = {
+/** The fill color of each state, for the dot, the progress bar and the chart legend */
+export const STATE_FILL_COLORS: Record<MachineState, string> = {
   running: 'bg-running',
   idle: 'bg-idle',
   alarm: 'bg-alarm',

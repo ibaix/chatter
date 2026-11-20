@@ -7,10 +7,10 @@ An unknown machine id gets `404`.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/machine/:id/history/:value` | One machine value over time, as one average for each window |
+| GET | `/api/machine/:id/history/:value` | One machine value over time, as one value for each window |
 
 `:value` is one of these:
-- Numbers: `spindle-speed`, `spindle-load`, `feedrate`, `part-count`, `part-goal`, `tool-number`
+- Numbers: `spindle-speed`, `spindle-load`, `feedrate`, `part-count`, `part-goal`, `tool-number`. Each window gives the average, but `part-count`, `part-goal` and `tool-number` give the last value in the window. An average such as T7.4 is not a value that the machine sent.
 - `spindle-load` is in percent of the spindle motor's rating. A Haas needs its query port (Setting 143) and a vector drive (macro #1098). A FANUC needs a FANUC digital (serial) spindle. An MTConnect agent needs a LOAD item on the spindle. A Brother does not send it. The Haas, FANUC and MTConnect spindle loads are not tested on real machines yet.
 - States: `connected`, `running`, `alarm`, `emergency`. A state is 1 (on) or 0 (off), so its average is the part of the window that it was on. For example, `running` 0.75 means that a program ran for 75% of the window. All four machine types tell if a program runs: Haas needs its query port (Setting 143), and Brother needs a C00 or D00 control. The Haas, Brother and FANUC run states are not tested on real machines yet.
 
@@ -34,6 +34,22 @@ Query parameters:
 
 The reply is `{ machineId, range, data: [{ kind, value, start, end }], more }`, newest first. One reply has at most 1000 periods; `more` is true when older ones were left out.
 The periods are kept in `chatter.db` for 1 year. When the machine stops answering, its periods end.
+
+## State timeline
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/machine/:id/state-timeline` | What the machine did over a range: running, idle, alarm, or offline |
+
+Query parameter `range`: how far back, for example `-1h` or `-7d` (default `-24h`). It can go back at most 31 days.
+
+The reply is `{ machineId, range, from, to, data: [{ state, start, end, detail, program }], more }`, oldest first. The segments cover the full time from `from` to `to`, with no gaps. Chatter makes them from the periods, with the same rule as the dashboard:
+- `alarm`: an alarm is on. An alarm shows over running. `detail` is the alarm code and text.
+- `running`: a program runs.
+- `idle`: the machine answers, but no program runs. A machine that does not tell if a program runs (for example a Haas with no query port) shows `idle`.
+- `offline`: the machine did not answer, or Chatter did not run. A machine that answers but sends no program, mode, tool, alarm, or run state also shows `offline`, because Chatter saves no period for it. The dashboard shows that machine as Idle.
+
+A segment has `detail` only for an alarm. `program` is the program that was open, when the machine sent one. A new program starts a new segment, also when the state stays the same. When a range has more than 50,000 periods, `from` moves to the oldest period that Chatter read, and `more` is true.
 
 ## Report
 

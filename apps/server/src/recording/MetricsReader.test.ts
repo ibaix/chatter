@@ -76,6 +76,12 @@ describe('MetricsReader', () => {
     expect(fake.lastQuery?.get('query')).toBe('avg(avg_over_time(chatter_spindle_speed:avg1m{machine="m1"}[60000ms]))');
   });
 
+  it('asks for the last raw value of each window when the query wants the last value', async () => {
+    await reader.windowAverages({ ...query(FROM + 600_000), windowMs: 60_000, windowValue: 'last' });
+
+    expect(fake.lastQuery?.get('query')).toBe('max(last_over_time(chatter_spindle_speed{machine="m1"}[60000ms]))');
+  });
+
   it('reads the points for a window that is not a whole number of minutes', async () => {
     await reader.windowAverages({ ...query(FROM + 600_000), windowMs: 90_000 });
 

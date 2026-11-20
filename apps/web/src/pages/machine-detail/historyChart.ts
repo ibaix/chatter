@@ -1,5 +1,10 @@
 import type { HistoryPoint } from '../../api/history';
 
+export type HistoryStatus = 'loading' | 'ready' | 'failed';
+
+/** The charts move on this often, also when no new value comes */
+export const CHART_CLOCK_TICK_MS = 5000;
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -92,6 +97,17 @@ export function lineParts(points: HistoryPoint[], now: number, connected: boolea
 }
 
 /**
+ * The points of a step line: each value holds until the next point, then the line goes straight up or down.
+ * For a counter or a tool number, because a slope between T3 and T4 is not a value that the machine had.
+ */
+export function stepPoints(points: HistoryPoint[]): HistoryPoint[] {
+  return points.flatMap((point, index) => {
+    const previous = points[index - 1];
+    return previous && previous.value !== point.value ? [{ time: point.time, value: previous.value }, point] : [point];
+  });
+}
+
+/**
  * Round numbers for the value axis, from 0 to just above the biggest value.
  * The axis goes at least to `smallestTop`. A `smallestTop` of 20 or more keeps the steps whole numbers.
  */
@@ -139,4 +155,19 @@ export function timeLabels(rangeMs: number, now: number): TimeLabel[] {
     const time = now - (rangeMs * quarter) / 4;
     return { time, text: quarter === 0 ? 'Now' : format(time) };
   });
+}
+
+/** The text in place of the chart while the history loads, when it fails, or when it is empty */
+export function messageFor(status: HistoryStatus, valueName: string, range: ChartRange): string {
+  const name = valueName.toLowerCase();
+  if (status === 'loading') return `Loading the ${name} history…`;
+  if (status === 'failed') return `Could not load the ${name} history. Reload the page to try again.`;
+  return `No ${name} in the last ${range.words}. Chatter saves it while the machine is connected.`;
+}
+
+/** The first time label starts at the left edge and the last one ends at the right edge, so both stay inside the chart */
+export function timeLabelAnchor(index: number, labelCount: number): 'start' | 'middle' | 'end' {
+  if (index === 0) return 'start';
+  if (index === labelCount - 1) return 'end';
+  return 'middle';
 }

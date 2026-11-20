@@ -1,23 +1,35 @@
+import { historyWindowValue } from '@local-chatter/shared';
 import { cn } from '@toolpath/ui';
-import { useEffect, useRef, useState, type PointerEvent } from 'react';
+import { useState, type PointerEvent } from 'react';
 import type { HistoryPoint } from '../../api/history';
 import { CHOICE_HEIGHT, ChoiceMenu } from '../../components/ui/ChoiceMenu';
 import { RangeButtons } from '../../components/ui/RangeButtons';
+import { useBoxSize } from '../../hooks/useBoxSize';
+import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
-import type { ChartValue } from './chartValues';
+import { AXIS_LABEL_CLASS, ChartTooltip, TimeLabels } from './ChartParts';
+import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
   axisTicks,
   CHART_RANGES,
   formatChartNumber,
   lineParts,
+  messageFor,
   nearestPoint,
+  stepPoints,
   timeLabels,
   type ChartRange,
-  type TimeLabel,
 } from './historyChart';
-import { useChartHistory, type HistoryStatus } from './useChartHistory';
+import { StateBand, StateLegend, StateSwatch } from './StateBand';
+import { StateChart } from './StateChart';
+import { liveStateOf, segmentAt, type StateSegment } from './stateTimeline';
+import { useChartHistory } from './useChartHistory';
+import { useStateTimeline } from './useStateTimeline';
 
-const MARGIN = { top: 12, right: 16, bottom: 26, left: 52 };
+const MARGIN = { top: 12, right: 16, bottom: 38, left: 52 };
+/** The machine state strip under the plot, above the time labels */
+const STRIP_GAP = 5;
+const STRIP_HEIGHT = 6;
 /** The space between a value label and the left end of its grid line */
 const VALUE_LABEL_GAP = 8;
 /** The distance from the bottom of the chart to the time labels */
@@ -25,22 +37,7 @@ const TIME_LABEL_BOTTOM = 6;
 /** The space between the hover line and the tooltip */
 const TOOLTIP_GAP = 12;
 /** About the width of the tooltip, so a tooltip near the right edge stays inside the chart */
-const TOOLTIP_WIDTH = 150;
-const AXIS_LABEL_CLASS = 'fill-zinc-300 font-mono text-[0.6875rem]';
-/** The size of an element, kept current when the page changes size */
-function useBoxSize<T extends HTMLElement>() {
-  const ref = useRef<T>(null);
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    const element = ref.current;
-    if (!element || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return { ref, ...size };
-}
-
+const TOOLTIP_WIDTH = 190;
 /**
  * The newest value from the live machine events, or null when the machine is not connected.
  * A connecting machine has old values (also while the page cannot reach Chatter), so it gives none.
@@ -53,40 +50,58 @@ function livePointOf(machine: Machine, value: ChartValue): HistoryPoint | null {
 
 interface MachineHistoryChartProps {
   machine: Machine;
-  /** The values that the menu offers */
-  values: ChartValue[];
-  /** The value that the chart shows */
-  value: ChartValue;
-  onChoose: (id: ChartValue['id']) => void;
+  /** The choices that the menu offers */
+  choices: ChartChoice[];
+  /** The choice that the chart shows */
+  choice: ChartChoice;
+  onChoose: (id: ChartChoiceId) => void;
   className?: string;
 }
 
-/** One machine value over time, with a menu for the value and buttons for the time range */
-function MachineHistoryChart({ machine, values, value, onChoose, className }: MachineHistoryChartProps) {
+/** One machine value, or the machine state, over time, with a menu for the value and buttons for the time range */
+function MachineHistoryChart({ machine, choices, choice, onChoose, className }: MachineHistoryChartProps) {
   const [range, setRange] = useState<ChartRange>(CHART_RANGES[0]);
-  const livePoint = livePointOf(machine, value);
-  const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range);
-  const { ref, width, height } = useBoxSize<HTMLDivElement>();
 
   return (
     <section
-      aria-label={`${value.name} chart`}
+      aria-label={`${choice.name} chart`}
       className={cn('flex min-w-0 flex-col gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900 px-5 py-4', className)}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-col gap-0.5">
-          <ChartTitle values={values} value={value} onChoose={onChoose} />
-          <span className="text-xs text-zinc-300">{value.description} in the last {range.words}.</span>
+          <ChartTitle choices={choices} choice={choice} onChoose={onChoose} />
+          <span className="text-xs text-zinc-300">{choice.description} in the last {range.words}.</span>
         </div>
         <RangeButtons options={CHART_RANGES} value={range} onChange={setRange} />
       </div>
+      {choice.id === MACHINE_STATE.id ? (
+        <StateChart machine={machine} range={range} />
+      ) : (
+        <ValueChart machine={machine} value={choice} range={range} />
+      )}
+    </section>
+  );
+}
+
+/** A machine value as a line, with the machine state as a thin strip under it */
+function ValueChart({ machine, value, range }: { machine: Machine; value: ChartValue; range: ChartRange }) {
+  const livePoint = livePointOf(machine, value);
+  const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range);
+  // The chart's clock, so the strip ends where the line ends
+  const { segments: stripSegments, status: stateStatus } = useStateTimeline(machine.id, liveStateOf(machine), range, now);
+  const { ref, width, height } = useBoxSize<HTMLDivElement>();
+  // A failed load shows its message, also when live values came, so the user knows that history is missing
+  const showPlot = status !== 'failed' && points.length > 0 && width > 0;
+
+  return (
+    <>
       {/* The box sets the chart height in rem, so the chart follows the page scale */}
       <div ref={ref} className="relative h-[13.75rem]">
-        {/* A failed load shows its message, also when live values came, so the user knows that history is missing */}
-        {status !== 'failed' && points.length > 0 && width > 0 ? (
+        {showPlot ? (
           <ChartPlot
             points={points}
             value={value}
+            stateSegments={stripSegments}
             now={now}
             range={range}
             gapMs={gapMs}
@@ -95,43 +110,52 @@ function MachineHistoryChart({ machine, values, value, onChoose, className }: Ma
             height={height}
           />
         ) : (
-          <p className="m-0 flex h-full items-center justify-center text-center text-zinc-300">{messageFor(status, value, range)}</p>
+          <p className="m-0 flex h-full items-center justify-center text-center text-zinc-300">{messageFor(status, value.name, range)}</p>
         )}
       </div>
-    </section>
+      {showPlot && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs" style={{ marginLeft: MARGIN.left }}>
+          {/* A failed load leaves only the live state in the strip, so the legend would tell too little */}
+          {stateStatus === 'failed' ? (
+            <span className="text-zinc-300">Could not load the machine state. Reload the page to try again.</span>
+          ) : (
+            <>
+              <span aria-hidden="true" className="text-zinc-400">Machine state:</span>
+              <StateLegend />
+            </>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
 interface ChartTitleProps {
-  values: ChartValue[];
-  value: ChartValue;
-  onChoose: (id: ChartValue['id']) => void;
+  choices: ChartChoice[];
+  choice: ChartChoice;
+  onChoose: (id: ChartChoiceId) => void;
 }
 
-/** The name of the value, as a dropdown when the machine sends more than one value. The unit is next to it. */
-function ChartTitle({ values, value, onChoose }: ChartTitleProps) {
+/** The name of the choice, as a dropdown. The unit is next to it. */
+function ChartTitle({ choices, choice, onChoose }: ChartTitleProps) {
+  const unit = 'unit' in choice ? choice.unit : undefined;
   return (
     <h2 className="m-0 flex items-center gap-1.5 text-base font-bold">
-      {values.length > 1 ? <ChoiceMenu label="Value in the chart" choices={values} value={value.id} onChoose={onChoose} /> : value.name}
-      {value.unit && (
+      <ChoiceMenu label="Value in the chart" choices={choices} value={choice.id} onChoose={onChoose} />
+      {unit && (
         <span className={cn(CHOICE_HEIGHT, 'inline-flex items-center rounded bg-zinc-800 px-1.5 font-mono text-[0.6875rem] font-medium text-zinc-200')}>
-          {value.unit}
+          {unit}
         </span>
       )}
     </h2>
   );
 }
 
-function messageFor(status: HistoryStatus, value: ChartValue, range: ChartRange): string {
-  const name = value.name.toLowerCase();
-  if (status === 'loading') return `Loading the ${name} history…`;
-  if (status === 'failed') return `Could not load the ${name} history. Reload the page to try again.`;
-  return `No ${name} in the last ${range.words}. Chatter saves it while the machine is connected.`;
-}
-
 interface ChartPlotProps {
   points: HistoryPoint[];
   value: ChartValue;
+  /** The machine state over the range, for the strip under the plot */
+  stateSegments: StateSegment[];
   now: number;
   range: ChartRange;
   gapMs: number;
@@ -140,11 +164,13 @@ interface ChartPlotProps {
   height: number;
 }
 
-function ChartPlot({ points, value, now, range, gapMs, connected, width, height }: ChartPlotProps) {
+function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected, width, height }: ChartPlotProps) {
   const [hovered, setHovered] = useState<HistoryPoint | undefined>();
   const ticks = axisTicks(highestValue(points), value.smallestAxisTop);
   const scale = chartScale({ width, height, startTime: now - range.ms, rangeMs: range.ms, topValue: ticks[ticks.length - 1] });
   const parts = lineParts(points, now, connected, gapMs);
+  // A counter or a tool number holds its value until it changes, so it draws as steps
+  const drawnParts = historyWindowValue(value.id) === 'last' ? parts.map(stepPoints) : parts;
   const newest = points[points.length - 1];
 
   const showNearest = (event: PointerEvent<SVGSVGElement>) => {
@@ -164,8 +190,8 @@ function ChartPlot({ points, value, now, range, gapMs, connected, width, height 
         className="block"
       >
         <ValueAxis ticks={ticks} scale={scale} width={width} />
-        <TimeAxis labels={timeLabels(range.ms, now)} scale={scale} height={height} />
-        {parts.map(part =>
+        <TimeLabels labels={timeLabels(range.ms, now)} x={scale.x} y={height - TIME_LABEL_BOTTOM} />
+        {drawnParts.map(part =>
           part.length === 1 ? (
             // A value with no neighbor in its part has no line, so it shows as a dot
             <circle key={part[0].time} cx={scale.x(part[0].time)} cy={scale.y(part[0].value)} r={2.5} className="fill-primary" />
@@ -173,10 +199,24 @@ function ChartPlot({ points, value, now, range, gapMs, connected, width, height 
             <path key={part[0].time} d={linePath(part, scale)} fill="none" strokeWidth={2} strokeLinejoin="round" className="stroke-primary" />
           ),
         )}
+        <StateBand
+          segments={stateSegments}
+          startTime={now - range.ms}
+          rangeMs={range.ms}
+          left={MARGIN.left}
+          width={width - MARGIN.left - MARGIN.right}
+          y={scale.y(0) + STRIP_GAP}
+          height={STRIP_HEIGHT}
+        />
         {hovered && <HoverMarker point={hovered} scale={scale} />}
       </svg>
       {hovered && (
-        <HoverTooltip point={hovered} value={value} left={Math.min(scale.x(hovered.time) + TOOLTIP_GAP, width - TOOLTIP_WIDTH)} />
+        <HoverTooltip
+          point={hovered}
+          value={value}
+          segment={segmentAt(stateSegments, hovered.time)}
+          left={Math.min(scale.x(hovered.time) + TOOLTIP_GAP, width - TOOLTIP_WIDTH)}
+        />
       )}
     </>
   );
@@ -247,31 +287,6 @@ function ValueAxis({ ticks, scale, width }: { ticks: number[]; scale: ChartScale
   );
 }
 
-/** The time labels under the plot. The first and the last label stay inside the chart. */
-function TimeAxis({ labels, scale, height }: { labels: TimeLabel[]; scale: ChartScale; height: number }) {
-  return (
-    <>
-      {labels.map(({ time, text }, index) => (
-        <text
-          key={index}
-          x={scale.x(time)}
-          y={height - TIME_LABEL_BOTTOM}
-          textAnchor={timeLabelAnchor(index, labels.length)}
-          className={AXIS_LABEL_CLASS}
-        >
-          {text}
-        </text>
-      ))}
-    </>
-  );
-}
-
-function timeLabelAnchor(index: number, labelCount: number): 'start' | 'middle' | 'end' {
-  if (index === 0) return 'start';
-  if (index === labelCount - 1) return 'end';
-  return 'middle';
-}
-
 /** A line down from the top of the plot, and a dot on the hovered point */
 function HoverMarker({ point, scale }: { point: HistoryPoint; scale: ChartScale }) {
   const pointX = scale.x(point.time);
@@ -283,16 +298,28 @@ function HoverMarker({ point, scale }: { point: HistoryPoint; scale: ChartScale 
   );
 }
 
-/** The value and the time of the hovered point, in a box over the chart */
-function HoverTooltip({ point, value, left }: { point: HistoryPoint; value: ChartValue; left: number }) {
+interface HoverTooltipProps {
+  point: HistoryPoint;
+  value: ChartValue;
+  /** The machine state and program at the time of the point, when they are known */
+  segment?: StateSegment;
+  left: number;
+}
+
+/** The value and the time of the hovered point, and the machine state and program then, in a box over the chart */
+function HoverTooltip({ point, value, segment, left }: HoverTooltipProps) {
   return (
-    <div
-      className="pointer-events-none absolute flex flex-col gap-0.5 rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs"
-      style={{ left, top: MARGIN.top }}
-    >
+    <ChartTooltip style={{ left, top: MARGIN.top }}>
       <strong className="font-mono">{value.format(point.value)}</strong>
       <span className="text-zinc-300">{new Date(point.time).toLocaleString()}</span>
-    </div>
+      {segment && (
+        <span className="flex items-center gap-1.5 text-zinc-300">
+          <StateSwatch state={segment.state} />
+          {STATE_LABELS[segment.state]}
+          {segment.program && <span className="font-mono text-zinc-50">{segment.program}</span>}
+        </span>
+      )}
+    </ChartTooltip>
   );
 }
 

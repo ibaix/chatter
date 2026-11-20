@@ -369,6 +369,65 @@ describe('API Routes', () => {
     });
   });
 
+  describe('GET /api/machine/:id/state-timeline', () => {
+    it('returns the machine state over the range, from the state periods', async () => {
+      vi.useFakeTimers({ now: Date.UTC(2026, 10, 19, 12, 0), toFake: ['Date'] });
+      try {
+        const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+        const now = Date.now();
+        statePeriods.open(machine.id, 'run-state', 'ACTIVE', now - 30 * 60_000);
+        statePeriods.open(machine.id, 'alarm', '1001 DOOR OPEN', now - 10 * 60_000);
+        statePeriods.close(machine.id, 'alarm', now - 5 * 60_000);
+
+        const res = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-1h`);
+
+        const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({
+          machineId: machine.id, range: '-1h', from: at(60), to: at(0), more: false,
+          data: [
+            { state: 'offline', start: at(60), end: at(30) },
+            { state: 'running', start: at(30), end: at(10) },
+            { state: 'alarm', start: at(10), end: at(5), detail: '1001 DOOR OPEN' },
+            { state: 'running', start: at(5), end: at(0) },
+          ],
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('shows the last 24 hours when no range is given', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      const res = await call('GET', `/api/machine/${machine.id}/state-timeline`);
+
+      expect(res.body.range).toBe('-24h');
+      expect(res.body.data.map((segment: { state: string }) => segment.state)).toEqual(['offline']);
+    });
+
+    it('returns 404 for an unknown machine, and 400 for a bad range', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      const badRange = await call('GET', `/api/machine/${machine.id}/state-timeline?range=yesterday`);
+      const noMachine = await call('GET', '/api/machine/nonexistent/state-timeline');
+
+      expect(badRange.status).toBe(400);
+      expect(noMachine.status).toBe(404);
+    });
+
+    it('returns 400 for a range longer than 31 days', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      const tooLong = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-32d`);
+      const longest = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-31d`);
+
+      expect(tooLong.status).toBe(400);
+      expect(tooLong.body.error).toBe('range can go back at most 31 days');
+      expect(longest.status).toBe(200);
+    });
+  });
+
   describe('GET /api/machine/:id/periods', () => {
     it('returns the state periods of the last day, newest first', async () => {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
@@ -549,6 +608,15 @@ describe('API Routes', () => {
 
       expect(res.status).toBe(200);
       expect(history.windowAverages.mock.calls[0][0].metric).toBe('chatter_part_count');
+    });
+
+    it('asks for the last value in each window of the tool number, and the average of the spindle speed', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      await call('GET', `/api/machine/${machine.id}/history/tool-number`);
+      await call('GET', `/api/machine/${machine.id}/history/spindle-speed`);
+
+      expect(history.windowAverages.mock.calls.map(([query]) => query.windowValue)).toEqual(['last', 'average']);
     });
 
     it('counts the extra window at the start in the most points of one reply', async () => {

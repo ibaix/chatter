@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { combinedRunState, isMachineRunning, type RunningValues } from './running.js';
+import { combinedRunState, isMachineRunning, isRunningStateText, type RunningValues } from './running.js';
 
 describe('isMachineRunning', () => {
   it.each([
@@ -53,5 +53,18 @@ describe('combinedRunState', () => {
   it('gives the state of a control with one path as it is', () => {
     expect(combinedRunState(['STOP'])).toBe('STOP');
     expect(combinedRunState([])).toBeUndefined();
+  });
+});
+
+describe('isRunningStateText', () => {
+  it.each([
+    ['START', true],
+    ['MSTR', true],
+    ['ACTIVE', true],
+    ['HOLD', false],
+    ['FEED_HOLD', false],
+    ['READY', false],
+  ])('counts the saved run state %s as running: %s', (text, running) => {
+    expect(isRunningStateText(text)).toBe(running);
   });
 });
