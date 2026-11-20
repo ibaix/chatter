@@ -24,7 +24,7 @@ type ChartViewAction =
   | { type: 'move'; deltaMs: number; now: number }
   | { type: 'now'; now: number }
   | { type: 'zoom'; from: number; to: number; now: number }
-  | { type: 'clearZoom' };
+  | { type: 'clearZoom'; now: number };
 
 /** The live view of a range button: the chart and the strip show the same time, up to now */
 function liveView(range: ChartRange): ChartView {
@@ -34,6 +34,11 @@ function liveView(range: ChartRange): ChartView {
 /** The view with another time in the chart. The overview strip moves with it only when the time goes out of the strip. */
 function show(view: ChartView, range: ChartRange, end: number | null, now: number): ChartView {
   return { ...view, range, end, overviewEnd: fittedOverviewEnd(view.overviewEnd, view.overview.ms, end, range.ms, now) };
+}
+
+/** The end of the strip at `now`. A live strip moves on with the time, so it can move past a view in the past. */
+function fittedStrip(view: ChartView, now: number): number | null {
+  return fittedOverviewEnd(view.overviewEnd, view.overview.ms, view.end, view.range.ms, now);
 }
 
 export function chartViewReducer(view: ChartView, action: ChartViewAction): ChartView {
@@ -48,9 +53,11 @@ export function chartViewReducer(view: ChartView, action: ChartViewAction): Char
       const zoomed = zoomView(action.from, action.to, action.now);
       return show(view, zoomed.range, zoomed.end, action.now);
     }
-    case 'clearZoom':
-      // The full time of the strip, at the place in time where the strip is
-      return { ...view, range: view.overview, end: view.overviewEnd };
+    case 'clearZoom': {
+      // The full time of the strip, at the place in time where the strip shows now
+      const overviewEnd = fittedStrip(view, action.now);
+      return { ...view, overviewEnd, range: view.overview, end: overviewEnd };
+    }
   }
 }
 
@@ -62,7 +69,8 @@ export function chartViewReducer(view: ChartView, action: ChartViewAction): Char
 export function useChartView(now: number) {
   const [view, dispatch] = useReducer(chartViewReducer, CHART_RANGES[0], liveView);
   return {
-    view,
+    /** The strip always holds the view: a live strip that moved past a view in the past goes back to it */
+    view: { ...view, overviewEnd: fittedStrip(view, now) },
     /** Shows the last `range` up to now, in the chart and in the strip */
     pick: (range: ChartRange) => dispatch({ type: 'pick', range }),
     /** Moves the time of the chart by `deltaMs`: negative goes back. It cannot go after now. */
@@ -73,7 +81,7 @@ export function useChartView(now: number) {
     showNow: () => dispatch({ type: 'now', now }),
     /** Shows the time that the user highlighted. The range buttons and the clear button show the wider times again. */
     zoomTo: (from: number, to: number) => dispatch({ type: 'zoom', from, to, now }),
-    clearZoom: () => dispatch({ type: 'clearZoom' }),
+    clearZoom: () => dispatch({ type: 'clearZoom', now }),
     /** True while the chart shows a zoom, not the full time of the strip */
     zoomed: view.range !== view.overview,
   };

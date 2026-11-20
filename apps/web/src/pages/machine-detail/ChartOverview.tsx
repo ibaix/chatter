@@ -78,8 +78,10 @@ function OverviewPlot(props: OverviewPlotProps) {
   const timeAt = (offsetX: number) => scale.timeAt(Math.min(Math.max(offsetX, left), bandRight));
   const viewTo = viewEnd ?? clockNow;
   const viewFrom = viewTo - view.ms;
-  const boxLeft = Math.max(left, x(viewFrom));
-  const boxRight = Math.min(bandRight, x(viewTo));
+  /** The x position of a time, inside the band */
+  const bandX = (time: number) => Math.min(Math.max(x(time), left), bandRight);
+  const boxLeft = bandX(viewFrom);
+  const boxRight = bandX(viewTo);
 
   const selectionTo = (start: number, offsetX: number): ZoomSelection | null => {
     if (Math.abs(offsetX - start) < MIN_DRAG_PX) return null;
