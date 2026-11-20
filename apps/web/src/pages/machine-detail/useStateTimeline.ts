@@ -12,12 +12,12 @@ const loading = new Map<string, Promise<StateSegment[]>>();
  * Until the user zooms, the overview strip and the chart show the same time, so the server reads it once.
  */
 function sharedTimeline(key: string, machineId: string, query: string, end: number | null): Promise<StateSegment[]> {
-  let request = loading.get(key);
-  if (!request) {
-    request = fetchStateTimeline(machineId, query, end ?? undefined)
-      .finally(() => loading.delete(key));
-    loading.set(key, request);
-  }
+  const open = loading.get(key);
+  if (open) return open;
+  const request: Promise<StateSegment[]> = fetchStateTimeline(machineId, query, end ?? undefined)
+    // A newer request for the same key can be in the map now, when a chart stopped waiting for this one
+    .finally(() => { if (loading.get(key) === request) loading.delete(key); });
+  loading.set(key, request);
   return request;
 }
 

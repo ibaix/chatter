@@ -147,6 +147,21 @@ describe('useStateTimeline', () => {
     expect(fetchStateTimeline).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps sharing a request when an older request for the same timeline ends', async () => {
+    let endOldRequest = () => {};
+    vi.mocked(fetchStateTimeline).mockReturnValueOnce(new Promise(resolve => { endOldRequest = () => resolve([]); }));
+    const first = renderHook(() => useStateTimeline('m1', undefined, TEN_MINUTES));
+    first.unmount();
+    vi.mocked(fetchStateTimeline).mockReturnValueOnce(waitingLoad());
+    renderHook(() => useStateTimeline('m1', undefined, TEN_MINUTES));
+
+    endOldRequest();
+    await Promise.resolve();
+    renderHook(() => useStateTimeline('m1', undefined, TEN_MINUTES));
+
+    expect(fetchStateTimeline).toHaveBeenCalledTimes(2);
+  });
+
   it('gives the segments after the end of a chart in the past, so a drag on shows them at once', async () => {
     const end = Date.now() - 60 * MINUTE;
     vi.mocked(fetchStateTimeline).mockResolvedValue([
