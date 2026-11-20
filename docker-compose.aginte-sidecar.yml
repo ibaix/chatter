@@ -1,0 +1,37 @@
+# Aginte headless sidecar profile for Toolpath Chatter.
+# Binds strictly to 127.0.0.1:3001 (never 0.0.0.0) and disables the Chatter web UI,
+# VictoriaMetrics, vmalert, and outbound GitHub update checks so Aginte remains
+# the sole main application, persistence owner, and user-facing frontend.
+#
+# Build & run:
+#   docker compose -f docker-compose.aginte-sidecar.yml up -d --build
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  chatterbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aginte-chatter:local
+    container_name: aginte-chatter-sidecar
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      PORT: "3001"
+      WEB_DIR: ""
+      CHATTER_DISABLE_WEB_UI: "1"
+      CHATTER_DISABLE_HISTORY: "1"
+      CHATTER_DISABLE_UPDATE_CHECK: "1"
+      ALERT_HOST: "127.0.0.1"
+    volumes:
+      - aginte-chatter-data:/app/data
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  aginte-chatter-data:
