@@ -75,6 +75,9 @@ Copy uses the saved rules. If you changed rules, click **Save changes** first.
 ## What Chatter shows
 
 The **Alerts** panel shows the alerts of the last 7 days. The alerts that fire now come first, with **Firing now**.
+The panel always shows all the alerts that fire now.
+It shows the newest 10 past alerts. To see 10 more, click **Show more** at the bottom of the list.
+While the page is open, Chatter loads the alerts again every 30 seconds.
 
 ![The Alerts panel: an alert that fires now](../images/chatter-alert-firing.png)
 
