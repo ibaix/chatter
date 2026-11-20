@@ -7,11 +7,13 @@ import { RangeButtons } from '../../components/ui/RangeButtons';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
-import { AXIS_LABEL_CLASS, ChartTooltip, dragStyle, MIN_DRAG_PX, PanButtons, TimeLabels, useZoomSelect, ZoomHighlight } from './ChartParts';
+import { ChartOverview } from './ChartOverview';
+import { AXIS_LABEL_CLASS, ChartTooltip, PanButtons, TimeLabels, useZoomSelect, ZoomHighlight } from './ChartParts';
 import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
   axisTicks,
   CHART_RANGES,
+  fittedOverviewEnd,
   formatChartNumber,
   lineParts,
   messageFor,
@@ -54,6 +56,23 @@ function livePointOf(machine: Machine, value: ChartValue): HistoryPoint | null {
   return { time: Date.parse(machine.lastPollTime), value: liveValue };
 }
 
+/** The time in the chart, and the time in the overview strip under it */
+interface ChartView {
+  /** The range button that the user picked last: the strip shows this much time */
+  overview: ChartRange;
+  /** The end of the strip, or null for a strip that ends now */
+  overviewEnd: number | null;
+  /** The time in the chart: a range button, or a zoom */
+  range: ChartRange;
+  /** The end of the chart, or null for the live chart that ends now */
+  end: number | null;
+}
+
+/** The live view of a range button: the chart and the strip show the same time, up to now */
+function liveView(range: ChartRange): ChartView {
+  return { overview: range, overviewEnd: null, range, end: null };
+}
+
 interface MachineHistoryChartProps {
   machine: Machine;
   /** The choices that the menu offers */
@@ -66,15 +85,23 @@ interface MachineHistoryChartProps {
 
 /** One machine value, or the machine state, over time, with a menu for the value and buttons for the time range */
 function MachineHistoryChart({ machine, choices, choice, onChoose, className }: MachineHistoryChartProps) {
-  const [range, setRange] = useState<ChartRange>(CHART_RANGES[0]);
-  /** The end of the time that the chart shows, or null for the live chart that ends now */
-  const [end, setEnd] = useState<number | null>(null);
+  const [view, setView] = useState<ChartView>(() => liveView(CHART_RANGES[0]));
+  const { range, end } = view;
   const wheelDelta = useRef(0);
-  const pan = (step: number) => setEnd(current => pannedEnd(current, step, range.ms, Date.now()));
-  const chooseRange = (next: ChartRange) => {
-    setRange(next);
-    setEnd(null);
-  };
+
+  /** Shows another time in the chart. The overview strip moves with it only when the time goes out of the strip. */
+  const show = (next: (current: ChartView) => Pick<ChartView, 'range' | 'end'>) => setView(current => {
+    const shown = next(current);
+    const overviewEnd = fittedOverviewEnd(current.overviewEnd, current.overview.ms, shown.end, shown.range.ms, Date.now());
+    return { ...current, ...shown, overviewEnd };
+  });
+  const moveBy = (deltaMs: number) => show(({ range: shownRange, end: shownEnd }) => ({
+    range: shownRange,
+    end: pannedEnd(shownEnd, deltaMs / shownRange.ms, shownRange.ms, Date.now()),
+  }));
+  const pan = (step: number) => moveBy(step * range.ms);
+  /** Shows the time that the user highlighted. The range buttons show the wider times again. */
+  const zoomTo = (from: number, to: number) => show(() => zoomView(from, to, Date.now()));
 
   /** A sideways scroll (trackpad, or Shift and the mouse wheel) moves the time. An up or down scroll stays with the page. */
   const scrollTime = (event: WheelEvent<HTMLDivElement>) => {
@@ -86,38 +113,7 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
     wheelDelta.current = 0;
   };
 
-  /** Where a drag started, and the width of the chart then */
-  const dragStart = useRef<{ x: number; width: number } | null>(null);
-  /** How far the chart follows the mouse while the user drags. The new time loads once, when the drag ends. */
-  const [dragX, setDragX] = useState(0);
-  /** The live chart ends now, so it cannot go on: a drag to the left does not move it */
-  const shownDragX = (x: number) => (end === null ? Math.max(0, x) : x);
-
-  /** Shows the time that the user highlighted. The range buttons show the wider times again. */
-  const zoomTo = (from: number, to: number) => {
-    const view = zoomView(from, to, Date.now());
-    setRange(view.range);
-    setEnd(view.end);
-  };
-
-  /** Shift and drag moves the time. A drag with no Shift highlights a time to zoom in (useZoomSelect). */
-  const startDrag = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || !event.shiftKey) return;
-    dragStart.current = { x: event.clientX, width: event.currentTarget.getBoundingClientRect().width };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-  };
-  const followDrag = (event: PointerEvent<HTMLDivElement>) => {
-    if (dragStart.current) setDragX(shownDragX(event.clientX - dragStart.current.x));
-  };
-  const endDrag = (event: PointerEvent<HTMLDivElement>) => {
-    const start = dragStart.current;
-    dragStart.current = null;
-    setDragX(0);
-    if (!start || start.width <= 0) return;
-    const moved = shownDragX(event.clientX - start.x);
-    // A small move is a click, for example to see a hover box
-    if (Math.abs(moved) >= MIN_DRAG_PX) pan(-moved / start.width);
-  };
+  const isStateChart = choice.id === MACHINE_STATE.id;
 
   return (
     <section
@@ -134,26 +130,33 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
             canGoLater={end !== null}
             onEarlier={() => pan(-BUTTON_STEP)}
             onLater={() => pan(BUTTON_STEP)}
-            onNow={() => setEnd(null)}
+            onNow={() => show(current => ({ range: current.range, end: null }))}
           />
-          <RangeButtons options={CHART_RANGES} value={range} onChange={chooseRange} />
+          <RangeButtons options={CHART_RANGES} value={range} onChange={next => setView(liveView(next))} />
         </div>
       </div>
       <div
         role="group"
-        aria-label="Chart: drag to zoom in, Shift and drag or scroll sideways to move in time"
+        aria-label="Chart: drag to zoom in, scroll sideways to move in time"
         onWheel={scrollTime}
-        onPointerDown={startDrag}
-        onPointerMove={followDrag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        className={cn('flex touch-pan-y flex-col gap-2.5 overflow-hidden select-none', dragX && 'cursor-grabbing')}
+        className="flex touch-pan-y flex-col gap-2.5 overflow-hidden select-none"
       >
-        {choice.id === MACHINE_STATE.id ? (
-          <StateChart machine={machine} range={range} end={end} dragX={dragX} onZoom={zoomTo} />
+        {isStateChart ? (
+          <StateChart machine={machine} range={range} end={end} onZoom={zoomTo} />
         ) : (
-          <ValueChart machine={machine} value={choice} range={range} end={end} dragX={dragX} onZoom={zoomTo} />
+          <ValueChart machine={machine} value={choice} range={range} end={end} onZoom={zoomTo} />
         )}
+        <ChartOverview
+          machine={machine}
+          overview={view.overview}
+          overviewEnd={view.overviewEnd}
+          view={range}
+          viewEnd={end}
+          left={isStateChart ? 0 : MARGIN.left}
+          right={isStateChart ? 0 : MARGIN.right}
+          onMove={moveBy}
+          onZoom={zoomTo}
+        />
       </div>
     </section>
   );
@@ -164,14 +167,12 @@ interface ValueChartProps {
   value: ChartValue;
   range: ChartRange;
   end: number | null;
-  /** How far the plot follows a Shift drag, in pixels */
-  dragX: number;
   /** Shows the time that the user highlighted */
   onZoom: (from: number, to: number) => void;
 }
 
 /** A machine value as a line, with the machine state as a thin strip under it */
-function ValueChart({ machine, value, range, end, dragX, onZoom }: ValueChartProps) {
+function ValueChart({ machine, value, range, end, onZoom }: ValueChartProps) {
   const livePoint = livePointOf(machine, value);
   const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range, end);
   // The chart's clock, so the strip ends where the line ends
@@ -182,7 +183,7 @@ function ValueChart({ machine, value, range, end, dragX, onZoom }: ValueChartPro
   return (
     <>
       {/* The box sets the chart height in rem, so the chart follows the page scale */}
-      <div ref={ref} className="relative h-[13.75rem]" style={dragStyle(dragX)}>
+      <div ref={ref} className="relative h-[13.75rem]">
         {showPlot ? (
           <ChartPlot
             points={points}

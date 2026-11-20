@@ -19,11 +19,6 @@ export function TimeLabels({ labels, x, y }: { labels: TimeLabel[]; x: (time: nu
   );
 }
 
-/** Moves a plot with the mouse while the user drags it. No style when it does not move. */
-export function dragStyle(dragX: number): CSSProperties | undefined {
-  return dragX ? { transform: `translateX(${dragX}px)` } : undefined;
-}
-
 /** The box of a hover readout, over the chart. `style` places it. */
 export function ChartTooltip({ style, className, children }: { style: CSSProperties; className?: string; children: ReactNode }) {
   return (
@@ -68,7 +63,7 @@ export function PanButtons({ canGoLater, onEarlier, onLater, onNow }: PanButtons
 }
 
 /** A drag shorter than this, in pixels, is a click, for example to see a hover box */
-export const MIN_DRAG_PX = 5;
+const MIN_DRAG_PX = 5;
 
 /** The x position of the pointer from the left edge of the element that has the handler */
 function offsetXOf(event: PointerEvent<Element>): number {
@@ -77,13 +72,13 @@ function offsetXOf(event: PointerEvent<Element>): number {
 
 /**
  * A drag over a plot that highlights a time. When the drag ends, `onZoom` gets the start and the end of that time.
- * `timeAt` turns an x position in the plot into a time. Shift and drag is left to the chart, which moves the time.
+ * `timeAt` turns an x position in the plot into a time.
  */
 export function useZoomSelect(timeAt: (offsetX: number) => number, onZoom: (from: number, to: number) => void) {
   const [selection, setSelection] = useState<{ fromX: number; toX: number } | null>(null);
   const handlers = {
     onPointerDown: (event: PointerEvent<SVGSVGElement>) => {
-      if (event.button !== 0 || event.shiftKey) return;
+      if (event.button !== 0) return;
       const x = offsetXOf(event);
       setSelection({ fromX: x, toX: x });
       event.currentTarget.setPointerCapture?.(event.pointerId);

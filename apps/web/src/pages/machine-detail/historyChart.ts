@@ -227,3 +227,22 @@ export function zoomView(from: number, to: number, now: number): { range: ChartR
   const end = Math.min((from + to) / 2 + ms / 2, now);
   return { range: zoomRange(ms), end: end >= now - SECOND ? null : end };
 }
+
+/**
+ * The end of the overview strip after the view changed. The overview shows `overviewMs` (the range button that
+ * the user picked last), and it always holds the view. It moves only when the view goes out of it.
+ * Null is an overview that ends now: it is live when the view is live, or when it gets to now.
+ */
+export function fittedOverviewEnd(
+  overviewEnd: number | null,
+  overviewMs: number,
+  viewEnd: number | null,
+  viewMs: number,
+  now: number,
+): number | null {
+  if (viewEnd === null) return null;
+  const end = overviewEnd ?? now;
+  const next = viewEnd > end ? viewEnd : viewEnd - viewMs < end - overviewMs ? viewEnd - viewMs + overviewMs : end;
+  if (next === end) return overviewEnd;
+  return next >= now - SECOND ? null : next;
+}

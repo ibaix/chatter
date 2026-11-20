@@ -189,44 +189,13 @@ describe('MachineHistoryChart', () => {
     it('moves the time with a sideways scroll, but not with an up or down scroll', async () => {
       render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
       await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));
-      const chartBody = screen.getByRole('group', { name: 'Chart: drag to zoom in, Shift and drag or scroll sideways to move in time' });
+      const chartBody = screen.getByRole('group', { name: 'Chart: drag to zoom in, scroll sideways to move in time' });
 
       fireEvent.wheel(chartBody, { deltaX: 0, deltaY: 200 });
       expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
 
       fireEvent.wheel(chartBody, { deltaX: -80, deltaY: 0 });
       await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m', expect.any(Number)));
-    });
-
-    it('moves the time when the user drags the chart with Shift: to the right goes back', async () => {
-      render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));
-      const chartBody = screen.getByRole('group', { name: 'Chart: drag to zoom in, Shift and drag or scroll sideways to move in time' });
-      vi.spyOn(chartBody, 'getBoundingClientRect').mockReturnValue({ width: BOX_WIDTH } as DOMRect);
-
-      const before = Date.now();
-      fireEvent.pointerDown(chartBody, { button: 0, shiftKey: true, clientX: 100, pointerId: 1 });
-      fireEvent.pointerMove(chartBody, { clientX: 100 + BOX_WIDTH / 2, pointerId: 1 });
-      fireEvent.pointerUp(chartBody, { clientX: 100 + BOX_WIDTH / 2, pointerId: 1 });
-
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m', expect.any(Number)));
-      const end = vi.mocked(fetchStateTimeline).mock.lastCall![2]!;
-      expect(end).toBeGreaterThanOrEqual(before - 5 * MINUTE - 1000);
-      expect(end).toBeLessThanOrEqual(Date.now() - 5 * MINUTE + 1000);
-    });
-
-    it('does not move the time for a click, or for a drag of the live chart into the future', async () => {
-      render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));
-      const chartBody = screen.getByRole('group', { name: 'Chart: drag to zoom in, Shift and drag or scroll sideways to move in time' });
-      vi.spyOn(chartBody, 'getBoundingClientRect').mockReturnValue({ width: BOX_WIDTH } as DOMRect);
-
-      fireEvent.pointerDown(chartBody, { button: 0, shiftKey: true, clientX: 300, pointerId: 1 });
-      fireEvent.pointerUp(chartBody, { clientX: 302, pointerId: 1 });
-      fireEvent.pointerDown(chartBody, { button: 0, shiftKey: true, clientX: 300, pointerId: 1 });
-      fireEvent.pointerUp(chartBody, { clientX: 100, pointerId: 1 });
-
-      expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
     });
 
     it('goes back to the live chart when the user picks another range', async () => {
@@ -289,6 +258,84 @@ describe('MachineHistoryChart', () => {
 
       await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-1h'));
       expect(screen.getByRole('button', { name: '1h' })).toHaveAttribute('aria-pressed', 'true');
+    });
+  });
+
+  describe('overview strip', () => {
+    /** The overview of the machine state view. Its band goes from 0 to BOX_WIDTH. */
+    async function overviewOfStateView() {
+      render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
+      return screen.findByRole('img', { name: /^Overview of the last 10 minutes/ });
+    }
+
+    function drag(target: Element, fromX: number, toX: number) {
+      fireEvent.pointerDown(target, { button: 0, clientX: fromX, pointerId: 1 });
+      fireEvent.pointerMove(target, { clientX: toX, pointerId: 1 });
+      fireEvent.pointerUp(target, { clientX: toX, pointerId: 1 });
+    }
+
+    it('reads the timeline once while it shows the same time as the chart', async () => {
+      await overviewOfStateView();
+
+      expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
+    });
+
+    it('moves the time when the user drags the box: to the left goes back', async () => {
+      const overview = await overviewOfStateView();
+
+      const before = Date.now();
+      drag(overview, BOX_WIDTH / 2, 0);
+
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m', expect.any(Number)));
+      const end = vi.mocked(fetchStateTimeline).mock.lastCall![2]!;
+      expect(end).toBeGreaterThanOrEqual(before - 5 * MINUTE - 1000);
+      expect(end).toBeLessThanOrEqual(Date.now() - 5 * MINUTE + 1000);
+    });
+
+    it('does not move the time for a click on the box, or for a drag of the live chart into the future', async () => {
+      const overview = await overviewOfStateView();
+
+      drag(overview, BOX_WIDTH / 2, BOX_WIDTH / 2);
+      drag(overview, BOX_WIDTH / 2, BOX_WIDTH);
+
+      expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
+    });
+
+    it('zooms in when the user drags an edge of the box, and keeps the overview', async () => {
+      const overview = await overviewOfStateView();
+
+      drag(overview, BOX_WIDTH, BOX_WIDTH / 2);
+
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-300s', expect.any(Number)));
+      expect(screen.getByRole('img', { name: /^Overview of the last 10 minutes/ })).toBeInTheDocument();
+    });
+
+    it('moves the box to the time that the user clicks', async () => {
+      const now = Date.now();
+      const overview = await overviewOfStateView();
+      drag(overview, BOX_WIDTH, BOX_WIDTH / 2);
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-300s', expect.any(Number)));
+
+      // A click at 1/4 of the 10 minutes: the 5-minute box goes from 10 to 5 minutes ago
+      fireEvent.pointerDown(overview, { button: 0, clientX: BOX_WIDTH / 4, pointerId: 1 });
+      fireEvent.pointerUp(overview, { clientX: BOX_WIDTH / 4, pointerId: 1 });
+
+      await waitFor(() => {
+        const end = vi.mocked(fetchStateTimeline).mock.lastCall![2]!;
+        expect(Math.abs(end - (now - 5 * MINUTE))).toBeLessThan(5000);
+      });
+    });
+
+    it('lines up with the plot of the value chart', async () => {
+      vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: Date.now() - MINUTE, value: 1000 }], window: '5s' });
+      render(<ChartWithMenu machine={runningMachine()} />);
+      const overview = await screen.findByRole('img', { name: /^Overview/ });
+
+      // A click right of the plot is on the margin, not on the box
+      drag(overview, BOX_WIDTH - PLOT_RIGHT_MARGIN / 2, BOX_WIDTH - 200);
+
+      await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledTimes(1));
+      expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', '-10m', '5s');
     });
   });
 });

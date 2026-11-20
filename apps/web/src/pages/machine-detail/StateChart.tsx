@@ -2,7 +2,7 @@ import { useState, type PointerEvent } from 'react';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
-import { ChartTooltip, dragStyle, TimeLabels, useZoomSelect, ZoomHighlight } from './ChartParts';
+import { ChartTooltip, TimeLabels, useZoomSelect, ZoomHighlight } from './ChartParts';
 import { messageFor, timeLabels, viewText, type ChartRange } from './historyChart';
 import { formatDuration, formatShare } from './reportView';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
@@ -32,13 +32,11 @@ interface StateChartProps {
   machine: Machine;
   range: ChartRange;
   end: number | null;
-  /** How far the plot follows a Shift drag, in pixels */
-  dragX: number;
   /** Shows the time that the user highlighted */
   onZoom: (from: number, to: number) => void;
 }
 
-export function StateChart({ machine, range, end, dragX, onZoom }: StateChartProps) {
+export function StateChart({ machine, range, end, onZoom }: StateChartProps) {
   const { segments, status, now } = useStateTimeline(machine.id, liveStateOf(machine), range, undefined, end);
   const { ref, width } = useBoxSize<HTMLDivElement>();
   const totals = stateTotals(segments);
@@ -62,7 +60,7 @@ export function StateChart({ machine, range, end, dragX, onZoom }: StateChartPro
           </div>
         ))}
       </div>
-      <div ref={ref} className="relative" style={dragStyle(dragX)}>
+      <div ref={ref} className="relative">
         {width > 0 && <StatePlot segments={segments} totalsText={totalsText(totals, range)} now={now} range={range} live={end === null} width={width} onZoom={onZoom} />}
       </div>
       <StateLegend explain className="gap-x-4" />

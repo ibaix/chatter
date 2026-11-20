@@ -16,6 +16,7 @@ import {
   timeLabels,
   viewText,
   withLivePoint,
+  fittedOverviewEnd,
   zoomView,
 } from './historyChart';
 
@@ -238,5 +239,29 @@ describe('zoomView', () => {
     expect(zoomView(NOW - 45_000, NOW - 5000, NOW).range.words).toBe('40 seconds');
     expect(zoomView(NOW - 5 * 3_600_000, NOW - 3_600_000, NOW).range.words).toBe('4 hours');
     expect(zoomView(NOW - 4 * 86_400_000, NOW - 86_400_000, NOW).range.words).toBe('3 days');
+  });
+});
+
+describe('fittedOverviewEnd', () => {
+  const NOW = Date.parse('2026-11-19T15:00:00.000Z');
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+
+  it('keeps the overview when the view is inside it', () => {
+    expect(fittedOverviewEnd(null, DAY, NOW - 3 * HOUR, HOUR, NOW)).toBeNull();
+    expect(fittedOverviewEnd(NOW - DAY, DAY, NOW - 30 * HOUR, HOUR, NOW)).toBe(NOW - DAY);
+  });
+
+  it('is live when the view is live', () => {
+    expect(fittedOverviewEnd(NOW - 2 * DAY, DAY, null, HOUR, NOW)).toBeNull();
+  });
+
+  it('moves back so that a view before the overview starts at its left edge', () => {
+    expect(fittedOverviewEnd(null, DAY, NOW - 25 * HOUR, 2 * HOUR, NOW)).toBe(NOW - 27 * HOUR + DAY);
+  });
+
+  it('moves on so that a view after the overview ends at its right edge, and is live again at now', () => {
+    expect(fittedOverviewEnd(NOW - 2 * DAY, DAY, NOW - 30 * HOUR, HOUR, NOW)).toBe(NOW - 30 * HOUR);
+    expect(fittedOverviewEnd(NOW - 2 * DAY, DAY, NOW - 1000, HOUR, NOW)).toBeNull();
   });
 });
