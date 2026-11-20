@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ChannelDefinition, OutgoingMessage, SendResult } from './ChannelType.js';
+import { type ChannelDefinition, type OutgoingMessage, type SendResult, titleOf } from './ChannelType.js';
 import { postJson, statusResult } from './http.js';
 import { hasNoLogin, isHttpAddress } from './webAddress.js';
 
@@ -77,7 +77,7 @@ function basicLogin(username: string, password: string): string {
 
 function appriseBody(message: OutgoingMessage, tag: string | undefined) {
   return {
-    title: message.machine ? `Chatter: ${message.machine.name}` : 'Chatter',
+    title: titleOf(message),
     body: message.text,
     type: appriseTypeOf(message),
     format: 'text',
@@ -104,7 +104,7 @@ function answered(status: number): string {
 }
 
 function resultOf(status: number): SendResult {
-  return statusResult(status, { answered: answered(status), sent: 'Apprise sent it', refused: refusalOf });
+  return statusResult(status, { answered: answered(status), sent: 'Apprise sent it', refused: () => refusalOf(status) });
 }
 
 /** Each refusal stops at once. 424 can mean that some services got the message, so a new try would send it to them 2 times. */

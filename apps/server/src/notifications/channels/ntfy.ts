@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import type { ChannelDefinition, OutgoingMessage, SendResult } from './ChannelType.js';
-import { type Answer, cutText, postJson, statusResult } from './http.js';
-import { hasNoLogin, isHttpAddress } from './webAddress.js';
+import { type ChannelDefinition, type OutgoingMessage, type SendResult, titleOf } from './ChannelType.js';
+import { type Answer, type JsonObject, postJson, serviceReason, statusResult } from './http.js';
+import { HEADER_SAFE, hasNoLogin, isHttpAddress } from './webAddress.js';
 
 const PUBLIC_HOST = 'ntfy.sh';
 const PUBLIC_SERVER = `https://${PUBLIC_HOST}`;
@@ -14,10 +14,6 @@ const BAD_TOKEN = 'Access token can have only plain letters, digits, and signs, 
 
 /** The topic names that ntfy accepts */
 const TOPIC = /^[-_A-Za-z0-9]{1,64}$/;
-/** fetch refuses a header value with other characters */
-const HEADER_SAFE = /^[\x21-\x7e]*$/;
-/** ntfy tells the reason in English. A long reason is cut. */
-const MAX_REASON = 200;
 
 const ntfySettings = z.object({
   topic: z.string({ error: BAD_TOPIC }).trim().regex(TOPIC, BAD_TOPIC),
@@ -69,7 +65,7 @@ export const ntfyChannel: ChannelDefinition<NtfySettings> = {
 function ntfyBody(topic: string, message: OutgoingMessage) {
   return {
     topic,
-    title: message.machine ? `Chatter: ${message.machine.name}` : 'Chatter',
+    title: titleOf(message),
     message: message.text,
     priority: priorityOf(message),
     tags: [tagOf(message)],
@@ -107,10 +103,6 @@ function hasTopicPath(url: string, topic: string): boolean {
   return pathname.replace(/\/$/, '').endsWith(`/${topic}`);
 }
 
-/** The error answer of ntfy, for example {"code":40009,"http":400,"error":"invalid request"} */
-interface NtfyError {
-  error?: unknown;
-}
 
 function resultOf({ status, json }: Answer, settings: NtfySettings): SendResult {
   return statusResult(status, {
@@ -120,14 +112,14 @@ function resultOf({ status, json }: Answer, settings: NtfySettings): SendResult 
   });
 }
 
-function refusalOf(status: number, json: unknown, { topic, token }: NtfySettings): string {
+/** `json` is the error answer of ntfy, for example {"code":40009,"http":400,"error":"invalid request"} */
+function refusalOf(status: number, json: JsonObject | undefined, { topic, token }: NtfySettings): string {
   if (status === 401 || status === 403) return 'ntfy refused the access. Check the access token, and that it can write to the topic.';
   if (status === 413) return 'ntfy refused the message because it is too long.';
-  const reason = typeof json === 'object' && json !== null ? (json as NtfyError).error : undefined;
+  const reason = json?.error;
   if (status === 400 && typeof reason === 'string' && reason) {
-    let safe = reason.replace(wholeWord(topic), '(topic)');
-    if (token) safe = safe.replaceAll(token, '(access token)');
-    return `ntfy refused the message: ${cutText(safe, MAX_REASON).replace(/\.$/, '')}.`;
+    const secrets = [[wholeWord(topic), '(topic)'], ...(token ? [[token, '(access token)'] as const] : [])] as const;
+    return `ntfy refused the message: ${serviceReason(reason, secrets)}.`;
   }
   return `ntfy answered ${status}. Check the server address.`;
 }

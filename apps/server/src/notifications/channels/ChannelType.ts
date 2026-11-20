@@ -19,6 +19,11 @@ export interface OutgoingMessage {
   link: string | null;
 }
 
+/** The title of a message, for a service that shows a title over the text */
+export function titleOf(message: OutgoingMessage): string {
+  return message.machine ? `Chatter: ${message.machine.name}` : 'Chatter';
+}
+
 export interface SendContext {
   /** Tests give a fake fetch, so no test sends a real message */
   fetch: typeof globalThis.fetch;

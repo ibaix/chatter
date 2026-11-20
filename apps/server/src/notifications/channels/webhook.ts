@@ -1,14 +1,11 @@
 import { z } from 'zod';
 import type { ChannelDefinition, OutgoingMessage, SendResult } from './ChannelType.js';
 import { postJson, statusResult } from './http.js';
-import { hasNoLogin, isHttpAddress } from './webAddress.js';
+import { HEADER_SAFE, hasNoLogin, isHttpAddress } from './webAddress.js';
 
 const BAD_URL = 'Web address must start with http:// or https://';
 const LOGIN_IN_URL = 'Remove the user name and password from the web address. Put a password in Secret.';
 const BAD_SECRET = 'Secret can have only plain letters, digits, and signs, with no spaces';
-
-/** fetch refuses a header value with other characters */
-const HEADER_SAFE = /^[\x21-\x7e]*$/;
 
 const webhookSettings = z.object({
   url: z.string({ error: BAD_URL }).trim()

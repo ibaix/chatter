@@ -12,10 +12,13 @@ export interface JsonPost {
   readJson?: boolean;
 }
 
-/** The answer of the service. `json` is undefined for a 2xx answer, when readJson is not set, or when the answer is not JSON or is too large. */
+/** A JSON object of an answer. Each value is unknown, so the channel type checks each value that it uses. */
+export type JsonObject = Readonly<Record<string, unknown>>;
+
+/** The answer of the service. `json` is undefined for a 2xx answer, when readJson is not set, or when the answer is not a JSON object or is too large. */
 export interface Answer {
   status: number;
-  json: unknown;
+  json: JsonObject | undefined;
 }
 
 /**
@@ -49,12 +52,13 @@ export async function postJson(
 /** An error answer is short. A Pi can have 512 MB of RAM, so Chatter reads no more of an answer than this. */
 const MAX_ERROR_BYTES = 64 * 1024;
 
-/** The JSON of the answer, or undefined when it is not JSON, is too large, or stops before its end */
-async function jsonOf(response: Response): Promise<unknown> {
+/** The JSON object of the answer, or undefined when it is not a JSON object, is too large, or stops before its end */
+async function jsonOf(response: Response): Promise<JsonObject | undefined> {
   const text = await textUpTo(response, MAX_ERROR_BYTES);
   if (text === undefined) return undefined;
   try {
-    return JSON.parse(text);
+    const json: unknown = JSON.parse(text);
+    return typeof json === 'object' && json !== null && !Array.isArray(json) ? json as JsonObject : undefined;
   } catch {
     return undefined;
   }
@@ -90,8 +94,8 @@ export interface StatusTexts {
   sent?: string;
   /** What to do after a redirect. Without it, "Use the new address." */
   moved?: string;
-  /** The error text of an answer that a new try cannot fix, for example a wrong token */
-  refused: (status: number) => string;
+  /** The error text of an answer that a new try cannot fix, for example a wrong token. Chatter makes it only for such an answer. */
+  refused: () => string;
 }
 
 /**
@@ -108,7 +112,20 @@ export function statusResult(status: number, texts: StatusTexts): SendResult {
   if (status === 408 || status === 429 || status >= 500) {
     return { ok: false, retry: true, error: `${answered}. Chatter tries again later.` };
   }
-  return { ok: false, retry: false, error: texts.refused(status) };
+  return { ok: false, retry: false, error: texts.refused() };
+}
+
+/** A service tells the reason in English. A long reason is cut. */
+const MAX_REASON = 200;
+
+/**
+ * The reason of a service, for the message list: each secret is replaced with its name, and the text is cut.
+ * The text has no period at the end, so the caller can put it in a sentence.
+ * A secret is a text, or a RegExp with the g flag for a short secret that must match only a whole word.
+ */
+export function serviceReason(reason: string, secrets: ReadonlyArray<readonly [secret: string | RegExp, name: string]>): string {
+  const safe = secrets.reduce((text, [secret, name]) => text.replaceAll(secret, name), reason);
+  return cutText(safe, MAX_REASON).replace(/\.$/, '');
 }
 
 /** Cuts the text to the limit of the service, and does not cut an emoji in two */

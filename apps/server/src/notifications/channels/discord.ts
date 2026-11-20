@@ -73,9 +73,9 @@ function mentionsOf(text: string | undefined): string[] {
   return [...new Set((text ?? '').split(/\s+/).filter(Boolean))];
 }
 
-/** Discord refuses the same id two times, and mentionsOf has already removed the same words */
+/** Discord refuses the same id two times. mentionsOf has already removed the same words, and each id has one form. */
 function allowedMentions(mentions: string[]) {
-  const idsOf = (isKind: (mention: string) => boolean) => [...new Set(mentions.filter(isKind).map(mention => mention.replace(/\D/g, '')))];
+  const idsOf = (isKind: (mention: string) => boolean) => mentions.filter(isKind).map(mention => mention.replace(/\D/g, ''));
   return {
     parse: mentions.some(mention => mention.startsWith('@')) ? ['everyone'] : [],
     roles: idsOf(mention => mention.startsWith('<@&')),

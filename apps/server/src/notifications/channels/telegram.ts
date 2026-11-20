@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ChannelDefinition, SendResult } from './ChannelType.js';
-import { type Answer, cutText, postJson, statusResult } from './http.js';
+import { type Answer, cutText, type JsonObject, postJson, serviceReason, statusResult } from './http.js';
 
 const TELEGRAM_API = 'https://api.telegram.org';
 /** Telegram refuses a longer text */
@@ -46,16 +46,13 @@ export const telegramChannel: ChannelDefinition<TelegramSettings> = {
 };
 
 /** The error answer of the Bot API: https://core.telegram.org/bots/api#making-requests */
-interface TelegramError {
+interface TelegramError extends JsonObject {
   description?: unknown;
   parameters?: { migrate_to_chat_id?: unknown };
 }
 
-/** Telegram tells the reason in English. A long reason is cut, and the bot token never shows. */
-const MAX_REASON = 200;
-
 function resultOf({ status, json }: Answer, token: string): SendResult {
-  const answer = (typeof json === 'object' && json !== null ? json : {}) as TelegramError;
+  const answer: TelegramError = json ?? {};
   return statusResult(status, {
     answered: `Telegram answered ${status}`,
     sent: 'Telegram sent it',
@@ -76,5 +73,5 @@ function refusalOf(status: number, answer: TelegramError, token: string): string
   // A 400 with no reason can be from a proxy, so Chatter does not guess the reason
   if (!reason) return `Telegram answered ${status}.`;
   if (/chat not found/i.test(reason)) return 'Telegram cannot find the chat. Check the chat ID.';
-  return `Telegram refused the message: ${cutText(reason.replaceAll(token, '(bot token)'), MAX_REASON).replace(/\.$/, '')}.`;
+  return `Telegram refused the message: ${serviceReason(reason, [[token, '(bot token)']])}.`;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SendContext } from './ChannelType.js';
-import { type Answer, cutText, postJson, statusResult } from './http.js';
+import { type Answer, cutText, postJson, serviceReason, statusResult } from './http.js';
 
 interface SentRequest {
   url: string;
@@ -134,7 +134,7 @@ describe('postJson', () => {
 });
 
 describe('statusResult', () => {
-  const refused = (status: number) => `Refused ${status}.`;
+  const refused = () => 'Refused.';
 
   it.each([200, 201, 204])('is sent for %i, with the answer as the detail', status => {
     expect(statusResult(status, { answered: `X answered ${status}`, refused })).toEqual({ ok: true, detail: `X answered ${status}` });
@@ -161,7 +161,29 @@ describe('statusResult', () => {
 
   it.each([400, 401, 404, 409])('stops at once for %i, with the text of the channel', status => {
     expect(statusResult(status, { answered: `X answered ${status}`, refused }))
-      .toEqual({ ok: false, retry: false, error: `Refused ${status}.` });
+      .toEqual({ ok: false, retry: false, error: 'Refused.' });
+  });
+
+  it.each([200, 301, 429, 500])('does not make the refusal text for %i, which is not a refusal', status => {
+    statusResult(status, { answered: `X answered ${status}`, refused: () => { throw new Error('not a refusal'); } });
+  });
+});
+
+describe('serviceReason', () => {
+  it('replaces each secret with its name', () => {
+    expect(serviceReason('bad token 123:abc for chat x', [['123:abc', '(bot token)']])).toBe('bad token (bot token) for chat x');
+  });
+
+  it('replaces a RegExp secret only where it matches', () => {
+    expect(serviceReason('topic a is bad', [[/\ba\b/g, '(topic)']])).toBe('topic (topic) is bad');
+  });
+
+  it('cuts a long reason to 200 characters', () => {
+    expect(serviceReason('x'.repeat(300), [])).toBe('x'.repeat(200));
+  });
+
+  it('removes the period at the end, so the caller can put the reason in a sentence', () => {
+    expect(serviceReason('message text is empty.', [])).toBe('message text is empty');
   });
 });
 
