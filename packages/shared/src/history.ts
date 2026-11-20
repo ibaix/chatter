@@ -41,3 +41,18 @@ export function historyWindowValue(value: HistoryValue): 'average' | 'last' {
 export const TIMELINE_STATES = ['running', 'idle', 'alarm', 'offline'] as const;
 
 export type TimelineState = typeof TIMELINE_STATES[number];
+
+/** The windows that the server picks from when a history request has no window, with their length in seconds */
+const AUTO_HISTORY_WINDOWS: readonly [string, number][] = [
+  ['10s', 10], ['30s', 30], ['1m', 60], ['5m', 300], ['15m', 900], ['1h', 3600], ['6h', 21_600], ['1d', 86_400],
+];
+const AUTO_WINDOW_MAX_POINTS = 1000;
+
+/**
+ * The window of a history request that has no window: the smallest that keeps the range within 1000 points.
+ * The web app uses it also, so a chart that loads more time than it shows keeps the same detail.
+ */
+export function autoHistoryWindow(rangeMs: number): string {
+  const fits = AUTO_HISTORY_WINDOWS.find(([, seconds]) => rangeMs / (seconds * 1000) <= AUTO_WINDOW_MAX_POINTS);
+  return (fits ?? AUTO_HISTORY_WINDOWS[AUTO_HISTORY_WINDOWS.length - 1])[0];
+}

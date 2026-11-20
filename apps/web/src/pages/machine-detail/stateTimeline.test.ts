@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { testMachine } from '../../test/testMachine';
-import { clipSegments, liveStateOf, segmentTimesText, segmentAt, stateTotals, timelineStateOf, withLiveState, type StateSegment } from './stateTimeline';
+import { clipSegments, liveStateOf, segmentTimesText, segmentAt, segmentsWithin, stateTotals, timelineStateOf, withLiveState, type StateSegment } from './stateTimeline';
 
 const segment = (state: StateSegment['state'], start: number, end: number, detail?: string): StateSegment =>
   detail === undefined ? { state, start, end } : { state, start, end, detail };
@@ -124,5 +124,20 @@ describe('segmentTimesText', () => {
     const end = new Date(2026, 10, 18, 14, 0).getTime();
 
     expect(segmentTimesText(start, end)).toBe(`${new Date(start).toLocaleString()} – ${new Date(end).toLocaleString()}`);
+  });
+});
+
+describe('segmentsWithin', () => {
+  it('gives the parts of the segments in the time, for the totals of the time that a chart shows', () => {
+    const segments: StateSegment[] = [
+      { state: 'running', start: 0, end: 10 },
+      { state: 'idle', start: 10, end: 20 },
+      { state: 'alarm', start: 20, end: 30 },
+    ];
+
+    expect(segmentsWithin(segments, 5, 15)).toEqual([
+      { state: 'running', start: 5, end: 10 },
+      { state: 'idle', start: 10, end: 15 },
+    ]);
   });
 });

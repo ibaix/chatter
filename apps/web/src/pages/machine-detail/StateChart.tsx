@@ -2,11 +2,11 @@ import { useState, type PointerEvent } from 'react';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
-import { ChartTooltip, TimeLabels } from './ChartParts';
-import { messageFor, timeLabels, type ChartRange } from './historyChart';
+import { ChartTooltip, offsetXOf, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
+import { messageFor, timeLabels, timeScale, viewText, type ChartRange } from './historyChart';
 import { formatDuration, formatShare } from './reportView';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
-import { liveStateOf, segmentAt, segmentTimesText, stateTotals, type StateSegment, type StateTotal } from './stateTimeline';
+import { liveStateOf, segmentAt, segmentsWithin, segmentTimesText, stateTotals, type StateSegment, type StateTotal } from './stateTimeline';
 import { useStateTimeline } from './useStateTimeline';
 
 const BAND_HEIGHT = 88;
@@ -28,13 +28,28 @@ function lengthText(ms: number): string {
 }
 
 /** The machine state over time, as a colored band, with the share of time in each state */
-export function StateChart({ machine, range }: { machine: Machine; range: ChartRange }) {
-  const { segments, status, now } = useStateTimeline(machine.id, liveStateOf(machine), range);
-  const { ref, width } = useBoxSize<HTMLDivElement>();
-  const totals = stateTotals(segments);
+interface StateChartProps {
+  machine: Machine;
+  range: ChartRange;
+  end: number | null;
+  /** How far a drag moves the time, in milliseconds: negative goes back. The chart loaded this time already. */
+  shiftMs: number;
+  /** The chart clock (useChartClock) */
+  clockNow: number;
+  /** The time that the user highlights on the overview strip */
+  selection: ZoomSelection | null;
+}
 
-  if (status !== 'ready') {
-    return <p className="m-0 flex h-[13.75rem] items-center justify-center text-center text-zinc-300">{messageFor(status, 'machine state', range)}</p>;
+export function StateChart({ machine, range, end, clockNow, shiftMs, selection }: StateChartProps) {
+  const { segments, status, now: loadedNow } = useStateTimeline(machine.id, liveStateOf(machine), range, clockNow, end);
+  const { ref, width } = useBoxSize<HTMLDivElement>();
+  // The end of the time that shows, also while the user drags
+  const now = loadedNow + shiftMs;
+  const totals = stateTotals(segmentsWithin(segments, now - range.ms, now));
+
+  // While another time loads, the chart keeps the segments that it has
+  if (status === 'failed' || (status === 'loading' && segments.length === 0)) {
+    return <p className="m-0 flex h-[13.75rem] items-center justify-center text-center text-zinc-300">{messageFor(status, 'machine state', range, end)}</p>;
   }
 
   return (
@@ -53,7 +68,7 @@ export function StateChart({ machine, range }: { machine: Machine; range: ChartR
         ))}
       </div>
       <div ref={ref} className="relative">
-        {width > 0 && <StatePlot segments={segments} totalsText={totalsText(totals, range)} now={now} range={range} width={width} />}
+        {width > 0 && <StatePlot segments={segments} totalsText={totalsText(totals, range)} now={now} range={range} live={end === null && shiftMs === 0} width={width} selection={selection} />}
       </div>
       <StateLegend explain className="gap-x-4" />
     </div>
@@ -67,23 +82,23 @@ function totalsText(totals: StateTotal[], range: ChartRange): string {
 
 interface StatePlotProps {
   segments: StateSegment[];
+  /** False when the chart looks back in time, so its end is not "Now" */
+  live: boolean;
+  selection: ZoomSelection | null;
   totalsText: string;
   now: number;
   range: ChartRange;
   width: number;
 }
 
-function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) {
+function StatePlot({ segments, totalsText, now, range, live, width, selection }: StatePlotProps) {
   // The hovered time, not the segment: the live segment grows, so the segment is found again on each render
   const [hoveredTime, setHoveredTime] = useState<number | undefined>();
   const hovered = hoveredTime === undefined ? undefined : segmentAt(segments, hoveredTime);
   const startTime = now - range.ms;
-  const x = (time: number) => ((time - startTime) / range.ms) * width;
+  const { x, timeAt } = timeScale(startTime, range.ms, 0, width);
 
-  const showSegment = (event: PointerEvent<SVGSVGElement>) => {
-    const offsetX = event.clientX - event.currentTarget.getBoundingClientRect().left;
-    setHoveredTime(startTime + (offsetX / width) * range.ms);
-  };
+  const showSegment = (event: PointerEvent<SVGSVGElement>) => setHoveredTime(timeAt(offsetXOf(event)));
 
   return (
     <>
@@ -91,7 +106,7 @@ function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) 
         width={width}
         height={SVG_HEIGHT}
         role="img"
-        aria-label={`Machine state in the last ${range.words}. ${totalsText}.`}
+        aria-label={`Machine state ${viewText(range, live ? null : now)}. ${totalsText}.`}
         onPointerMove={showSegment}
         onPointerLeave={() => setHoveredTime(undefined)}
         className="block"
@@ -109,7 +124,8 @@ function StatePlot({ segments, totalsText, now, range, width }: StatePlotProps) 
             className="stroke-zinc-50"
           />
         )}
-        <TimeLabels labels={timeLabels(range.ms, now)} x={x} y={BAND_HEIGHT + TIME_LABEL_GAP} />
+        <TimeLabels labels={timeLabels(range.ms, now, live)} x={x} y={BAND_HEIGHT + TIME_LABEL_GAP} />
+        <ZoomHighlight selection={selection} x={x} left={0} right={width} height={BAND_HEIGHT} />
       </svg>
       {hovered && <SegmentTooltip segment={hovered} left={Math.min(Math.max(0, x(hovered.start)), width - TOOLTIP_WIDTH)} />}
     </>

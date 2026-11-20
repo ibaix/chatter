@@ -1,7 +1,7 @@
+import { autoHistoryWindow } from '@local-chatter/shared';
 import { describe, expect, it } from 'vitest';
 import {
   axisTicks,
-  CHART_RANGE_MS,
   durationMs,
   formatChartNumber,
   GAP_MS,
@@ -9,10 +9,18 @@ import {
   lineParts,
   mergeHistory,
   nearestPoint,
-  recentPoints,
+  pannedEnd,
+  pointsFrom,
+  pointsWithin,
   stepPoints,
+  CHART_RANGES,
   timeLabels,
+  viewText,
   withLivePoint,
+  fittedOverviewEnd,
+  loadSpan,
+  timeScale,
+  zoomView,
 } from './historyChart';
 
 const point = (time: number, value: number) => ({ time, value });
@@ -38,11 +46,16 @@ describe('mergeHistory', () => {
   });
 });
 
-describe('recentPoints', () => {
-  it('keeps only the points of the last 10 minutes', () => {
-    const now = CHART_RANGE_MS + 5000;
+describe('pointsWithin', () => {
+  it('keeps the points from one time to another, both included', () => {
+    const points = [point(0, 1), point(5000, 2), point(9000, 3), point(12_000, 4)];
+    expect(pointsWithin(points, 5000, 9000)).toEqual([point(5000, 2), point(9000, 3)]);
+  });
+});
 
-    expect(recentPoints([point(0, 1), point(5000, 2), point(now, 3)], now)).toEqual([point(5000, 2), point(now, 3)]);
+describe('pointsFrom', () => {
+  it('keeps the points from a time on', () => {
+    expect(pointsFrom([point(0, 1), point(5000, 2), point(9000, 3)], 5000)).toEqual([point(5000, 2), point(9000, 3)]);
   });
 });
 
@@ -144,6 +157,42 @@ describe('timeLabels', () => {
     const [first] = timeLabels(7 * 86_400_000, now);
     expect(first.text).toBe(new Date(now - 7 * 86_400_000).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }));
   });
+
+  it('gives the time, not "Now", at the end of a chart that looks back in time', () => {
+    const end = Date.parse('2026-11-06T12:00:00.000Z');
+    const labels = timeLabels(3_600_000, end, false);
+    expect(labels[4].text).toBe(new Date(end).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }));
+  });
+});
+
+describe('pannedEnd', () => {
+  const NOW = Date.parse('2026-11-19T15:00:00.000Z');
+  const HOUR = 3_600_000;
+
+  it('goes back from now', () => {
+    expect(pannedEnd(null, -HOUR / 2, NOW)).toBe(NOW - HOUR / 2);
+  });
+
+  it('goes on from an end in the past', () => {
+    expect(pannedEnd(NOW - 2 * HOUR, HOUR / 4, NOW)).toBe(NOW - 2 * HOUR + HOUR / 4);
+  });
+
+  it('goes back to the live chart (null) when the step reaches now, so a chart never shows the future', () => {
+    expect(pannedEnd(NOW - HOUR / 4, HOUR / 2, NOW)).toBeNull();
+    expect(pannedEnd(null, HOUR / 2, NOW)).toBeNull();
+  });
+});
+
+describe('viewText', () => {
+  it('tells the range of a live chart', () => {
+    expect(viewText(CHART_RANGES[0], null)).toBe('in the last 10 minutes');
+  });
+
+  it('tells the start and the end of a chart that looks back in time', () => {
+    const end = Date.parse('2026-11-19T15:00:00.000Z');
+    const format = (time: number) => new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    expect(viewText(CHART_RANGES[1], end)).toBe(`from ${format(end - 3_600_000)} to ${format(end)}`);
+  });
 });
 
 describe('withLivePoint windows', () => {
@@ -169,5 +218,108 @@ describe('withLivePoint windows', () => {
 
   it('keeps every value when the window is 0', () => {
     expect(withLivePoint([point(0, 1)], point(1, 2), 0)).toEqual([point(0, 1), point(1, 2)]);
+  });
+});
+
+describe('zoomView', () => {
+  const NOW = Date.parse('2026-11-19T15:00:00.000Z');
+  const MINUTE = 60_000;
+
+  it('shows the highlighted time, with a server window small enough for detail', () => {
+    const view = zoomView(NOW - 70 * MINUTE, NOW - 60 * MINUTE, NOW);
+
+    expect(view.end).toBe(NOW - 60 * MINUTE);
+    expect(view.range).toMatchObject({ id: 'zoom', ms: 10 * MINUTE, words: '10 minutes', query: '-600s', window: '2s' });
+  });
+
+  it('stays live when the highlight reaches now', () => {
+    expect(zoomView(NOW - 5 * MINUTE, NOW, NOW).end).toBeNull();
+  });
+
+  it('makes a very short highlight 30 seconds long, around its middle', () => {
+    const view = zoomView(NOW - 10 * MINUTE, NOW - 10 * MINUTE + 4000, NOW);
+
+    expect(view.range.ms).toBe(30_000);
+    expect(view.end).toBe(NOW - 10 * MINUTE + 2000 + 15_000);
+  });
+
+  it('gives the words of the range, for the text under the title', () => {
+    expect(zoomView(NOW - 45_000, NOW - 5000, NOW).range.words).toBe('40 seconds');
+    expect(zoomView(NOW - 5 * 3_600_000, NOW - 3_600_000, NOW).range.words).toBe('4 hours');
+    expect(zoomView(NOW - 4 * 86_400_000, NOW - 86_400_000, NOW).range.words).toBe('3 days');
+  });
+});
+
+describe('fittedOverviewEnd', () => {
+  const NOW = Date.parse('2026-11-19T15:00:00.000Z');
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+
+  it('keeps the overview when the view is inside it', () => {
+    expect(fittedOverviewEnd(null, DAY, NOW - 3 * HOUR, HOUR, NOW)).toBeNull();
+    expect(fittedOverviewEnd(NOW - DAY, DAY, NOW - 30 * HOUR, HOUR, NOW)).toBe(NOW - DAY);
+  });
+
+  it('is live when the view is live', () => {
+    expect(fittedOverviewEnd(NOW - 2 * DAY, DAY, null, HOUR, NOW)).toBeNull();
+  });
+
+  it('moves back so that a view before the overview starts at its left edge', () => {
+    expect(fittedOverviewEnd(null, DAY, NOW - 25 * HOUR, 2 * HOUR, NOW)).toBe(NOW - 27 * HOUR + DAY);
+  });
+
+  it('moves on so that a view after the overview ends at its right edge, and is live again at now', () => {
+    expect(fittedOverviewEnd(NOW - 2 * DAY, DAY, NOW - 30 * HOUR, HOUR, NOW)).toBe(NOW - 30 * HOUR);
+    expect(fittedOverviewEnd(NOW - 2 * DAY, DAY, NOW - 1000, HOUR, NOW)).toBeNull();
+  });
+});
+
+describe('timeScale', () => {
+  it('turns a time into an x position inside the plot, and back', () => {
+    const scale = timeScale(1000, 600, 50, 300);
+
+    expect(scale.x(1000)).toBe(50);
+    expect(scale.x(1300)).toBe(200);
+    expect(scale.timeAt(200)).toBe(1300);
+  });
+});
+
+describe('loadSpan', () => {
+  const NOW = Date.parse('2026-11-19T15:00:00.000Z');
+  const MINUTE = 60_000;
+  const DAY = 24 * 60 * MINUTE;
+  const [TEN_MINUTES, , , SEVEN_DAYS] = CHART_RANGES;
+
+  it('loads one more range before a live chart, so a drag back shows data at once', () => {
+    expect(loadSpan(TEN_MINUTES, null, NOW)).toEqual({ query: '-20m', end: null });
+  });
+
+  it('loads one more range on each side of a chart in the past', () => {
+    expect(loadSpan(TEN_MINUTES, NOW - DAY, NOW)).toEqual({ query: '-30m', end: NOW - DAY + 10 * MINUTE });
+  });
+
+  it('ends now when the range after the chart gets to now', () => {
+    expect(loadSpan(TEN_MINUTES, NOW - 5 * MINUTE, NOW)).toEqual({ query: '-25m', end: null });
+  });
+
+  it('writes a long range in big units, because the server takes at most 6 digits', () => {
+    expect(loadSpan(SEVEN_DAYS, NOW - 30 * DAY, NOW).query).toBe('-21d');
+    const zoom = zoomView(NOW - 30 * DAY, NOW - 30 * DAY + 4 * DAY + 1000, NOW).range;
+    expect(loadSpan(zoom, NOW - 20 * DAY, NOW).query).toMatch(/^-\d{1,6}m$/);
+  });
+
+  it('gives a span that the server takes for each range button and for the biggest zoom', () => {
+    // The limits of the server: 6 digits, 31 days of state timeline, and 5000 points of history (one more for the first window)
+    const biggestZoom = zoomView(NOW - SEVEN_DAYS.ms, NOW - 1000, NOW + DAY).range;
+    for (const range of [...CHART_RANGES, biggestZoom]) {
+      const windowMs = durationMs(range.window ?? autoHistoryWindow(range.ms));
+      // Live, in the past, and in the past near now (a span that ends now, with no whole unit)
+      for (const end of [null, NOW - 100 * range.ms, NOW - range.ms / 2 - 1234]) {
+        const { query } = loadSpan(range, end, NOW);
+        expect(query, `${range.id} ending ${end}`).toMatch(/^-[1-9]\d{0,5}(s|m|h|d|w)$/);
+        expect(durationMs(query)).toBeLessThanOrEqual(31 * DAY);
+        expect(durationMs(query) / windowMs + 1).toBeLessThanOrEqual(5000);
+      }
+    }
   });
 });

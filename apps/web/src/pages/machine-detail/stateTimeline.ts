@@ -85,3 +85,10 @@ export function segmentTimesText(start: number, end: number): string {
   const sameDay = new Date(start).toDateString() === new Date(end).toDateString();
   return `${new Date(start).toLocaleString()} – ${sameDay ? new Date(end).toLocaleTimeString() : new Date(end).toLocaleString()}`;
 }
+
+/** The parts of the segments from `from` to `to`. A chart loads more time than it shows, and the totals are of the time that shows. */
+export function segmentsWithin(segments: StateSegment[], from: number, to: number): StateSegment[] {
+  return segments
+    .map(segment => ({ ...segment, start: Math.max(segment.start, from), end: Math.min(segment.end, to) }))
+    .filter(segment => segment.end > segment.start);
+}

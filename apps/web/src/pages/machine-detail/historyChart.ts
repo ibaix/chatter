@@ -2,8 +2,17 @@ import type { HistoryPoint } from '../../api/history';
 
 export type HistoryStatus = 'loading' | 'ready' | 'failed';
 
+/** A drag shorter than this, in pixels, is a click, for example to see a hover box */
+export const MIN_DRAG_PX = 5;
+
 /** The charts move on this often, also when no new value comes */
 export const CHART_CLOCK_TICK_MS = 5000;
+
+/**
+ * A chart waits this long after a move in time before it loads, so a quick series of moves (a scroll or a swipe)
+ * sends one request, not one for each step.
+ */
+export const MOVE_LOAD_DELAY_MS = 200;
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -18,7 +27,8 @@ export function durationMs(text: string): number {
 }
 
 export interface ChartRange {
-  id: '10m' | '1h' | '24h' | '7d';
+  /** A range button, or 'zoom' for a time that the user highlighted on the overview strip */
+  id: '10m' | '1h' | '24h' | '7d' | 'zoom';
   /** The words after "in the last" */
   words: string;
   ms: number;
@@ -36,8 +46,6 @@ export const CHART_RANGES: ChartRange[] = [
   { id: '7d', words: '7 days', ms: 7 * DAY, query: '-7d' },
 ];
 
-/** The chart shows the last 10 minutes at first */
-export const CHART_RANGE_MS = CHART_RANGES[0].ms;
 /** Points that are further apart than this have no data between them, so the line has a gap there */
 export const GAP_MS = 15_000;
 
@@ -73,8 +81,14 @@ export function mergeHistory(history: HistoryPoint[], live: HistoryPoint[]): His
   return [...history, ...live.filter(point => point.time > historyEnd)];
 }
 
-export function recentPoints(points: HistoryPoint[], now: number, rangeMs = CHART_RANGE_MS): HistoryPoint[] {
-  return points.filter(point => point.time >= now - rangeMs);
+/** The points from `from` to `to`, both included: for example the points in the time that a chart shows */
+export function pointsWithin(points: HistoryPoint[], from: number, to: number): HistoryPoint[] {
+  return points.filter(point => point.time >= from && point.time <= to);
+}
+
+/** The points from `from` on. The points after the end of a chart in the past stay, because a drag can show them. */
+export function pointsFrom(points: HistoryPoint[], from: number): HistoryPoint[] {
+  return points.filter(point => point.time >= from);
 }
 
 /**
@@ -148,21 +162,55 @@ function dayText(time: number): string {
   return new Date(time).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
 }
 
-/** Five labels under the chart, from the start of the range to "Now" */
-export function timeLabels(rangeMs: number, now: number): TimeLabel[] {
+/** Five labels under the chart, from the start of the range to its end. A live chart ends with "Now". */
+export function timeLabels(rangeMs: number, end: number, live = true): TimeLabel[] {
   const format = rangeMs > DAY ? dayText : clockText;
   return [4, 3, 2, 1, 0].map(quarter => {
-    const time = now - (rangeMs * quarter) / 4;
-    return { time, text: quarter === 0 ? 'Now' : format(time) };
+    const time = end - (rangeMs * quarter) / 4;
+    return { time, text: quarter === 0 && live ? 'Now' : format(time) };
   });
 }
 
+/**
+ * The end of the chart after a move of `deltaMs`: negative goes back in time, positive goes on.
+ * `end` null is the live chart, which ends now. A move that reaches now gives null, so the chart is live again.
+ */
+export function pannedEnd(end: number | null, deltaMs: number, now: number): number | null {
+  const next = (end ?? now) + deltaMs;
+  return next >= now ? null : next;
+}
+
+function dateTimeText(time: number): string {
+  return new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/** The time that a chart shows, after its description: "in the last hour", or "from Nov 19, 2:00 PM to Nov 19, 3:00 PM" */
+export function viewText(range: ChartRange, end: number | null): string {
+  if (end === null) return `in the last ${range.words}`;
+  return `from ${dateTimeText(end - range.ms)} to ${dateTimeText(end)}`;
+}
+
 /** The text in place of the chart while the history loads, when it fails, or when it is empty */
-export function messageFor(status: HistoryStatus, valueName: string, range: ChartRange): string {
+export function messageFor(status: HistoryStatus, valueName: string, range: ChartRange, end: number | null = null): string {
   const name = valueName.toLowerCase();
   if (status === 'loading') return `Loading the ${name} history…`;
   if (status === 'failed') return `Could not load the ${name} history. Reload the page to try again.`;
-  return `No ${name} in the last ${range.words}. Chatter saves it while the machine is connected.`;
+  return `No ${name} ${viewText(range, end)}. Chatter saves it while the machine is connected.`;
+}
+
+export interface TimeScale {
+  /** The x position of a time */
+  x: (time: number) => number;
+  /** The time at an x position: the reverse of `x` */
+  timeAt: (offsetX: number) => number;
+}
+
+/** The x positions of a plot that shows `rangeMs` from `startTime`, from `left` to `left + width` */
+export function timeScale(startTime: number, rangeMs: number, left: number, width: number): TimeScale {
+  return {
+    x: time => left + ((time - startTime) / rangeMs) * width,
+    timeAt: offsetX => startTime + ((offsetX - left) / width) * rangeMs,
+  };
 }
 
 /** The first time label starts at the left edge and the last one ends at the right edge, so both stay inside the chart */
@@ -170,4 +218,82 @@ export function timeLabelAnchor(index: number, labelCount: number): 'start' | 'm
   if (index === 0) return 'start';
   if (index === labelCount - 1) return 'end';
   return 'middle';
+}
+
+const SECOND = 1000;
+/** A zoom is at least this long, so a very small highlight still shows some time */
+const MIN_ZOOM_MS = 30 * SECOND;
+/** A zoomed chart asks for about this many windows, so it shows detail */
+const ZOOM_POINTS = 300;
+
+/** "40 seconds", "12 minutes", "4 hours" or "3 days", for the text under the title */
+function durationWords(ms: number): string {
+  if (ms < 2 * MINUTE) return `${Math.round(ms / SECOND)} seconds`;
+  if (ms < 2 * HOUR) return `${Math.round(ms / MINUTE)} minutes`;
+  if (ms < 2 * DAY) return `${Math.round(ms / HOUR)} hours`;
+  return `${Math.round(ms / DAY)} days`;
+}
+
+/** The range of a zoom of `ms`. Its window gives about ZOOM_POINTS points, and at least 1 second. */
+function zoomRange(ms: number): ChartRange {
+  const seconds = Math.round(ms / SECOND);
+  return {
+    id: 'zoom',
+    words: durationWords(ms),
+    ms: seconds * SECOND,
+    query: `-${seconds}s`,
+    window: `${Math.max(1, Math.round(seconds / ZOOM_POINTS))}s`,
+  };
+}
+
+/**
+ * The chart view of a time that the user highlighted, from `from` to `to`. A very short highlight grows to
+ * MIN_ZOOM_MS around its middle. A highlight that reaches now gives a live chart (end null).
+ */
+export function zoomView(from: number, to: number, now: number): { range: ChartRange; end: number | null } {
+  const ms = Math.max(to - from, MIN_ZOOM_MS);
+  const end = Math.min((from + to) / 2 + ms / 2, now);
+  return { range: zoomRange(ms), end: end >= now - SECOND ? null : end };
+}
+
+/**
+ * The end of the overview strip after the view changed. The overview shows `overviewMs` (the range button that
+ * the user picked last), and it always holds the view. It moves only when the view goes out of it.
+ * Null is an overview that ends now: it is live when the view is live, or when it gets to now.
+ */
+export function fittedOverviewEnd(
+  overviewEnd: number | null,
+  overviewMs: number,
+  viewEnd: number | null,
+  viewMs: number,
+  now: number,
+): number | null {
+  if (viewEnd === null) return null;
+  const end = overviewEnd ?? now;
+  const next = viewEnd > end ? viewEnd : viewEnd - viewMs < end - overviewMs ? viewEnd - viewMs + overviewMs : end;
+  if (next === end) return overviewEnd;
+  return next >= now - SECOND ? null : next;
+}
+
+/** The server takes a range of at most 6 digits, such as "-999999s" */
+const MAX_RANGE_DIGITS = 999_999;
+
+/** A time length as a range for the server, in the biggest unit that fits: "-20m", "-21d" or "-903s" */
+function rangeQuery(ms: number): string {
+  for (const [unit, unitMs] of [['d', DAY], ['h', HOUR], ['m', MINUTE]] as const) {
+    if (ms % unitMs === 0) return `-${ms / unitMs}${unit}`;
+  }
+  const seconds = Math.ceil(ms / SECOND);
+  return seconds <= MAX_RANGE_DIGITS ? `-${seconds}s` : `-${Math.ceil(ms / MINUTE)}m`;
+}
+
+/**
+ * The time that a chart loads: one more range before the time that it shows, and one more after it, up to now.
+ * A drag then shows data at once, and the next load comes in while the old data still shows.
+ * `end` null is a span that ends now.
+ */
+export function loadSpan(range: ChartRange, end: number | null, now: number): { query: string; end: number | null } {
+  const from = (end ?? now) - 2 * range.ms;
+  const to = end === null || end + range.ms >= now - SECOND ? null : end + range.ms;
+  return { query: rangeQuery((to ?? now) - from), end: to };
 }

@@ -416,6 +416,38 @@ describe('API Routes', () => {
       expect(noMachine.status).toBe(404);
     });
 
+    it('shows the time before `end` when it is given, so the chart can go back in time', async () => {
+      vi.useFakeTimers({ now: Date.UTC(2026, 10, 19, 12, 0), toFake: ['Date'] });
+      try {
+        const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+        statePeriods.open(machine.id, 'run-state', 'START', Date.UTC(2026, 10, 19, 9, 0));
+        statePeriods.close(machine.id, 'run-state', Date.UTC(2026, 10, 19, 10, 0));
+
+        const res = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-1h&end=2026-11-19T10:30:00.000Z`);
+
+        expect(res.body).toMatchObject({ from: '2026-11-19T09:30:00.000Z', to: '2026-11-19T10:30:00.000Z' });
+        expect(res.body.data.map((segment: { state: string }) => segment.state)).toEqual(['running', 'offline']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('treats an `end` in the future as now, and returns 400 for an `end` that is not a time', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      const future = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-1h&end=2999-01-01T00:00:00.000Z`);
+      const bad = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-1h&end=yesterday`);
+      // Without a zone, the time would be the local time of the server
+      const noZone = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-1h&end=2026-11-19T10:30:00`);
+      const offset = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-1h&end=2026-11-19T10:30:00%2B01:00`);
+
+      expect(Date.parse(future.body.to)).toBeLessThanOrEqual(Date.now());
+      expect(bad.status).toBe(400);
+      expect(bad.body.error).toBe('end must be a time with a zone, such as 2026-11-19T15:00:00Z');
+      expect(noZone.status).toBe(400);
+      expect(offset.body.to).toBe('2026-11-19T09:30:00.000Z');
+    });
+
     it('returns 400 for a range longer than 31 days', async () => {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
 
@@ -647,6 +679,38 @@ describe('API Routes', () => {
       expect(query).toMatchObject({ metric: 'chatter_spindle_speed', machineId: machine.id, windowMs: 10_000 });
       expect(query.from % 10_000).toBe(0);
       expect(query.to - query.from).toBeGreaterThanOrEqual(5 * 60_000);
+    });
+
+    it('reads the windows before `end` when it is given', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      await call('GET', `/api/machine/${machine.id}/history/spindle-speed?range=-10m&window=10s&end=2026-11-19T10:30:00.000Z`);
+
+      const query = history.windowAverages.mock.calls[0][0];
+      expect(query.to).toBe(Date.UTC(2026, 10, 19, 10, 30));
+      expect(query.from).toBe(Date.UTC(2026, 10, 19, 10, 20));
+    });
+
+    it('reads an `end` with an offset as that time, and an `end` in the future as now', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      await call('GET', `/api/machine/${machine.id}/history/spindle-speed?range=-10m&window=10s&end=2026-11-19T10:30:00%2B01:00`);
+      await call('GET', `/api/machine/${machine.id}/history/spindle-speed?range=-10m&window=10s&end=2999-01-01T00:00:00Z`);
+
+      expect(history.windowAverages.mock.calls[0][0].to).toBe(Date.UTC(2026, 10, 19, 9, 30));
+      expect(history.windowAverages.mock.calls[1][0].to).toBeLessThanOrEqual(Date.now());
+    });
+
+    it('returns 400 for an `end` that is not a time with a zone', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+
+      const bad = await call('GET', `/api/machine/${machine.id}/history/spindle-speed?range=-10m&end=yesterday`);
+      const noZone = await call('GET', `/api/machine/${machine.id}/history/spindle-speed?range=-10m&end=2026-11-19T10:30:00`);
+
+      expect(bad.status).toBe(400);
+      expect(bad.body.error).toBe('end must be a time with a zone, such as 2026-11-19T15:00:00Z');
+      expect(noZone.status).toBe(400);
+      expect(history.windowAverages).not.toHaveBeenCalled();
     });
 
     it('returns 503 when the history cannot be read', async () => {
