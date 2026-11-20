@@ -24,7 +24,7 @@ const TYPES: ChannelTypeInfo[] = [
   },
   {
     id: 'ntfy', name: 'ntfy', fields: [
-      { key: 'topic', label: 'Topic', kind: 'secret', required: true, generate: 'words' },
+      { key: 'topic', label: 'Topic', kind: 'text', required: true, generate: 'words' },
       { key: 'url', label: 'Server (optional)', kind: 'url', required: false, advanced: true },
       { key: 'token', label: 'Access token (optional)', kind: 'secret', required: false, advanced: true },
     ],
@@ -95,7 +95,7 @@ describe('ChannelForm', () => {
       renderForm();
       pickNtfy();
 
-      expect(screen.getByLabelText('Topic')).toHaveAttribute('type', 'text');
+      expect(screen.getByLabelText('Topic')).not.toHaveAttribute('type', 'password');
       expect(screen.getByLabelText('Topic')).toHaveAttribute('autocomplete', 'off');
     });
 
@@ -113,6 +113,12 @@ describe('ChannelForm', () => {
       expect(onSave.mock.calls[0][0].values.topic).toBe(topic);
     });
 
+    it('shows the saved topic when the admin opens a saved channel', () => {
+      renderForm({ channel: { ...slack, id: 'phones', type: 'ntfy', name: 'Phones', settings: { topic: 'maple-otter-lantern' }, hasSecret: {} } });
+
+      expect(screen.getByLabelText('Topic')).toHaveValue('maple-otter-lantern');
+    });
+
     it('keeps each other secret hidden, with no button', () => {
       renderForm();
       pickNtfy();
@@ -125,7 +131,7 @@ describe('ChannelForm', () => {
   describe('advanced fields', () => {
     const advancedGroup = () => screen.getByText('Advanced').closest('details')!;
     const ntfyChannel = (change: Partial<NotificationChannel>): NotificationChannel => ({
-      ...slack, id: 'phones', type: 'ntfy', name: 'Phones', settings: {}, hasSecret: { topic: true }, ...change,
+      ...slack, id: 'phones', type: 'ntfy', name: 'Phones', settings: { topic: 'maple-otter-lantern' }, hasSecret: {}, ...change,
     });
 
     it('puts the advanced fields under a closed Advanced heading', () => {
@@ -149,19 +155,19 @@ describe('ChannelForm', () => {
     });
 
     it('opens the Advanced heading for a saved channel with a value in an advanced field', () => {
-      renderForm({ channel: ntfyChannel({ settings: { url: 'https://ntfy.shop.local' } }) });
+      renderForm({ channel: ntfyChannel({ settings: { topic: 'maple-otter-lantern', url: 'https://ntfy.shop.local' } }) });
 
       expect(advancedGroup()).toHaveAttribute('open');
     });
 
     it('opens the Advanced heading for a saved channel with an advanced secret', () => {
-      renderForm({ channel: ntfyChannel({ hasSecret: { topic: true, token: true } }) });
+      renderForm({ channel: ntfyChannel({ hasSecret: { token: true } }) });
 
       expect(advancedGroup()).toHaveAttribute('open');
     });
 
     it('keeps the Advanced heading closed for a saved channel with no advanced value', () => {
-      renderForm({ channel: ntfyChannel({ settings: { url: '' } }) });
+      renderForm({ channel: ntfyChannel({ settings: { topic: 'maple-otter-lantern', url: '' } }) });
 
       expect(advancedGroup()).not.toHaveAttribute('open');
     });

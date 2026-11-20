@@ -120,30 +120,25 @@ interface SecretFieldProps extends TextFieldProps {
   onClearChange: (clear: boolean) => void;
 }
 
-/**
- * The server never sends a secret back. An empty box keeps the saved secret, and a secret that is not necessary can be deleted.
- * A secret with `generate` shows its new value, because the admin must type it in another app, for example an ntfy topic.
- */
+/** The server never sends a secret back. An empty box keeps the saved secret, and a secret that is not necessary can be deleted. */
 function SecretField({ field, value, isSaved, isCleared, onChange, onClearChange }: SecretFieldProps) {
   const canClear = isSaved && !field.required;
-  const isShown = field.generate !== undefined;
   return (
     <Field id={idOf(field)} label={field.label} hint={field.hint}>
       <div className="flex items-center gap-2">
         <TextInput
           id={idOf(field)}
-          type={isShown ? 'text' : 'password'}
+          type="password"
           mono={field.mono}
           className="flex-1"
           value={value}
           placeholder={isSaved && !isCleared ? SAVED_SECRET_PLACEHOLDER : undefined}
           onChange={event => onChange(event.target.value)}
           aria-describedby={hintIdOf(field)}
-          // new-password stops a browser from filling in a saved login. A shown value is not a password.
-          autoComplete={isShown ? 'off' : 'new-password'}
+          // new-password stops a browser from filling in a saved login
+          autoComplete="new-password"
           spellCheck={false}
         />
-        {field.generate && <GenerateButton field={field} onChange={onChange} />}
       </div>
       {canClear && (
         <label className="flex items-center gap-2 text-xs text-zinc-200">

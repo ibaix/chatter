@@ -3,7 +3,7 @@
 These endpoints are for an **Admin** only. Another role gets `403`.
 For what notifications do, see [Notifications](../guide/notifications.md).
 
-The server never sends a secret value back, such as the Twilio auth token, the webhook secret, the Apprise password, the Discord webhook address, the Telegram bot token, or the ntfy topic and access token.
+The server never sends a secret value back, such as the Twilio auth token, the webhook secret, the Apprise password, the Discord webhook address, the Telegram bot token, or the ntfy access token.
 `hasSecret` tells which secrets have a saved value, for example `{ "authToken": true }`.
 
 ## Channel types

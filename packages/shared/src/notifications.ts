@@ -25,7 +25,7 @@ export interface ChannelField {
   mono?: boolean;
   /**
    * 'words': the form shows a button that fills the box with three random words, for example a hard-to-guess topic.
-   * The form then shows the value of a secret field, because the admin must type it in another app.
+   * Only for a `text` field, because the admin must see the value to type it in another app.
    */
   generate?: 'words';
   /** The form puts the field under a closed "Advanced" heading. Only for a field that most admins leave empty. */

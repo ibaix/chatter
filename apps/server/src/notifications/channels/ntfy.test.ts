@@ -23,9 +23,9 @@ function firstProblem(values: unknown): string | undefined {
 }
 
 describe('ntfyChannel', () => {
-  it('asks for the server, a topic that stays secret, and an access token that stays secret', () => {
+  it('asks for a topic that Chatter shows, the server, and an access token that stays secret', () => {
     expect(ntfyChannel.fields.map(field => [field.key, field.label, field.kind, field.required])).toEqual([
-      ['topic', 'Topic', 'secret', true],
+      ['topic', 'Topic', 'text', true],
       ['url', 'Server (optional)', 'url', false],
       ['token', 'Access token (optional)', 'secret', false],
     ]);

@@ -52,7 +52,7 @@ Each alert sends 2 messages: one when it starts, and one when it ends.
 - **Edit** opens the channel. Change it, then click **Save channel**.
 - To delete a channel, click **Edit**, then **Delete channel**, then **Delete the channel**. Chatter stops its waiting messages. Its sent and failed messages stay in the message list as **Deleted channel**, until Chatter removes them.
 
-After you save, Chatter never shows a secret again, such as the Twilio auth token, the Apprise password, the Discord webhook address, the Telegram bot token, or the ntfy topic and access token. To keep the saved secret, leave its box empty.
+After you save, Chatter never shows a secret again, such as the Twilio auth token, the Apprise password, the Discord webhook address, the Telegram bot token, or the ntfy access token. To keep the saved secret, leave its box empty.
 To change it, type the new one. To stop sending an optional secret, for example a webhook secret or an ntfy access token, select **Delete the saved secret**.
 
 ## Text messages with Twilio
@@ -230,7 +230,7 @@ The message has the same text as a text message.
 1. Install the **ntfy** app on each phone.
 2. In Chatter, add a channel of the type **ntfy**.
 3. In **Topic**, click **Make a random Topic**. Chatter fills in three random words, for example `maple-otter-lantern`. You can also type your own topic name. Use only letters, digits, `-` and `_`, and use a name that other people cannot guess.
-4. In the ntfy app on each phone, subscribe to the same topic. Chatter never shows the topic again after you save, so write it down before you save.
+4. In the ntfy app on each phone, subscribe to the same topic. To add a phone later, open the channel in Chatter and read the topic there.
 5. Only for your own ntfy server, or for a topic that needs a login: open **Advanced**.
    - **Server (optional):** the address of your own ntfy server, for example `http://ntfy.shop.local`. Do not put the topic in the address. Leave it empty for `ntfy.sh`. If you type the address of `ntfy.sh`, type only `https://ntfy.sh`, with no path after it. In the ntfy app, type the same server address.
    - **Access token (optional):** only when the topic needs a login. In ntfy, make a token under **Account > Access tokens**.

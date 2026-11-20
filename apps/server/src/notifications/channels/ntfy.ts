@@ -29,14 +29,15 @@ type NtfySettings = z.infer<typeof ntfySettings>;
 /**
  * Sends each message as a push message to a topic of ntfy, on ntfy.sh or on a server of the shop.
  * Chatter sends JSON, not headers, because a header cannot have a machine name with accents.
- * On ntfy.sh, each person that knows the topic can read it, so the topic is a secret field.
+ * Chatter shows the topic, so the admin can subscribe a new phone. On ntfy.sh, each person who knows the topic can read it,
+ * so the error texts never show it.
  */
 export const ntfyChannel: ChannelDefinition<NtfySettings> = {
   id: 'ntfy',
   name: 'ntfy',
   fields: [
     {
-      key: 'topic', label: 'Topic', kind: 'secret', required: true, mono: true, generate: 'words',
+      key: 'topic', label: 'Topic', kind: 'text', required: true, mono: true, generate: 'words',
       hint: 'Use a name that other people cannot guess, or click Make a random Topic. On ntfy.sh, each person who knows the name can read the alerts.',
     },
     {
