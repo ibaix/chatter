@@ -159,11 +159,11 @@ export function timeLabels(rangeMs: number, end: number, live = true): TimeLabel
 }
 
 /**
- * The end of the chart after a step of `step` ranges: negative goes back in time, positive goes on.
- * `end` null is the live chart, which ends now. A step that reaches now gives null, so the chart is live again.
+ * The end of the chart after a move of `deltaMs`: negative goes back in time, positive goes on.
+ * `end` null is the live chart, which ends now. A move that reaches now gives null, so the chart is live again.
  */
-export function pannedEnd(end: number | null, step: number, rangeMs: number, now: number): number | null {
-  const next = (end ?? now) + step * rangeMs;
+export function pannedEnd(end: number | null, deltaMs: number, now: number): number | null {
+  const next = (end ?? now) + deltaMs;
   return next >= now ? null : next;
 }
 

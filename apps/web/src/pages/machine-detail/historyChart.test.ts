@@ -162,17 +162,17 @@ describe('pannedEnd', () => {
   const NOW = Date.parse('2026-11-19T15:00:00.000Z');
   const HOUR = 3_600_000;
 
-  it('goes back by a part of the range from now', () => {
-    expect(pannedEnd(null, -0.5, HOUR, NOW)).toBe(NOW - HOUR / 2);
+  it('goes back from now', () => {
+    expect(pannedEnd(null, -HOUR / 2, NOW)).toBe(NOW - HOUR / 2);
   });
 
   it('goes on from an end in the past', () => {
-    expect(pannedEnd(NOW - 2 * HOUR, 0.25, HOUR, NOW)).toBe(NOW - 2 * HOUR + HOUR / 4);
+    expect(pannedEnd(NOW - 2 * HOUR, HOUR / 4, NOW)).toBe(NOW - 2 * HOUR + HOUR / 4);
   });
 
   it('goes back to the live chart (null) when the step reaches now, so a chart never shows the future', () => {
-    expect(pannedEnd(NOW - HOUR / 4, 0.5, HOUR, NOW)).toBeNull();
-    expect(pannedEnd(null, 0.5, HOUR, NOW)).toBeNull();
+    expect(pannedEnd(NOW - HOUR / 4, HOUR / 2, NOW)).toBeNull();
+    expect(pannedEnd(null, HOUR / 2, NOW)).toBeNull();
   });
 });
 

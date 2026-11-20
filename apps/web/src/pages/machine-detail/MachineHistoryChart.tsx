@@ -1,6 +1,6 @@
 import { historyWindowValue } from '@local-chatter/shared';
 import { cn } from '@toolpath/ui';
-import { useEffect, useId, useRef, useState, type PointerEvent } from 'react';
+import { useId, useState, type PointerEvent } from 'react';
 import type { HistoryPoint } from '../../api/history';
 import { CHOICE_HEIGHT, ChoiceMenu } from '../../components/ui/ChoiceMenu';
 import { RangeButtons } from '../../components/ui/RangeButtons';
@@ -8,27 +8,26 @@ import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 import { ChartOverview } from './ChartOverview';
-import { AXIS_LABEL_CLASS, ChartTooltip, MIN_DRAG_PX, PanButtons, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
+import { AXIS_LABEL_CLASS, ChartTooltip, PanButtons, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
 import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
   axisTicks,
   CHART_RANGES,
-  fittedOverviewEnd,
   formatChartNumber,
   lineParts,
   messageFor,
   nearestPoint,
   stepPoints,
-  pannedEnd,
   timeLabels,
   viewText,
-  zoomView,
   type ChartRange,
 } from './historyChart';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
 import { StateChart } from './StateChart';
 import { liveStateOf, segmentAt, type StateSegment } from './stateTimeline';
+import { useChartDrag } from './useChartDrag';
 import { useChartHistory } from './useChartHistory';
+import { useChartView } from './useChartView';
 import { useStateTimeline } from './useStateTimeline';
 
 const MARGIN = { top: 12, right: 16, bottom: 38, left: 52 };
@@ -37,10 +36,6 @@ const STRIP_GAP = 5;
 const STRIP_HEIGHT = 6;
 /** The Earlier and Later buttons move the time by half the range */
 const BUTTON_STEP = 0.5;
-/** One step of a sideways scroll moves the time by a quarter of the range */
-const WHEEL_STEP = 0.25;
-/** How far a sideways scroll goes, in pixels, before the time moves one step */
-const WHEEL_STEP_PX = 60;
 /** The space between a value label and the left end of its grid line */
 const VALUE_LABEL_GAP = 8;
 /** The distance from the bottom of the chart to the time labels */
@@ -56,23 +51,6 @@ function livePointOf(machine: Machine, value: ChartValue): HistoryPoint | null {
   return { time: Date.parse(machine.lastPollTime), value: liveValue };
 }
 
-/** The time in the chart, and the time in the overview strip under it */
-interface ChartView {
-  /** The range button that the user picked last: the strip shows this much time */
-  overview: ChartRange;
-  /** The end of the strip, or null for a strip that ends now */
-  overviewEnd: number | null;
-  /** The time in the chart: a range button, or a zoom */
-  range: ChartRange;
-  /** The end of the chart, or null for the live chart that ends now */
-  end: number | null;
-}
-
-/** The live view of a range button: the chart and the strip show the same time, up to now */
-function liveView(range: ChartRange): ChartView {
-  return { overview: range, overviewEnd: null, range, end: null };
-}
-
 interface MachineHistoryChartProps {
   machine: Machine;
   /** The choices that the menu offers */
@@ -85,79 +63,11 @@ interface MachineHistoryChartProps {
 
 /** One machine value, or the machine state, over time, with a menu for the value and buttons for the time range */
 function MachineHistoryChart({ machine, choices, choice, onChoose, className }: MachineHistoryChartProps) {
-  const [view, setView] = useState<ChartView>(() => liveView(CHART_RANGES[0]));
+  const { view, pick, moveBy, pan, showNow, zoomTo, clearZoom, zoomed } = useChartView();
   const { range, end } = view;
-  const wheelDelta = useRef(0);
-
-  /** Shows another time in the chart. The overview strip moves with it only when the time goes out of the strip. */
-  const show = (next: (current: ChartView) => Pick<ChartView, 'range' | 'end'>) => setView(current => {
-    const shown = next(current);
-    const overviewEnd = fittedOverviewEnd(current.overviewEnd, current.overview.ms, shown.end, shown.range.ms, Date.now());
-    return { ...current, ...shown, overviewEnd };
-  });
-  const moveBy = (deltaMs: number) => show(({ range: shownRange, end: shownEnd }) => ({
-    range: shownRange,
-    end: pannedEnd(shownEnd, deltaMs / shownRange.ms, shownRange.ms, Date.now()),
-  }));
-  const pan = (step: number) => moveBy(step * range.ms);
-  /** Shows the full time of the overview strip again, at the place in time where the strip is */
-  const clearZoom = () => setView(current => ({ ...current, range: current.overview, end: current.overviewEnd }));
-  /** Shows the time that the user highlighted. The range buttons and the clear button show the wider times again. */
-  const zoomTo = (from: number, to: number) => show(() => zoomView(from, to, Date.now()));
-
-  /**
-   * A sideways scroll (trackpad, or Shift and the mouse wheel) moves the time. An up or down scroll stays with the page.
-   * The chart stops a sideways scroll, so the browser does not go back a page on a swipe.
-   */
-  const scrollTime = (event: WheelEvent) => {
-    const sideways = event.shiftKey && event.deltaX === 0 ? event.deltaY : event.deltaX;
-    if (!event.shiftKey && Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
-    event.preventDefault();
-    wheelDelta.current += sideways;
-    if (Math.abs(wheelDelta.current) < WHEEL_STEP_PX) return;
-    pan(Math.sign(wheelDelta.current) * WHEEL_STEP);
-    wheelDelta.current = 0;
-  };
-
-  const chartBody = useRef<HTMLDivElement>(null);
-  // React listens to the wheel passively, so its handler cannot stop the scroll
-  useEffect(() => {
-    const body = chartBody.current;
-    body?.addEventListener('wheel', scrollTime, { passive: false });
-    return () => body?.removeEventListener('wheel', scrollTime);
-  });
-
   const isStateChart = choice.id === MACHINE_STATE.id;
-  /** Where a drag on the chart started, and the width of the plot then */
-  const dragStart = useRef<{ x: number; plotWidth: number } | null>(null);
-  /**
-   * How far a drag moves the time, in milliseconds: negative goes back. While the user drags, the chart draws the
-   * data that it loaded around its time (loadSpan). The new time loads once, when the drag ends.
-   */
-  const [shiftMs, setShiftMs] = useState(0);
-  /** The time that a drag of `x` pixels moves. A drag to the right goes back. A drag cannot go after now. */
-  const dragMs = (x: number, plotWidth: number) => Math.min((-x / plotWidth) * range.ms, end === null ? 0 : Date.now() - end);
-
-  const startDrag = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    const margins = isStateChart ? 0 : MARGIN.left + MARGIN.right;
-    dragStart.current = { x: event.clientX, plotWidth: event.currentTarget.getBoundingClientRect().width - margins };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-  };
-  const followDrag = (event: PointerEvent<HTMLDivElement>) => {
-    const start = dragStart.current;
-    if (start && start.plotWidth > 0) setShiftMs(dragMs(event.clientX - start.x, start.plotWidth));
-  };
-  const endDrag = (event: PointerEvent<HTMLDivElement>) => {
-    const start = dragStart.current;
-    dragStart.current = null;
-    setShiftMs(0);
-    if (!start || start.plotWidth <= 0) return;
-    // A small move is a click, for example to see a hover box
-    if (Math.abs(event.clientX - start.x) < MIN_DRAG_PX) return;
-    const moved = dragMs(event.clientX - start.x, start.plotWidth);
-    if (moved !== 0) moveBy(moved);
-  };
+  const drag = useChartDrag({ rangeMs: range.ms, end, margins: isStateChart ? 0 : MARGIN.left + MARGIN.right, onMove: moveBy });
+  const { shiftMs } = drag;
 
   /** The time that the user highlights on the overview strip. The chart shades it also. */
   const [selection, setSelection] = useState<ZoomSelection | null>(null);
@@ -177,20 +87,17 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
             canGoLater={end !== null}
             onEarlier={() => pan(-BUTTON_STEP)}
             onLater={() => pan(BUTTON_STEP)}
-            onNow={() => show(current => ({ range: current.range, end: null }))}
+            onNow={showNow}
           />
-          <RangeButtons options={CHART_RANGES} value={range} onChange={next => setView(liveView(next))} />
+          <RangeButtons options={CHART_RANGES} value={range} onChange={pick} />
         </div>
       </div>
       <div
         role="group"
         aria-label="Chart: drag or scroll sideways to move in time"
-        ref={chartBody}
-        onPointerDown={startDrag}
-        onPointerMove={followDrag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        className={cn('flex touch-pan-y flex-col gap-2.5 overflow-hidden select-none', dragStart.current ? 'cursor-grabbing' : 'cursor-grab')}
+        ref={drag.bodyRef}
+        {...drag.handlers}
+        className={cn('flex touch-pan-y flex-col gap-2.5 overflow-hidden select-none', drag.dragging ? 'cursor-grabbing' : 'cursor-grab')}
       >
         {isStateChart ? (
           <StateChart machine={machine} range={range} end={end} shiftMs={shiftMs} selection={selection} />
@@ -210,7 +117,7 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
         right={isStateChart ? 0 : MARGIN.right}
         onMove={moveBy}
         onZoom={zoomTo}
-        onClearZoom={range === view.overview ? undefined : clearZoom}
+        onClearZoom={zoomed ? clearZoom : undefined}
       />
     </section>
   );
