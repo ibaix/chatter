@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   hasMachinePlaceholder,
+  isEventSubject,
   isSameRule,
   ruleName,
   ruleQuery,
@@ -31,6 +32,16 @@ describe('ruleQuery', () => {
     expect(ruleQuery(offline, 'haas_1')).toBe('chatter_connected{machine="haas_1"} == 0');
     expect(ruleQuery({ ...offline, subject: 'in-alarm' }, 'haas_1')).toBe('chatter_alarm{machine="haas_1"} == 1');
     expect(ruleQuery({ ...offline, subject: 'emergency-stop' }, 'haas_1')).toBe('chatter_emergency{machine="haas_1"} == 1');
+  });
+
+  it('fires "program ended" once: the program ended, the machine ran in the last minute, and no alarm or emergency stop came in it', () => {
+    const programEnded: AlertRule = { ...spindleLoadRule, subject: 'program-ended', limit: 0 };
+    expect(ruleQuery(programEnded, 'haas_1')).toBe(
+      'chatter_program_ended{machine="haas_1"} == 1'
+      + ' and on(machine) max_over_time(chatter_running{machine="haas_1"}[1m]) == 1'
+      + ' unless on(machine) max_over_time(chatter_alarm{machine="haas_1"}[1m]) == 1'
+      + ' unless on(machine) max_over_time(chatter_emergency{machine="haas_1"}[1m]) == 1',
+    );
   });
 
   it('puts the machine id in place of each $machine in a custom query', () => {
@@ -73,6 +84,10 @@ describe('ruleName', () => {
     expect(ruleName({ ...spindleLoadRule, subject: 'not-connected' })).toBe('Not connected');
   });
 
+  it('says only the event for an event rule', () => {
+    expect(ruleName({ ...spindleLoadRule, subject: 'program-ended' })).toBe('Program ended');
+  });
+
   it('uses the name of a custom query, or "Custom query" when it has none', () => {
     const custom: AlertRule = { id: 'r2', kind: 'query', enabled: true, name: '  Slow spindle ', query: 'x', forMinutes: 1, severity: 'warning' };
     expect(ruleName(custom)).toBe('Slow spindle');
@@ -86,6 +101,14 @@ describe('STARTER_RULES', () => {
       ['In alarm', 0, 'critical', true],
       ['Emergency stop', 0, 'critical', true],
     ]);
+  });
+});
+
+describe('isEventSubject', () => {
+  it('is true only for a one-time event, which sends no "OK" message when it clears', () => {
+    expect(isEventSubject('program-ended')).toBe(true);
+    expect(isEventSubject('in-alarm')).toBe(false);
+    expect(isEventSubject('spindle-load')).toBe(false);
   });
 });
 

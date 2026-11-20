@@ -38,7 +38,7 @@ const NEW_QUERY_RULE: Omit<QueryAlertRule, 'id'> = {
 
 /** A limit to start from, when a rule changes to a value with a limit */
 const STARTING_LIMITS: Record<AlertSubject, number> = {
-  'spindle-speed': 10000, 'spindle-load': 90, 'part-count': 100, 'not-connected': 0, 'in-alarm': 0, 'emergency-stop': 0,
+  'spindle-speed': 10000, 'spindle-load': 90, 'part-count': 100, 'not-connected': 0, 'in-alarm': 0, 'emergency-stop': 0, 'program-ended': 0,
 };
 
 let newRuleCount = 0;
