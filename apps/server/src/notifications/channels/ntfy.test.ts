@@ -62,6 +62,13 @@ describe('ntfyChannel', () => {
     expect((await sent(MESSAGE, { ...settings, url: 'https://shop.local/ntfy/' })).request.url).toBe('https://shop.local/ntfy/');
   });
 
+  it('sends to ntfy.sh with no login when the server and the token are empty, as the form sends them', async () => {
+    const { request } = await sent(MESSAGE, { ...settings, url: '', token: '' });
+
+    expect(request.url).toBe('https://ntfy.sh/');
+    expect(new Headers(request.init.headers).get('authorization')).toBeNull();
+  });
+
   it('sends the access token as a Bearer token', async () => {
     const { request } = await sent(MESSAGE, { ...settings, token: TOKEN });
 
@@ -121,6 +128,17 @@ describe('ntfyChannel', () => {
       .toEqual({ ok: false, retry: false, error: 'ntfy refused the message: cannot publish to https://ntfy.sh/(topic)/json.' });
   });
 
+  it('cuts a long reason of ntfy, and removes its period', async () => {
+    expect(await resultFor(400, { error: `${'x'.repeat(300)}.` }))
+      .toEqual({ ok: false, retry: false, error: `ntfy refused the message: ${'x'.repeat(200)}.` });
+    expect(await resultFor(400, { error: 'invalid request.' }))
+      .toEqual({ ok: false, retry: false, error: 'ntfy refused the message: invalid request.' });
+  });
+
+  it.each([null, { code: 40009 }, { error: '' }])('tells to check the server for a 400 with no reason: %j', async answer => {
+    expect(await resultFor(400, answer)).toEqual({ ok: false, retry: false, error: 'ntfy answered 400. Check the server address.' });
+  });
+
   it('tells to check the server for another refusal', async () => {
     expect(await resultFor(404)).toEqual({ ok: false, retry: false, error: 'ntfy answered 404. Check the server address.' });
   });
@@ -157,7 +175,7 @@ describe('ntfyChannel', () => {
       expect(ntfyChannel.settings.safeParse({ topic: TOPIC, url: 'http://192.168.1.20:8080', token: TOKEN }).success).toBe(true);
     });
 
-    it('treats an empty server and an empty token as not set', () => {
+    it('accepts an empty server and an empty token, as the form sends them', () => {
       expect(ntfyChannel.settings.parse({ topic: TOPIC, url: '', token: '' })).toEqual({ topic: TOPIC, url: '', token: '' });
     });
 

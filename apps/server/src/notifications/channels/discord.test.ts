@@ -73,6 +73,8 @@ describe('discordChannel', () => {
       ['an alert that ended', { kind: 'ended' as const, severity: 'critical' as const }, 0x2ecc71],
       ['a test message', { kind: 'test' as const, severity: null }, 0x95a5a6],
       ['a message with no level', { severity: null }, 0x95a5a6],
+      ['combined critical alerts', { kind: 'combined' as const, severity: 'critical' as const }, 0xe74c3c],
+      ['"And 7 more alerts"', { kind: 'more' as const, severity: null }, 0x95a5a6],
     ])('has the color of %s', async (_name, change, color) => {
       const body = await sendAndGetBody({ ...MESSAGE, ...change });
 

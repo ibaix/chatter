@@ -98,6 +98,21 @@ describe('telegramChannel', () => {
     });
   });
 
+  it('cuts a long reason of Telegram, and removes its period', async () => {
+    expect(await resultForJson(400, { ok: false, description: `Bad Request: ${'x'.repeat(300)}.` }))
+      .toEqual({ ok: false, retry: false, error: `Telegram refused the message: ${`Bad Request: ${'x'.repeat(300)}`.slice(0, 200)}.` });
+    expect(await resultForJson(400, { ok: false, description: 'Bad Request: message text is empty.' }))
+      .toEqual({ ok: false, retry: false, error: 'Telegram refused the message: Bad Request: message text is empty.' });
+  });
+
+  it('gives the reason when the new chat ID of a supergroup is not a number', async () => {
+    const answer = { ok: false, description: 'Bad Request: group chat was upgraded to a supergroup chat', parameters: { migrate_to_chat_id: 'x' } };
+
+    expect(await resultForJson(400, answer)).toEqual({
+      ok: false, retry: false, error: 'Telegram refused the message: Bad Request: group chat was upgraded to a supergroup chat.',
+    });
+  });
+
   it('gives the reason of Telegram for another 400', async () => {
     expect(await resultForJson(400, { ok: false, error_code: 400, description: 'Bad Request: message text is empty' }))
       .toEqual({ ok: false, retry: false, error: 'Telegram refused the message: Bad Request: message text is empty.' });
