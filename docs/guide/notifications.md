@@ -228,13 +228,13 @@ The message has the same text as a text message.
 [ntfy](https://ntfy.sh) sends push messages to the ntfy app on Android and iPhone. You can use the free public server `ntfy.sh`, or run your own ntfy server in the shop.
 
 1. Install the **ntfy** app on each phone.
-2. Select a **topic** name that other people cannot guess, for example `chatter-x7k2p9`. Use only letters, digits, `-` and `_`.
-3. In the ntfy app, subscribe to the topic. For your own server, type its address in the app too.
-4. In Chatter, add a channel of the type **ntfy**:
-   - **Topic:** the topic from step 2. Chatter never shows it again after you save.
-   - **Server (optional):** only for your own ntfy server, for example `http://ntfy.shop.local`. Do not put the topic in the address. Leave it empty for `ntfy.sh`. If you type the address of `ntfy.sh`, type only `https://ntfy.sh`, with no path after it.
+2. In Chatter, add a channel of the type **ntfy**.
+3. In **Topic**, click **Make a random Topic**. Chatter fills in three random words, for example `maple-otter-lantern`. You can also type your own topic name. Use only letters, digits, `-` and `_`, and use a name that other people cannot guess.
+4. In the ntfy app on each phone, subscribe to the same topic. Chatter never shows the topic again after you save, so write it down before you save.
+5. Only for your own ntfy server, or for a topic that needs a login: open **Advanced**.
+   - **Server (optional):** the address of your own ntfy server, for example `http://ntfy.shop.local`. Do not put the topic in the address. Leave it empty for `ntfy.sh`. If you type the address of `ntfy.sh`, type only `https://ntfy.sh`, with no path after it. In the ntfy app, type the same server address.
    - **Access token (optional):** only when the topic needs a login. In ntfy, make a token under **Account > Access tokens**.
-5. Click **Send test**.
+6. Click **Send test**.
 
 ::: warning
 On `ntfy.sh`, a topic has no login. Each person who knows the topic name can read your alerts and send messages to it. Use a name that is hard to guess, or use an access token on a reserved topic or on your own server.

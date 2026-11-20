@@ -12,7 +12,7 @@ The server never sends a secret value back, such as the Twilio auth token, the w
 |--------|----------|-------------|
 | GET | `/api/notification-types` | The channel types that this Chatter knows, with the fields of their form |
 
-Each type is `{ id, name, fields, note? }`. Each field is `{ key, label, kind, required, hint?, mono? }`.
+Each type is `{ id, name, fields, note? }`. Each field is `{ key, label, kind, required, hint?, mono?, generate?, advanced? }`. With `generate: 'words'`, the form has a button that fills the box with three random words. With `advanced: true`, the form puts the field under a closed **Advanced** heading.
 `kind` is `text`, `secret`, `url`, or `phone-list`. The value of a `phone-list` field is a list of phone numbers. The value of each other field is one text.
 The types are `twilio-sms`, `webhook`, `apprise`, `discord`, `telegram`, and `ntfy`.
 

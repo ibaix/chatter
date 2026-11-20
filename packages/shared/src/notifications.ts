@@ -23,6 +23,13 @@ export interface ChannelField {
   required: boolean;
   /** Show the value in the mono font, for ids and web addresses */
   mono?: boolean;
+  /**
+   * 'words': the form shows a button that fills the box with three random words, for example a hard-to-guess topic.
+   * The form then shows the value of a secret field, because the admin must type it in another app.
+   */
+  generate?: 'words';
+  /** The form puts the field under a closed "Advanced" heading. Only for a field that most admins leave empty. */
+  advanced?: boolean;
 }
 
 /** A channel type that the server knows, from GET /api/notification-types */

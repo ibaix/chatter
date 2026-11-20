@@ -22,6 +22,13 @@ const TYPES: ChannelTypeInfo[] = [
       { key: 'secret', label: 'Secret (optional)', kind: 'secret', required: false },
     ],
   },
+  {
+    id: 'ntfy', name: 'ntfy', fields: [
+      { key: 'topic', label: 'Topic', kind: 'secret', required: true, generate: 'words' },
+      { key: 'url', label: 'Server (optional)', kind: 'url', required: false, advanced: true },
+      { key: 'token', label: 'Access token (optional)', kind: 'secret', required: false, advanced: true },
+    ],
+  },
 ];
 
 const MACHINES = [{ id: 'haas-vf2', name: 'Haas VF-2' }, { id: 'okuma', name: 'Okuma LB3000' }];
@@ -70,6 +77,100 @@ describe('ChannelForm', () => {
     renderForm();
 
     expect(screen.getByLabelText('Name')).toHaveAttribute('autocomplete', 'off');
+  });
+
+  describe('a field that Chatter can fill with random words', () => {
+    const pickNtfy = () => fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'ntfy' } });
+
+    it('fills the box with three random words when the admin clicks the button', () => {
+      renderForm();
+      pickNtfy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Make a random Topic' }));
+
+      expect((screen.getByLabelText('Topic') as HTMLInputElement).value).toMatch(/^[a-z]+-[a-z]+-[a-z]+$/);
+    });
+
+    it('shows the value, so the admin can type it in the other app, and keeps the browser from filling it in', () => {
+      renderForm();
+      pickNtfy();
+
+      expect(screen.getByLabelText('Topic')).toHaveAttribute('type', 'text');
+      expect(screen.getByLabelText('Topic')).toHaveAttribute('autocomplete', 'off');
+    });
+
+    it('sends the random words when the admin saves', async () => {
+      const onSave = vi.fn().mockResolvedValue(true);
+      renderForm({ onSave });
+      pickNtfy();
+      type('Name', 'Shop phones');
+      fireEvent.click(screen.getByRole('button', { name: 'Make a random Topic' }));
+      const topic = (screen.getByLabelText('Topic') as HTMLInputElement).value;
+
+      fireEvent.click(screen.getByRole('button', { name: 'Save channel' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+      expect(onSave.mock.calls[0][0].values.topic).toBe(topic);
+    });
+
+    it('keeps each other secret hidden, with no button', () => {
+      renderForm();
+      pickNtfy();
+
+      expect(screen.getByLabelText('Access token (optional)')).toHaveAttribute('type', 'password');
+      expect(screen.getAllByRole('button', { name: /^Make a random/ })).toHaveLength(1);
+    });
+  });
+
+  describe('advanced fields', () => {
+    const advancedGroup = () => screen.getByText('Advanced').closest('details')!;
+    const ntfyChannel = (change: Partial<NotificationChannel>): NotificationChannel => ({
+      ...slack, id: 'phones', type: 'ntfy', name: 'Phones', settings: {}, hasSecret: { topic: true }, ...change,
+    });
+
+    it('puts the advanced fields under a closed Advanced heading', () => {
+      renderForm();
+      fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'ntfy' } });
+
+      const group = advancedGroup();
+      expect(group).not.toHaveAttribute('open');
+      expect(group).toContainElement(screen.getByLabelText('Server (optional)'));
+      expect(group).toContainElement(screen.getByLabelText('Access token (optional)'));
+      expect(group).not.toContainElement(screen.getByLabelText('Topic'));
+    });
+
+    it('opens the Advanced heading when the admin clicks it', () => {
+      renderForm();
+      fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'ntfy' } });
+
+      fireEvent.click(screen.getByText('Advanced'));
+
+      expect(advancedGroup()).toHaveAttribute('open');
+    });
+
+    it('opens the Advanced heading for a saved channel with a value in an advanced field', () => {
+      renderForm({ channel: ntfyChannel({ settings: { url: 'https://ntfy.shop.local' } }) });
+
+      expect(advancedGroup()).toHaveAttribute('open');
+    });
+
+    it('opens the Advanced heading for a saved channel with an advanced secret', () => {
+      renderForm({ channel: ntfyChannel({ hasSecret: { topic: true, token: true } }) });
+
+      expect(advancedGroup()).toHaveAttribute('open');
+    });
+
+    it('keeps the Advanced heading closed for a saved channel with no advanced value', () => {
+      renderForm({ channel: ntfyChannel({ settings: { url: '' } }) });
+
+      expect(advancedGroup()).not.toHaveAttribute('open');
+    });
+
+    it('shows no Advanced heading for a type with no advanced field', () => {
+      renderForm();
+
+      expect(screen.queryByText('Advanced')).not.toBeInTheDocument();
+    });
   });
 
   it('saves a new channel with each phone number, and closes', async () => {

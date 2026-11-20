@@ -36,15 +36,15 @@ export const ntfyChannel: ChannelDefinition<NtfySettings> = {
   name: 'ntfy',
   fields: [
     {
-      key: 'topic', label: 'Topic', kind: 'secret', required: true, mono: true,
-      hint: 'Use a name that other people cannot guess, for example chatter-x7k2p9. On ntfy.sh, each person that knows the name can read the alerts.',
+      key: 'topic', label: 'Topic', kind: 'secret', required: true, mono: true, generate: 'words',
+      hint: 'Use a name that other people cannot guess, or click Make a random Topic. On ntfy.sh, each person who knows the name can read the alerts.',
     },
     {
-      key: 'url', label: 'Server (optional)', kind: 'url', required: false, mono: true,
+      key: 'url', label: 'Server (optional)', kind: 'url', required: false, mono: true, advanced: true,
       hint: `Only for a server of the shop, without the topic. Empty sends to ${PUBLIC_SERVER}.`,
     },
     {
-      key: 'token', label: 'Access token (optional)', kind: 'secret', required: false, mono: true,
+      key: 'token', label: 'Access token (optional)', kind: 'secret', required: false, mono: true, advanced: true,
       hint: 'Only when the topic needs a login. Make a token in ntfy under Account > Access tokens.',
     },
   ],

@@ -30,6 +30,9 @@ describe('ntfyChannel', () => {
       ['token', 'Access token (optional)', 'secret', false],
     ]);
     expect(ntfyChannel.fields[1].hint).toContain('https://ntfy.sh');
+    expect(ntfyChannel.fields[0].generate).toBe('words');
+    expect(ntfyChannel.fields.filter(field => field.generate)).toHaveLength(1);
+    expect(ntfyChannel.fields.filter(field => field.advanced).map(field => field.key)).toEqual(['url', 'token']);
   });
 
   it('tells the admin to subscribe to the topic in the ntfy app', () => {

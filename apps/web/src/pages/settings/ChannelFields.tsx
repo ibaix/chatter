@@ -1,9 +1,11 @@
 import type { ChannelField } from '@local-chatter/shared';
+import { useState, type ReactNode } from 'react';
 import type { ChannelTypeInfo } from '../../api/notifications';
 import { Button } from '../../components/ui/Button';
 import { Field, TextInput } from '../../components/ui/fields';
 import { CloseIcon, PlusIcon } from '../../components/ui/icons';
 import type { ChannelFormState } from './channelFormState';
+import { randomWords } from './randomWords';
 
 const SAVED_SECRET_PLACEHOLDER = 'Saved. Leave it empty to keep it.';
 
@@ -22,9 +24,7 @@ export function ChannelFields({ type, form, hasSecret, onChange }: ChannelFields
     ...form, clearSecrets: clear ? [...form.clearSecrets, key] : form.clearSecrets.filter(entry => entry !== key),
   });
 
-  return (
-    <>
-      {type.fields.map(field => {
+  const fieldOf = (field: ChannelField) => {
         const value = form.values[field.key];
         switch (field.kind) {
           case 'phone-list':
@@ -44,9 +44,42 @@ export function ChannelFields({ type, form, hasSecret, onChange }: ChannelFields
           default:
             return <TextField key={field.key} field={field} value={asText(value)} onChange={text => setValue(field.key, text)} />;
         }
-      })}
+  };
+
+  const basic = type.fields.filter(field => !field.advanced);
+  const advanced = type.fields.filter(field => field.advanced);
+  // A saved value in an advanced field opens the heading, so the admin sees it
+  const hasAdvancedValue = advanced.some(field => hasSecret[field.key] === true || asText(form.values[field.key]).trim() !== '');
+  return (
+    <>
+      {basic.map(fieldOf)}
+      {advanced.length > 0 && (
+        // A new type has other advanced fields, so the heading starts again
+        <AdvancedGroup key={type.id} startOpen={hasAdvancedValue}>{advanced.map(fieldOf)}</AdvancedGroup>
+      )}
     </>
   );
+}
+
+/** The fields that most admins leave empty, under a heading that opens and closes */
+function AdvancedGroup({ startOpen, children }: { startOpen: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(startOpen);
+  return (
+    <details open={open} className="flex flex-col gap-4">
+      <summary
+        className="cursor-pointer select-none text-xs font-semibold text-zinc-300"
+        onClick={event => { event.preventDefault(); setOpen(!open); }}
+      >
+        Advanced
+      </summary>
+      <div className="mt-3 flex flex-col gap-4">{children}</div>
+    </details>
+  );
+}
+
+/** A button that fills the box with three random words, for a field with `generate` */
+function GenerateButton({ field, onChange }: { field: ChannelField; onChange: (value: string) => void }) {
+  return <Button size="sm" onClick={() => onChange(randomWords())}>Make a random {field.label}</Button>;
 }
 
 const asText = (value: string | string[] | undefined) => (typeof value === 'string' ? value : '');
@@ -63,16 +96,20 @@ interface TextFieldProps {
 function TextField({ field, value, onChange }: TextFieldProps) {
   return (
     <Field id={idOf(field)} label={field.label} hint={field.hint}>
-      <TextInput
-        id={idOf(field)}
-        mono={field.mono}
-        value={value}
-        inputMode={field.kind === 'url' ? 'url' : undefined}
-        onChange={event => onChange(event.target.value)}
-        aria-describedby={hintIdOf(field)}
-        autoComplete="off"
-        spellCheck={false}
-      />
+      <div className="flex items-center gap-2">
+        <TextInput
+          id={idOf(field)}
+          mono={field.mono}
+          className="flex-1"
+          value={value}
+          inputMode={field.kind === 'url' ? 'url' : undefined}
+          onChange={event => onChange(event.target.value)}
+          aria-describedby={hintIdOf(field)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {field.generate && <GenerateButton field={field} onChange={onChange} />}
+      </div>
     </Field>
   );
 }
@@ -83,22 +120,31 @@ interface SecretFieldProps extends TextFieldProps {
   onClearChange: (clear: boolean) => void;
 }
 
-/** The server never sends a secret back. An empty box keeps the saved secret, and a secret that is not necessary can be deleted. */
+/**
+ * The server never sends a secret back. An empty box keeps the saved secret, and a secret that is not necessary can be deleted.
+ * A secret with `generate` shows its new value, because the admin must type it in another app, for example an ntfy topic.
+ */
 function SecretField({ field, value, isSaved, isCleared, onChange, onClearChange }: SecretFieldProps) {
   const canClear = isSaved && !field.required;
+  const isShown = field.generate !== undefined;
   return (
     <Field id={idOf(field)} label={field.label} hint={field.hint}>
-      <TextInput
-        id={idOf(field)}
-        type="password"
-        mono={field.mono}
-        value={value}
-        placeholder={isSaved && !isCleared ? SAVED_SECRET_PLACEHOLDER : undefined}
-        onChange={event => onChange(event.target.value)}
-        aria-describedby={hintIdOf(field)}
-        autoComplete="new-password"
-        spellCheck={false}
-      />
+      <div className="flex items-center gap-2">
+        <TextInput
+          id={idOf(field)}
+          type={isShown ? 'text' : 'password'}
+          mono={field.mono}
+          className="flex-1"
+          value={value}
+          placeholder={isSaved && !isCleared ? SAVED_SECRET_PLACEHOLDER : undefined}
+          onChange={event => onChange(event.target.value)}
+          aria-describedby={hintIdOf(field)}
+          // new-password stops a browser from filling in a saved login. A shown value is not a password.
+          autoComplete={isShown ? 'off' : 'new-password'}
+          spellCheck={false}
+        />
+        {field.generate && <GenerateButton field={field} onChange={onChange} />}
+      </div>
       {canClear && (
         <label className="flex items-center gap-2 text-xs text-zinc-200">
           <input
