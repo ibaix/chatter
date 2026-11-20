@@ -53,6 +53,8 @@ export interface ChannelRouting {
   minSeverity: AlertSeverity;
   /** null gets the alerts of all machines, also of machines that you add later */
   machineIds: string[] | null;
+  /** The channel does not send a message whose text matches one of these patterns (see ignorePatterns.ts) */
+  ignorePatterns: string[];
 }
 
 /** A channel as the API shows it. It has no secret values. */
@@ -73,7 +75,9 @@ export interface NotificationChannel extends ChannelRouting {
  * The body of POST and PUT /api/notification-channels, and of a test before you save.
  * `values` has all the fields, also the secret fields. An empty secret on an edit keeps the saved secret.
  */
-export interface ChannelInput extends ChannelRouting {
+export interface ChannelInput extends Omit<ChannelRouting, 'ignorePatterns'> {
+  /** Without it, a new channel has no patterns, and an edit keeps the saved patterns */
+  ignorePatterns?: string[];
   type: string;
   name: string;
   values: ChannelValues;
@@ -144,7 +148,7 @@ export function isAtLeastLevel(severity: AlertSeverity, minSeverity: AlertSeveri
 
 /** True when the channel gets this alert */
 export function channelWantsAlert(
-  routing: ChannelRouting,
+  routing: Pick<ChannelRouting, 'minSeverity' | 'machineIds'>,
   alert: { machineId: string; severity: AlertSeverity },
 ): boolean {
   const machineMatches = routing.machineIds === null || routing.machineIds.includes(alert.machineId);

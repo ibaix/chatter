@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { isLocalRange } from '../discovery/addressRange.js';
 import {
   ALERT_CHECKS, ALERT_SEVERITIES, ALERT_SUBJECT_IDS, MAX_ALERT_FOR_MINUTES, MAX_ALERT_NAME_LENGTH, MAX_ALERT_QUERY_LENGTH,
-  MAX_ALERT_RULES_PER_MACHINE, type AlertSubject,
+  MAX_ALERT_RULES_PER_MACHINE, MAX_IGNORE_PATTERNS, patternProblem, type AlertSubject,
 } from '@local-chatter/shared';
 import { HISTORY_VALUES, isValidIPv4, OPCUA_SECURITY_MODES, STATE_PERIOD_KINDS, MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, ROLES, SUPPORTED_MACHINE_TYPES } from '@local-chatter/shared';
 
@@ -287,6 +287,27 @@ const channelValue = z.union([
     .max(MAX_CHANNEL_LIST_LENGTH, `A list can have at most ${MAX_CHANNEL_LIST_LENGTH} values`),
 ], { error: 'Each value must be text or a list of text' });
 
+/** One ignore pattern, trimmed. patternProblem gives the reason in plain words. */
+const ignorePattern = z.string({ error: 'Each ignore pattern must be text' }).trim().superRefine((pattern, context) => {
+  const problem = patternProblem(pattern);
+  if (problem) context.addIssue({ code: 'custom', message: problem });
+});
+
+/** The match is not case-sensitive, so "Door open" and "door open" are the same pattern. The first one stays. */
+function withoutSamePatterns(patterns: string[]): string[] {
+  const seen = new Set<string>();
+  return patterns.filter(pattern => {
+    const key = pattern.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+const ignorePatterns = z.array(ignorePattern, { error: 'ignorePatterns must be a list' })
+  .max(MAX_IGNORE_PATTERNS, `A channel can have at most ${MAX_IGNORE_PATTERNS} ignore patterns`)
+  .transform(withoutSamePatterns);
+
 /**
  * A channel form, to save it or to send a test. The channel type checks its own values.
  * An empty secret on an edit keeps the saved secret.
@@ -298,6 +319,8 @@ export const channelInputSchema = z.object({
     .refine(values => Object.keys(values).length <= MAX_CHANNEL_FIELDS, 'Too many values'),
   minSeverity: z.enum(ALERT_SEVERITIES, { error: 'The level must be "warning" or "critical"' }),
   machineIds: z.array(machineId, { error: 'machineIds must be a list or null' }).nullable(),
+  /** Optional, so an older app keeps the saved patterns on an edit */
+  ignorePatterns: ignorePatterns.optional(),
   enabled: z.boolean({ error: 'enabled must be true or false' }),
   clearSecrets: z.array(z.string().max(MAX_RULE_ID_LENGTH)).max(MAX_CHANNEL_FIELDS).optional(),
 }, NOT_AN_OBJECT);

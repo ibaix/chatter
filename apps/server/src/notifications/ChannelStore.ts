@@ -28,6 +28,8 @@ interface ChannelRow {
   secrets: string;
   min_severity: AlertSeverity;
   machine_ids: string | null;
+  /** A JSON list */
+  ignore_patterns: string;
   enabled: number;
   created_at: number;
 }
@@ -57,6 +59,11 @@ export class ChannelStore implements MachineRemovalListener {
         created_at INTEGER NOT NULL
       )
     `);
+    // A table of an older Chatter has no patterns column
+    const columns = db.pragma('table_info(notification_channels)') as { name: string }[];
+    if (!columns.some(column => column.name === 'ignore_patterns')) {
+      db.exec("ALTER TABLE notification_channels ADD COLUMN ignore_patterns TEXT NOT NULL DEFAULT '[]'");
+    }
   }
 
   /** In the order they were added */
@@ -75,23 +82,31 @@ export class ChannelStore implements MachineRemovalListener {
     if (!check.ok) return check;
     const id = randomUUID();
     this.db.prepare(`
-      INSERT INTO notification_channels (id, type, name, settings, secrets, min_severity, machine_ids, enabled, created_at)
-      VALUES (@id, @type, @name, @settings, @secrets, @minSeverity, @machineIds, @enabled, @createdAt)
-    `).run({ id, ...toSqlParameters(input, check), createdAt: now });
+      INSERT INTO notification_channels (id, type, name, settings, secrets, min_severity, machine_ids, ignore_patterns, enabled, created_at)
+      VALUES (@id, @type, @name, @settings, @secrets, @minSeverity, @machineIds, @ignorePatterns, @enabled, @createdAt)
+    `).run({ id, ...toSqlParameters(input, check), ignorePatterns: JSON.stringify(input.ignorePatterns ?? []), createdAt: now });
     return { ok: true, channel: this.savedChannel(id) };
   }
 
-  /** An empty secret keeps the saved secret, so the form does not need to show it. `clearSecrets` deletes secrets. */
+  /**
+   * An empty secret keeps the saved secret, so the form does not need to show it. `clearSecrets` deletes secrets.
+   * An input without `ignorePatterns` keeps the saved patterns.
+   */
   update(id: string, input: ChannelInput): ChannelSaveResult {
-    if (!this.row(id)) return { ok: false, error: NOT_THERE };
+    const saved = this.row(id);
+    if (!saved) return { ok: false, error: NOT_THERE };
     const check = this.checkInput(input, id);
     if (!check.ok) return check;
     this.db.prepare(`
       UPDATE notification_channels
       SET type = @type, name = @name, settings = @settings, secrets = @secrets,
-          min_severity = @minSeverity, machine_ids = @machineIds, enabled = @enabled
+          min_severity = @minSeverity, machine_ids = @machineIds, ignore_patterns = @ignorePatterns, enabled = @enabled
       WHERE id = @id
-    `).run({ id, ...toSqlParameters(input, check) });
+    `).run({
+      id,
+      ...toSqlParameters(input, check),
+      ignorePatterns: input.ignorePatterns === undefined ? saved.ignore_patterns : JSON.stringify(input.ignorePatterns),
+    });
     return { ok: true, channel: this.savedChannel(id) };
   }
 
@@ -162,6 +177,7 @@ export class ChannelStore implements MachineRemovalListener {
       hasSecret: Object.fromEntries(secretKeys.map(key => [key, key in secrets])),
       minSeverity: row.min_severity,
       machineIds: row.machine_ids === null ? null : parseList(row.machine_ids),
+      ignorePatterns: parseList(row.ignore_patterns),
       enabled: row.enabled === 1,
       createdAt: new Date(row.created_at).toISOString(),
     };

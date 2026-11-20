@@ -35,7 +35,7 @@ function fakeType(results: SendResult[]) {
 function channel(id: string, enabled = true): NotificationChannel {
   return {
     id, type: 'fake', name: `Channel ${id}`, settings: {}, hasSecret: {}, minSeverity: 'warning',
-    machineIds: null, enabled, createdAt: '2026-11-13T09:00:00.000Z',
+    machineIds: null, ignorePatterns: [], enabled, createdAt: '2026-11-13T09:00:00.000Z',
   };
 }
 

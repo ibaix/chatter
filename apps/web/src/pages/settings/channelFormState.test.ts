@@ -19,7 +19,7 @@ const webhook: ChannelTypeInfo = {
 
 const slack: NotificationChannel = {
   id: 'slack', type: 'webhook', name: 'Slack', settings: { url: 'https://hooks.slack.com/x' }, hasSecret: { secret: true },
-  minSeverity: 'critical', machineIds: ['haas-vf2'], enabled: false, createdAt: '2026-11-13T09:00:00.000Z',
+  minSeverity: 'critical', machineIds: ['haas-vf2'], ignorePatterns: [], enabled: false, createdAt: '2026-11-13T09:00:00.000Z',
 };
 
 describe('newChannelForm', () => {

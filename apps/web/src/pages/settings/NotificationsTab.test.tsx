@@ -34,7 +34,7 @@ const TYPES: ChannelTypeInfo[] = [
 const phones: NotificationChannel = {
   id: 'phones', type: 'twilio-sms', name: 'Shop phones',
   settings: { accountSid: 'AC1', from: '+15551230000', to: ['+15559870001', '+15559870002'] },
-  hasSecret: { authToken: true }, minSeverity: 'critical', machineIds: null, enabled: true, createdAt: '2026-11-13T09:00:00.000Z',
+  hasSecret: { authToken: true }, minSeverity: 'critical', machineIds: null, ignorePatterns: [], enabled: true, createdAt: '2026-11-13T09:00:00.000Z',
 };
 
 const slack: NotificationChannel = {

@@ -19,7 +19,7 @@ function anAlert(values: Partial<Alert> = {}): Alert {
 
 function channel(id: string, values: Partial<NotificationChannel> = {}): NotificationChannel {
   return {
-    id, type: 'webhook', name: id, settings: {}, hasSecret: {}, minSeverity: 'warning', machineIds: null, enabled: true,
+    id, type: 'webhook', name: id, settings: {}, hasSecret: {}, minSeverity: 'warning', machineIds: null, ignorePatterns: [], enabled: true,
     createdAt: '2026-11-13T09:00:00.000Z', ...values,
   };
 }

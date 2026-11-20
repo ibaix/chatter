@@ -35,7 +35,7 @@ const MACHINES = [{ id: 'haas-vf2', name: 'Haas VF-2' }, { id: 'okuma', name: 'O
 
 const slack: NotificationChannel = {
   id: 'slack', type: 'webhook', name: 'Slack', settings: { url: 'https://hooks.slack.com/x' }, hasSecret: { secret: true },
-  minSeverity: 'warning', machineIds: null, enabled: true, createdAt: '2026-11-13T09:00:00.000Z',
+  minSeverity: 'warning', machineIds: null, ignorePatterns: [], enabled: true, createdAt: '2026-11-13T09:00:00.000Z',
 };
 
 function renderForm(props: Partial<Parameters<typeof ChannelForm>[0]> = {}) {

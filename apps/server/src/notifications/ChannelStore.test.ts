@@ -54,6 +54,7 @@ describe('ChannelStore', () => {
         hasSecret: { authToken: true },
         minSeverity: 'critical',
         machineIds: null,
+        ignorePatterns: [],
         enabled: true,
         createdAt: '2026-11-13T09:00:00.000Z',
       },
@@ -102,6 +103,56 @@ describe('ChannelStore', () => {
   ])('does not save a channel with %o', (change, error) => {
     expect(store.add({ ...twilioInput, ...change }, NOW)).toEqual({ ok: false, error });
     expect(store.list()).toEqual([]);
+  });
+
+  describe('ignore patterns', () => {
+    it('saves the ignore patterns of a channel', () => {
+      const id = addedId({ ...webhookInput, ignorePatterns: ['Door open', 'Program 9*'] });
+
+      expect(store.get(id)?.ignorePatterns).toEqual(['Door open', 'Program 9*']);
+      expect(new ChannelStore(db).get(id)?.ignorePatterns).toEqual(['Door open', 'Program 9*']);
+    });
+
+    it('saves no patterns when the form has none', () => {
+      expect(store.get(addedId(webhookInput))?.ignorePatterns).toEqual([]);
+    });
+
+    it('keeps the saved patterns when an edit has no patterns, for example from an older app', () => {
+      const id = addedId({ ...webhookInput, ignorePatterns: ['Door open'] });
+
+      store.update(id, { ...webhookInput, enabled: false });
+
+      expect(store.get(id)).toMatchObject({ enabled: false, ignorePatterns: ['Door open'] });
+    });
+
+    it('changes the patterns when an edit has them, also to an empty list', () => {
+      const id = addedId({ ...webhookInput, ignorePatterns: ['Door open'] });
+
+      store.update(id, { ...webhookInput, ignorePatterns: ['Coolant'] });
+      expect(store.get(id)?.ignorePatterns).toEqual(['Coolant']);
+
+      store.update(id, { ...webhookInput, ignorePatterns: [] });
+      expect(store.get(id)?.ignorePatterns).toEqual([]);
+    });
+
+    it('adds the column to the table of an older Chatter, and keeps its channels', () => {
+      const oldDb = new Database(':memory:');
+      oldDb.exec(`
+        CREATE TABLE notification_channels (
+          id TEXT PRIMARY KEY, type TEXT NOT NULL, name TEXT NOT NULL, settings TEXT NOT NULL, secrets TEXT NOT NULL,
+          min_severity TEXT NOT NULL, machine_ids TEXT, enabled INTEGER NOT NULL, created_at INTEGER NOT NULL
+        )
+      `);
+      oldDb.prepare(`
+        INSERT INTO notification_channels VALUES ('old', 'webhook', 'Old hook', '{"url":"https://example.com/hook"}', '{}', 'warning', NULL, 1, ?)
+      `).run(NOW);
+
+      const upgraded = new ChannelStore(oldDb);
+
+      expect(upgraded.get('old')).toMatchObject({ name: 'Old hook', ignorePatterns: [] });
+      const result = upgraded.update('old', { ...webhookInput, ignorePatterns: ['Door open'] });
+      expect(result).toMatchObject({ ok: true, channel: { ignorePatterns: ['Door open'] } });
+    });
   });
 
   describe('update', () => {
