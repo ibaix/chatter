@@ -6,8 +6,8 @@ import { ALERT_SEVERITIES, type AlertSeverity } from './alertRules.js';
  * Settings > Notifications shows the channels and the messages. Only an admin (manage-chatter) changes them.
  */
 
-/** How the web app shows one input of a channel form */
-export const CHANNEL_FIELD_KINDS = ['text', 'secret', 'url', 'phone-list'] as const;
+/** How the web app shows one input of a channel form. A `choice` field is a select with `options`. */
+export const CHANNEL_FIELD_KINDS = ['text', 'secret', 'url', 'phone-list', 'choice'] as const;
 export type ChannelFieldKind = typeof CHANNEL_FIELD_KINDS[number];
 
 /**
@@ -30,6 +30,10 @@ export interface ChannelField {
   generate?: 'words';
   /** The form puts the field under a closed "Advanced" heading. Only for a field that most admins leave empty. */
   advanced?: boolean;
+  /** The options of a `choice` field, in the order of the select */
+  options?: { value: string; label: string }[];
+  /** The value that a new form starts with, and that a saved channel with no value shows */
+  default?: string;
 }
 
 /** A channel type that the server knows, from GET /api/notification-types */

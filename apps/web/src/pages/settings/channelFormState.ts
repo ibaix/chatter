@@ -53,7 +53,7 @@ export function channelInputOf(form: ChannelFormState): ChannelInput {
 }
 
 function emptyValuesOf(fields: ChannelField[]): ChannelValues {
-  return Object.fromEntries(fields.map(field => [field.key, field.kind === 'phone-list' ? [''] : '']));
+  return Object.fromEntries(fields.map(field => [field.key, field.kind === 'phone-list' ? [''] : field.default ?? '']));
 }
 
 function trimmed(values: ChannelValues): ChannelValues {

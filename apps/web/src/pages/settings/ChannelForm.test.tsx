@@ -29,6 +29,15 @@ const TYPES: ChannelTypeInfo[] = [
       { key: 'token', label: 'Access token (optional)', kind: 'secret', required: false, advanced: true },
     ],
   },
+  {
+    id: 'telegram', name: 'Telegram', fields: [
+      { key: 'chatId', label: 'Chat ID', kind: 'text', required: true },
+      {
+        key: 'sound', label: 'Notification sound', kind: 'choice', required: false, default: 'normal', hint: 'Quiet still shows the message.',
+        options: [{ value: 'normal', label: 'Normal' }, { value: 'quiet', label: 'Quiet' }],
+      },
+    ],
+  },
 ];
 
 const MACHINES = [{ id: 'haas-vf2', name: 'Haas VF-2' }, { id: 'okuma', name: 'Okuma LB3000' }];
@@ -227,6 +236,37 @@ describe('ChannelForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save channel' }));
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ machineIds: ['haas-vf2'], minSeverity: 'critical' }));
+  });
+
+  describe('a choice field', () => {
+    it('shows the options and starts on the default', () => {
+      renderForm();
+
+      type('Type', 'telegram');
+
+      const select = screen.getByLabelText('Notification sound');
+      expect(select).toHaveValue('normal');
+      expect(screen.getByRole('option', { name: 'Quiet' })).toBeInTheDocument();
+      expect(screen.getByText('Quiet still shows the message.')).toBeInTheDocument();
+    });
+
+    it('saves the option that the admin picks', () => {
+      const { onSave } = renderForm();
+      type('Type', 'telegram');
+      type('Name', 'Shop chat');
+      type('Chat ID', '-100123');
+
+      type('Notification sound', 'quiet');
+      fireEvent.click(screen.getByRole('button', { name: 'Save channel' }));
+
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ values: { chatId: '-100123', sound: 'quiet' } }));
+    });
+
+    it('starts on the default for a saved channel with no value', () => {
+      renderForm({ channel: { ...slack, type: 'telegram', settings: { chatId: '-100123' } } });
+
+      expect(screen.getByLabelText('Notification sound')).toHaveValue('normal');
+    });
   });
 
   describe('ignore patterns', () => {

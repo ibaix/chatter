@@ -23,6 +23,17 @@ const slack: NotificationChannel = {
 };
 
 describe('newChannelForm', () => {
+  it('fills each field that has a default', () => {
+    const telegram: ChannelTypeInfo = {
+      id: 'telegram', name: 'Telegram', fields: [
+        { key: 'chatId', label: 'Chat ID', kind: 'text', required: true },
+        { key: 'sound', label: 'Notification sound', kind: 'choice', required: false, default: 'normal', options: [{ value: 'normal', label: 'Normal' }] },
+      ],
+    };
+
+    expect(newChannelForm(telegram).values).toEqual({ chatId: '', sound: 'normal' });
+  });
+
   it('starts empty, on, for all machines and warning alerts, with one phone box', () => {
     expect(newChannelForm(twilio)).toEqual({
       type: 'twilio-sms', name: '', values: { accountSid: '', authToken: '', to: [''] }, clearSecrets: [],

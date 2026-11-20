@@ -2,7 +2,7 @@ import type { ChannelField } from '@local-chatter/shared';
 import { useState, type ReactNode } from 'react';
 import type { ChannelTypeInfo } from '../../api/notifications';
 import { Button } from '../../components/ui/Button';
-import { Field, TextInput } from '../../components/ui/fields';
+import { Field, SelectInput, TextInput } from '../../components/ui/fields';
 import type { ChannelFormState } from './channelFormState';
 import { randomWords } from './randomWords';
 import { TextList } from './TextList';
@@ -29,6 +29,8 @@ export function ChannelFields({ type, form, hasSecret, onChange }: ChannelFields
         switch (field.kind) {
           case 'phone-list':
             return <PhoneListField key={field.key} field={field} phones={asList(value)} onChange={phones => setValue(field.key, phones)} />;
+          case 'choice':
+            return <ChoiceField key={field.key} field={field} value={asText(value)} onChange={text => setValue(field.key, text)} />;
           case 'secret':
             return (
               <SecretField
@@ -110,6 +112,23 @@ function TextField({ field, value, onChange }: TextFieldProps) {
         />
         {field.generate && <GenerateButton field={field} onChange={onChange} />}
       </div>
+    </Field>
+  );
+}
+
+/** A select of the options of the field. An empty value, for example of a channel saved before the field was there, shows the default. */
+function ChoiceField({ field, value, onChange }: TextFieldProps) {
+  const options = field.options ?? [];
+  return (
+    <Field id={idOf(field)} label={field.label} hint={field.hint}>
+      <SelectInput
+        id={idOf(field)}
+        value={value || field.default || options[0]?.value || ''}
+        aria-describedby={hintIdOf(field)}
+        onChange={event => onChange(event.target.value)}
+      >
+        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </SelectInput>
     </Field>
   );
 }
