@@ -64,6 +64,7 @@ Each machine value has a metric name that starts with `chatter_`. A machine send
 | `chatter_running` | A program runs | 1 = yes, 0 = no |
 | `chatter_alarm` | The machine has an alarm | 1 = yes, 0 = no |
 | `chatter_emergency` | The emergency stop is pushed | 1 = yes, 0 = no |
+| `chatter_program_ended` | The control says that the program ended. A hold, an alarm or an emergency stop gives 0. | 1 = yes, 0 = no |
 | `chatter_spindle_speed` | The spindle speed | RPM |
 | `chatter_spindle_load` | The spindle load | % |
 | `chatter_feedrate` | The feed rate | the unit of the machine |

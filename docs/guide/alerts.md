@@ -7,12 +7,13 @@ Each machine has its own rules. You set them in the **Alert rules** tab of the m
 
 ## The starter rules
 
-Each new machine starts with 2 rules:
+Each new machine starts with 3 rules:
 
 | Rule | Level |
 | --- | --- |
 | The machine is in alarm for 0 minutes | critical alert |
 | The machine is in emergency stop for 0 minutes | critical alert |
+| The program of the machine ended. See [Program ended](#program-ended). | warning |
 
 0 minutes means that the alert fires at once.
 You can change, turn off, or remove each of them.
@@ -41,12 +42,32 @@ Each rule is a sentence. The words with a box around them are the parts that you
 A rule can check these values:
 - **spindle speed**, **spindle load** and **part count**: these need a limit, and **above** or **below**.
 - **not connected**, **in alarm** and **emergency stop**: these are states. They have no limit.
+- **program ended**: this is an event. It has no limit and no minutes. See [Program ended](#program-ended).
 
 **0** minutes means that the alert fires at the first check that is true.
 The level is **warning** (a yellow dot) or **critical alert** (a red dot).
 
 When you change something, a bar shows how many rules changed. Click **Save changes** to keep the changes, or **Undo changes** to go back to the saved rules.
 Chatter uses the new rules within 30 seconds.
+
+## Program ended
+
+A **program ended** rule reads: "When this machine reports **program ended**, raise a **warning**."
+The alert fires one time when the machine stops at the end of a program.
+
+The alert fires only when all of these are true:
+- The control says that the program ended. A FANUC control shows **RESET**. The other controls show **READY**, **STOPPED** or **PROGRAM_COMPLETED**.
+- The program ran in the last minute.
+- The machine had no alarm and no emergency stop in the last minute.
+
+A feed hold, an M00 or M01 stop, a single block stop, an alarm, or an emergency stop does not fire the alert.
+
+The alert stops by itself after about 1 minute. Chatter sends only the start message to the channels. It sends no "OK" message when the alert stops.
+The **Alerts** panel shows the alert as a past alert.
+
+Some limits:
+- When an operator pushes **RESET** while a program runs, Chatter cannot tell this from a program end. The alert fires.
+- A machine that does not tell if a program runs never fires this alert. For example, a Haas needs its query port (Setting 143).
 
 ## Add a rule
 

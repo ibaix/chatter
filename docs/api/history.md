@@ -12,7 +12,7 @@ An unknown machine id gets `404`.
 `:value` is one of these:
 - Numbers: `spindle-speed`, `spindle-load`, `feedrate`, `part-count`, `part-goal`, `tool-number`
 - `spindle-load` is in percent of the spindle motor's rating. A Haas needs its query port (Setting 143) and a vector drive (macro #1098). A FANUC needs a FANUC digital (serial) spindle. An MTConnect agent needs a LOAD item on the spindle. A Brother does not send it. The Haas, FANUC and MTConnect spindle loads are not tested on real machines yet.
-- States: `connected`, `running`, `alarm`, `emergency`. A state is 1 (on) or 0 (off), so its average is the part of the window that it was on. For example, `running` 0.75 means that a program ran for 75% of the window. All four machine types tell if a program runs: Haas needs its query port (Setting 143), and Brother needs a C00 or D00 control. The Haas, Brother and FANUC run states are not tested on real machines yet.
+- States: `connected`, `running`, `alarm`, `emergency`, `program-ended`. A state is 1 (on) or 0 (off), so its average is the part of the window that it was on. For example, `running` 0.75 means that a program ran for 75% of the window. All four machine types tell if a program runs: Haas needs its query port (Setting 143), and Brother needs a C00 or D00 control. The Haas, Brother and FANUC run states are not tested on real machines yet.
 
 Query parameters:
 - `range`: how far back, for example `-10m`, `-1h`, `-7d`, or `-2w` (default `-1h`)
@@ -79,7 +79,8 @@ Chatter keeps the alerts for 1 year.
 
 A rule is one of these:
 - A simple rule: `{ id, kind: "simple", enabled, subject, check, limit, forMinutes, severity }`.
-  `subject` is `spindle-speed`, `spindle-load`, `part-count`, `not-connected`, `in-alarm` or `emergency-stop`. `check` is `above` or `below`. A state subject (the last 3) does not use `check` and `limit`.
+  `subject` is `spindle-speed`, `spindle-load`, `part-count`, `not-connected`, `in-alarm`, `emergency-stop` or `program-ended`. `check` is `above` or `below`. A state subject (`not-connected`, `in-alarm` and `emergency-stop`) does not use `check` and `limit`.
+  `program-ended` is an event. It does not use `check`, `limit` or `forMinutes`: its alert fires at the first true check. Its alert has the label `event="true"`, and Chatter sends no end message for it.
 - A custom query: `{ id, kind: "query", enabled, name, query, forMinutes, severity }`. The query must have `$machine` in it. See [Custom alert queries](../guide/custom-alert-queries.md).
 
 `forMinutes` is a whole number from 0 to 1440. `severity` is `warning` or `critical`.

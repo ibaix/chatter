@@ -349,6 +349,7 @@ After a restart or a power cut, the message is still in the queue, and Chatter s
 If the end of an alert comes before Chatter sent its start, Chatter sends one message for both.
 When the text of a message has an ignore pattern of the channel, Chatter keeps the message in the list as **Ignored**, and does not send it.
 A channel that did not get the start of an alert gets no end message for it, for example a channel that you add while the alert is on.
+A **Program ended** alert gets only its start message. Chatter sends no end message and no combined message for it. See [Program ended](./alerts.md#program-ended).
 
 Sometimes the service does not answer, or answers that it is busy. Then Chatter tries the message again.
 The waits are 30 seconds, 1 minute, 2 minutes, and 5 minutes, then 10 minutes each time. After 24 hours, the message fails.
