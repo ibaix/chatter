@@ -1,6 +1,6 @@
 import { historyWindowValue } from '@local-chatter/shared';
 import { cn } from '@toolpath/ui';
-import { useId, useRef, useState, type PointerEvent, type WheelEvent } from 'react';
+import { useEffect, useId, useRef, useState, type PointerEvent } from 'react';
 import type { HistoryPoint } from '../../api/history';
 import { CHOICE_HEIGHT, ChoiceMenu } from '../../components/ui/ChoiceMenu';
 import { RangeButtons } from '../../components/ui/RangeButtons';
@@ -105,15 +105,27 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
   /** Shows the time that the user highlighted. The range buttons and the clear button show the wider times again. */
   const zoomTo = (from: number, to: number) => show(() => zoomView(from, to, Date.now()));
 
-  /** A sideways scroll (trackpad, or Shift and the mouse wheel) moves the time. An up or down scroll stays with the page. */
-  const scrollTime = (event: WheelEvent<HTMLDivElement>) => {
+  /**
+   * A sideways scroll (trackpad, or Shift and the mouse wheel) moves the time. An up or down scroll stays with the page.
+   * The chart stops a sideways scroll, so the browser does not go back a page on a swipe.
+   */
+  const scrollTime = (event: WheelEvent) => {
     const sideways = event.shiftKey && event.deltaX === 0 ? event.deltaY : event.deltaX;
     if (!event.shiftKey && Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+    event.preventDefault();
     wheelDelta.current += sideways;
     if (Math.abs(wheelDelta.current) < WHEEL_STEP_PX) return;
     pan(Math.sign(wheelDelta.current) * WHEEL_STEP);
     wheelDelta.current = 0;
   };
+
+  const chartBody = useRef<HTMLDivElement>(null);
+  // React listens to the wheel passively, so its handler cannot stop the scroll
+  useEffect(() => {
+    const body = chartBody.current;
+    body?.addEventListener('wheel', scrollTime, { passive: false });
+    return () => body?.removeEventListener('wheel', scrollTime);
+  });
 
   const isStateChart = choice.id === MACHINE_STATE.id;
   /** Where a drag on the chart started, and the width of the plot then */
@@ -176,7 +188,7 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
       <div
         role="group"
         aria-label="Chart: drag or scroll sideways to move in time"
-        onWheel={scrollTime}
+        ref={chartBody}
         onPointerDown={startDrag}
         onPointerMove={followDrag}
         onPointerUp={endDrag}

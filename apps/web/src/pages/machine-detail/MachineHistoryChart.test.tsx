@@ -271,6 +271,15 @@ describe('MachineHistoryChart', () => {
       expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
     });
 
+    it('stops a sideways scroll on the chart, so the browser does not go back a page', async () => {
+      render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));
+
+      // fireEvent gives false when the page stopped the default action of the event
+      expect(fireEvent.wheel(chartBody(), { deltaX: -20, deltaY: 0 })).toBe(false);
+      expect(fireEvent.wheel(chartBody(), { deltaX: 0, deltaY: 200 })).toBe(true);
+    });
+
     it('moves the time when the user drags the chart: to the right goes back', async () => {
       await overviewOfStateView();
 
