@@ -3,6 +3,7 @@ import { cn } from '@toolpath/ui';
 import { memo, useId } from 'react';
 import { STATE_FILL_COLORS } from '../../components/MachineStateMark';
 import { STATE_LABELS } from '../../machines/machineStatus';
+import { timeScale } from './historyChart';
 import type { StateSegment } from './stateTimeline';
 
 const STATE_FILLS: Record<Exclude<TimelineState, 'offline'>, string> = {
@@ -35,7 +36,7 @@ interface StateBandProps {
  */
 export const StateBand = memo(function StateBand({ segments, startTime, rangeMs, left, width, y, height }: StateBandProps) {
   const stripesId = useId();
-  const x = (time: number) => left + ((time - startTime) / rangeMs) * width;
+  const { x } = timeScale(startTime, rangeMs, left, width);
   const right = left + width;
   return (
     <g aria-hidden="true">

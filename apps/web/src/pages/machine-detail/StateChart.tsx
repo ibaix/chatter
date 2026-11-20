@@ -2,8 +2,8 @@ import { useEffect, useState, type PointerEvent, type RefObject } from 'react';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
-import { ChartTooltip, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
-import { messageFor, timeLabels, viewText, type ChartRange } from './historyChart';
+import { ChartTooltip, offsetXOf, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
+import { messageFor, timeLabels, timeScale, viewText, type ChartRange } from './historyChart';
 import { formatDuration, formatShare } from './reportView';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
 import { liveStateOf, segmentAt, segmentsWithin, segmentTimesText, stateTotals, type StateSegment, type StateTotal } from './stateTimeline';
@@ -97,13 +97,9 @@ function StatePlot({ segments, totalsText, now, range, live, width, selection }:
   const [hoveredTime, setHoveredTime] = useState<number | undefined>();
   const hovered = hoveredTime === undefined ? undefined : segmentAt(segments, hoveredTime);
   const startTime = now - range.ms;
-  const x = (time: number) => ((time - startTime) / range.ms) * width;
+  const { x, timeAt } = timeScale(startTime, range.ms, 0, width);
 
-  const timeAt = (offsetX: number) => startTime + (offsetX / width) * range.ms;
-
-  const showSegment = (event: PointerEvent<SVGSVGElement>) => {
-    setHoveredTime(timeAt(event.clientX - event.currentTarget.getBoundingClientRect().left));
-  };
+  const showSegment = (event: PointerEvent<SVGSVGElement>) => setHoveredTime(timeAt(offsetXOf(event)));
 
   return (
     <>

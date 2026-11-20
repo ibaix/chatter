@@ -8,7 +8,7 @@ import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 import { ChartOverview } from './ChartOverview';
-import { AXIS_LABEL_CLASS, ChartTooltip, PanButtons, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
+import { AXIS_LABEL_CLASS, ChartTooltip, offsetXOf, PanButtons, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
 import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
   axisTicks,
@@ -19,8 +19,10 @@ import {
   nearestPoint,
   stepPoints,
   timeLabels,
+  timeScale,
   viewText,
   type ChartRange,
+  type TimeScale,
 } from './historyChart';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
 import { StateChart } from './StateChart';
@@ -248,7 +250,7 @@ function ChartPlot({ points, value, stateSegments, now, shiftMs, range, gapMs, c
   const newest = points.filter(point => point.time <= shownEnd).at(-1) ?? points[0];
 
   const showNearest = (event: PointerEvent<SVGSVGElement>) => {
-    const offsetX = event.clientX - event.currentTarget.getBoundingClientRect().left;
+    const offsetX = offsetXOf(event);
     const shownPoints = points.filter(point => point.time >= startTime && point.time <= shownEnd);
     setHovered(nearestPoint(shownPoints, scale.timeAt(offsetX)));
   };
@@ -305,13 +307,9 @@ function highestValue(points: HistoryPoint[]): number {
   return points.reduce((highest, point) => Math.max(highest, point.value), 0);
 }
 
-interface ChartScale {
-  /** The x position of a time */
-  x: (time: number) => number;
+interface ChartScale extends TimeScale {
   /** The y position of a value */
   y: (value: number) => number;
-  /** The time at an x position from the left edge of the chart: the reverse of `x` */
-  timeAt: (offsetX: number) => number;
 }
 
 interface ChartScaleOptions {
@@ -329,9 +327,8 @@ function chartScale({ width, height, startTime, rangeMs, topValue }: ChartScaleO
   const plotWidth = width - MARGIN.left - MARGIN.right;
   const plotHeight = height - MARGIN.top - MARGIN.bottom;
   return {
-    x: time => MARGIN.left + ((time - startTime) / rangeMs) * plotWidth,
+    ...timeScale(startTime, rangeMs, MARGIN.left, plotWidth),
     y: value => MARGIN.top + plotHeight - (value / topValue) * plotHeight,
-    timeAt: offsetX => startTime + ((offsetX - MARGIN.left) / plotWidth) * rangeMs,
   };
 }
 

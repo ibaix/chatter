@@ -2,8 +2,8 @@ import { useState, type PointerEvent } from 'react';
 import { CloseIcon } from '../../components/ui/icons';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import type { Machine } from '../../types';
-import { MIN_DRAG_PX, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
-import { timeLabels, viewText, type ChartRange } from './historyChart';
+import { MIN_DRAG_PX, offsetXOf, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
+import { timeLabels, timeScale, viewText, type ChartRange } from './historyChart';
 import { StateBand } from './StateBand';
 import { liveStateOf, type StateSegment } from './stateTimeline';
 import { useStateTimeline } from './useStateTimeline';
@@ -70,15 +70,15 @@ function OverviewPlot(props: OverviewPlotProps) {
   const bandRight = width - right;
   const startTime = now - overview.ms;
   const msPerPx = overview.ms / (bandRight - left);
-  const x = (time: number) => left + (time - startTime) / msPerPx;
+  const scale = timeScale(startTime, overview.ms, left, bandRight - left);
+  const { x } = scale;
   /** The time at an x position. A position outside the band is its edge. */
-  const timeAt = (offsetX: number) => startTime + (Math.min(Math.max(offsetX, left), bandRight) - left) * msPerPx;
+  const timeAt = (offsetX: number) => scale.timeAt(Math.min(Math.max(offsetX, left), bandRight));
   const viewTo = viewEnd ?? now;
   const viewFrom = viewTo - view.ms;
   const boxLeft = Math.max(left, x(viewFrom));
   const boxRight = Math.min(bandRight, x(viewTo));
 
-  const offsetXOf = (event: PointerEvent<SVGSVGElement>) => event.clientX - event.currentTarget.getBoundingClientRect().left;
   const selectionTo = (start: number, offsetX: number): ZoomSelection | null => {
     if (Math.abs(offsetX - start) < MIN_DRAG_PX) return null;
     const [from, to] = [timeAt(start), timeAt(offsetX)].sort((a, b) => a - b);

@@ -185,6 +185,21 @@ export function messageFor(status: HistoryStatus, valueName: string, range: Char
   return `No ${name} ${viewText(range, end)}. Chatter saves it while the machine is connected.`;
 }
 
+export interface TimeScale {
+  /** The x position of a time */
+  x: (time: number) => number;
+  /** The time at an x position: the reverse of `x` */
+  timeAt: (offsetX: number) => number;
+}
+
+/** The x positions of a plot that shows `rangeMs` from `startTime`, from `left` to `left + width` */
+export function timeScale(startTime: number, rangeMs: number, left: number, width: number): TimeScale {
+  return {
+    x: time => left + ((time - startTime) / rangeMs) * width,
+    timeAt: offsetX => startTime + ((offsetX - left) / width) * rangeMs,
+  };
+}
+
 /** The first time label starts at the left edge and the last one ends at the right edge, so both stay inside the chart */
 export function timeLabelAnchor(index: number, labelCount: number): 'start' | 'middle' | 'end' {
   if (index === 0) return 'start';

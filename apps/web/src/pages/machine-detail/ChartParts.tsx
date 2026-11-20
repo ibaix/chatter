@@ -1,6 +1,6 @@
 import { cn } from '@toolpath/ui';
 import { ChevronLeftIcon, ChevronRightIcon } from '../../components/ui/icons';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, PointerEvent, ReactNode } from 'react';
 import { timeLabelAnchor, type TimeLabel } from './historyChart';
 
 /** The text of the axis labels of both charts */
@@ -60,6 +60,11 @@ export function PanButtons({ canGoLater, onEarlier, onLater, onNow }: PanButtons
       </button>
     </div>
   );
+}
+
+/** The x position of the pointer from the left edge of the element that has the handler */
+export function offsetXOf(event: PointerEvent<Element>): number {
+  return event.clientX - event.currentTarget.getBoundingClientRect().left;
 }
 
 /** A drag shorter than this, in pixels, is a click, for example to see a hover box */

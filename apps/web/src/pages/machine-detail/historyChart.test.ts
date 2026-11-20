@@ -19,6 +19,7 @@ import {
   withLivePoint,
   fittedOverviewEnd,
   loadSpan,
+  timeScale,
   zoomView,
 } from './historyChart';
 
@@ -265,6 +266,16 @@ describe('fittedOverviewEnd', () => {
   it('moves on so that a view after the overview ends at its right edge, and is live again at now', () => {
     expect(fittedOverviewEnd(NOW - 2 * DAY, DAY, NOW - 30 * HOUR, HOUR, NOW)).toBe(NOW - 30 * HOUR);
     expect(fittedOverviewEnd(NOW - 2 * DAY, DAY, NOW - 1000, HOUR, NOW)).toBeNull();
+  });
+});
+
+describe('timeScale', () => {
+  it('turns a time into an x position inside the plot, and back', () => {
+    const scale = timeScale(1000, 600, 50, 300);
+
+    expect(scale.x(1000)).toBe(50);
+    expect(scale.x(1300)).toBe(200);
+    expect(scale.timeAt(200)).toBe(1300);
   });
 });
 
