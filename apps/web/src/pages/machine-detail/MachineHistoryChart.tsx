@@ -8,7 +8,7 @@ import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 import { ChartOverview } from './ChartOverview';
-import { AXIS_LABEL_CLASS, ChartTooltip, PanButtons, TimeLabels, useZoomSelect, ZoomHighlight } from './ChartParts';
+import { AXIS_LABEL_CLASS, ChartTooltip, dragStyle, MIN_DRAG_PX, PanButtons, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
 import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
   axisTicks,
@@ -113,6 +113,34 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
     wheelDelta.current = 0;
   };
 
+  /** Where a drag on the chart started, and the width of the chart then */
+  const dragStart = useRef<{ x: number; width: number } | null>(null);
+  /** How far the chart follows the mouse while the user drags. The new time loads once, when the drag ends. */
+  const [dragX, setDragX] = useState(0);
+  /** The live chart ends now, so it cannot go on: a drag to the left does not move it */
+  const shownDragX = (x: number) => (end === null ? Math.max(0, x) : x);
+
+  /** A drag on the chart moves the time. A drag to the right goes back. */
+  const startDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    dragStart.current = { x: event.clientX, width: event.currentTarget.getBoundingClientRect().width };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+  const followDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (dragStart.current) setDragX(shownDragX(event.clientX - dragStart.current.x));
+  };
+  const endDrag = (event: PointerEvent<HTMLDivElement>) => {
+    const start = dragStart.current;
+    dragStart.current = null;
+    setDragX(0);
+    if (!start || start.width <= 0) return;
+    const moved = shownDragX(event.clientX - start.x);
+    // A small move is a click, for example to see a hover box
+    if (Math.abs(moved) >= MIN_DRAG_PX) pan(-moved / start.width);
+  };
+
+  /** The time that the user highlights on the overview strip. The chart shades it also. */
+  const [selection, setSelection] = useState<ZoomSelection | null>(null);
   const isStateChart = choice.id === MACHINE_STATE.id;
 
   return (
@@ -137,27 +165,33 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
       </div>
       <div
         role="group"
-        aria-label="Chart: drag to zoom in, scroll sideways to move in time"
+        aria-label="Chart: drag or scroll sideways to move in time"
         onWheel={scrollTime}
-        className="flex touch-pan-y flex-col gap-2.5 overflow-hidden select-none"
+        onPointerDown={startDrag}
+        onPointerMove={followDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        className={cn('flex touch-pan-y flex-col gap-2.5 overflow-hidden select-none', dragX ? 'cursor-grabbing' : 'cursor-grab')}
       >
         {isStateChart ? (
-          <StateChart machine={machine} range={range} end={end} onZoom={zoomTo} />
+          <StateChart machine={machine} range={range} end={end} dragX={dragX} selection={selection} />
         ) : (
-          <ValueChart machine={machine} value={choice} range={range} end={end} onZoom={zoomTo} />
+          <ValueChart machine={machine} value={choice} range={range} end={end} dragX={dragX} selection={selection} />
         )}
-        <ChartOverview
-          machine={machine}
-          overview={view.overview}
-          overviewEnd={view.overviewEnd}
-          view={range}
-          viewEnd={end}
-          left={isStateChart ? 0 : MARGIN.left}
-          right={isStateChart ? 0 : MARGIN.right}
-          onMove={moveBy}
-          onZoom={zoomTo}
-        />
       </div>
+      <ChartOverview
+        machine={machine}
+        overview={view.overview}
+        overviewEnd={view.overviewEnd}
+        view={range}
+        viewEnd={end}
+        selection={selection}
+        onSelect={setSelection}
+        left={isStateChart ? 0 : MARGIN.left}
+        right={isStateChart ? 0 : MARGIN.right}
+        onMove={moveBy}
+        onZoom={zoomTo}
+      />
     </section>
   );
 }
@@ -167,12 +201,14 @@ interface ValueChartProps {
   value: ChartValue;
   range: ChartRange;
   end: number | null;
-  /** Shows the time that the user highlighted */
-  onZoom: (from: number, to: number) => void;
+  /** How far the plot follows a drag, in pixels */
+  dragX: number;
+  /** The time that the user highlights on the overview strip */
+  selection: ZoomSelection | null;
 }
 
 /** A machine value as a line, with the machine state as a thin strip under it */
-function ValueChart({ machine, value, range, end, onZoom }: ValueChartProps) {
+function ValueChart({ machine, value, range, end, dragX, selection }: ValueChartProps) {
   const livePoint = livePointOf(machine, value);
   const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range, end);
   // The chart's clock, so the strip ends where the line ends
@@ -183,7 +219,7 @@ function ValueChart({ machine, value, range, end, onZoom }: ValueChartProps) {
   return (
     <>
       {/* The box sets the chart height in rem, so the chart follows the page scale */}
-      <div ref={ref} className="relative h-[13.75rem]">
+      <div ref={ref} className="relative h-[13.75rem]" style={dragStyle(dragX)}>
         {showPlot ? (
           <ChartPlot
             points={points}
@@ -194,7 +230,7 @@ function ValueChart({ machine, value, range, end, onZoom }: ValueChartProps) {
             gapMs={gapMs}
             connected={machine.connected && end === null}
             live={end === null}
-            onZoom={onZoom}
+            selection={selection}
             width={width}
             height={height}
           />
@@ -244,7 +280,7 @@ interface ChartPlotProps {
   points: HistoryPoint[];
   /** False when the chart looks back in time, so its end is not "Now" */
   live: boolean;
-  onZoom: (from: number, to: number) => void;
+  selection: ZoomSelection | null;
   value: ChartValue;
   /** The machine state over the range, for the strip under the plot */
   stateSegments: StateSegment[];
@@ -256,7 +292,7 @@ interface ChartPlotProps {
   height: number;
 }
 
-function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected, live, onZoom, width, height }: ChartPlotProps) {
+function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected, live, selection, width, height }: ChartPlotProps) {
   const [hovered, setHovered] = useState<HistoryPoint | undefined>();
   const ticks = axisTicks(highestValue(points), value.smallestAxisTop);
   const scale = chartScale({ width, height, startTime: now - range.ms, rangeMs: range.ms, topValue: ticks[ticks.length - 1] });
@@ -265,15 +301,7 @@ function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected,
   const drawnParts = historyWindowValue(value.id) === 'last' ? parts.map(stepPoints) : parts;
   const newest = points[points.length - 1];
 
-  // A highlight stays inside the plot, between the value labels and the right margin
-  const plotTimeAt = (offsetX: number) => scale.timeAt(Math.min(Math.max(offsetX, MARGIN.left), width - MARGIN.right));
-  const { handlers, highlight } = useZoomSelect(plotTimeAt, onZoom);
-
   const showNearest = (event: PointerEvent<SVGSVGElement>) => {
-    if (handlers.onSelectMove(event)) {
-      setHovered(undefined);
-      return;
-    }
     const offsetX = event.clientX - event.currentTarget.getBoundingClientRect().left;
     setHovered(nearestPoint(points, scale.timeAt(offsetX)));
   };
@@ -285,12 +313,9 @@ function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected,
         height={height}
         role="img"
         aria-label={`${value.name} ${viewText(range, live ? null : now)}. Newest value: ${value.format(newest.value)}.`}
-        onPointerDown={handlers.onPointerDown}
         onPointerMove={showNearest}
-        onPointerUp={handlers.onPointerUp}
-        onPointerCancel={handlers.onPointerCancel}
         onPointerLeave={() => setHovered(undefined)}
-        className="block cursor-crosshair"
+        className="block"
       >
         <ValueAxis ticks={ticks} scale={scale} width={width} />
         <TimeLabels labels={timeLabels(range.ms, now, live)} x={scale.x} y={height - TIME_LABEL_BOTTOM} />
@@ -307,7 +332,7 @@ function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected,
           height={STRIP_HEIGHT}
         />
         {hovered && <HoverMarker point={hovered} scale={scale} />}
-        {highlight && <ZoomHighlight x={highlight.x} width={highlight.width} height={scale.y(0)} />}
+        <ZoomHighlight selection={selection} x={scale.x} left={MARGIN.left} right={width - MARGIN.right} height={scale.y(0)} />
       </svg>
       {hovered && (
         <HoverTooltip

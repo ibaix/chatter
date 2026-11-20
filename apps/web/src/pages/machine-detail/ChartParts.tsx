@@ -1,6 +1,6 @@
 import { cn } from '@toolpath/ui';
 import { ChevronLeftIcon, ChevronRightIcon } from '../../components/ui/icons';
-import { useState, type CSSProperties, type PointerEvent, type ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { timeLabelAnchor, type TimeLabel } from './historyChart';
 
 /** The text of the axis labels of both charts */
@@ -63,49 +63,36 @@ export function PanButtons({ canGoLater, onEarlier, onLater, onNow }: PanButtons
 }
 
 /** A drag shorter than this, in pixels, is a click, for example to see a hover box */
-const MIN_DRAG_PX = 5;
+export const MIN_DRAG_PX = 5;
 
-/** The x position of the pointer from the left edge of the element that has the handler */
-function offsetXOf(event: PointerEvent<Element>): number {
-  return event.clientX - event.currentTarget.getBoundingClientRect().left;
+/** Moves a plot with the mouse while the user drags it. No style when it does not move. */
+export function dragStyle(dragX: number): CSSProperties | undefined {
+  return dragX ? { transform: `translateX(${dragX}px)` } : undefined;
 }
 
-/**
- * A drag over a plot that highlights a time. When the drag ends, `onZoom` gets the start and the end of that time.
- * `timeAt` turns an x position in the plot into a time.
- */
-export function useZoomSelect(timeAt: (offsetX: number) => number, onZoom: (from: number, to: number) => void) {
-  const [selection, setSelection] = useState<{ fromX: number; toX: number } | null>(null);
-  const handlers = {
-    onPointerDown: (event: PointerEvent<SVGSVGElement>) => {
-      if (event.button !== 0) return;
-      const x = offsetXOf(event);
-      setSelection({ fromX: x, toX: x });
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-    },
-    /** True while the user highlights, so the plot can hide its hover box */
-    onSelectMove: (event: PointerEvent<SVGSVGElement>): boolean => {
-      if (!selection) return false;
-      setSelection({ ...selection, toX: offsetXOf(event) });
-      return true;
-    },
-    onPointerUp: (event: PointerEvent<SVGSVGElement>) => {
-      if (!selection) return;
-      setSelection(null);
-      const toX = offsetXOf(event);
-      if (Math.abs(toX - selection.fromX) < MIN_DRAG_PX) return;
-      const [left, right] = [Math.min(selection.fromX, toX), Math.max(selection.fromX, toX)];
-      onZoom(timeAt(left), timeAt(right));
-    },
-    onPointerCancel: () => setSelection(null),
-  };
-  const highlight = selection && Math.abs(selection.toX - selection.fromX) >= MIN_DRAG_PX
-    ? { x: Math.min(selection.fromX, selection.toX), width: Math.abs(selection.toX - selection.fromX) }
-    : null;
-  return { handlers, highlight };
+/** A time that the user highlights on the overview strip, to zoom in */
+export interface ZoomSelection {
+  from: number;
+  to: number;
 }
 
-/** The highlighted time while the user drags to zoom, inside an <svg> */
-export function ZoomHighlight({ x, width, height }: { x: number; width: number; height: number }) {
-  return <rect x={x} y={0} width={width} height={height} strokeWidth={1} className="fill-zinc-50/15 stroke-zinc-50/60" />;
+interface ZoomHighlightProps {
+  selection: ZoomSelection | null;
+  /** The x position of a time */
+  x: (time: number) => number;
+  /** The highlight stays between these x positions */
+  left: number;
+  right: number;
+  height: number;
+}
+
+/** The highlighted time while the user drags on the overview strip, inside an <svg>. The strip and the chart both show it. */
+export function ZoomHighlight({ selection, x, left, right, height }: ZoomHighlightProps) {
+  if (!selection) return null;
+  const from = Math.max(left, x(selection.from));
+  const to = Math.min(right, x(selection.to));
+  if (to <= from) return null;
+  return (
+    <rect data-zoom-highlight x={from} y={0} width={to - from} height={height} strokeWidth={1} className="pointer-events-none fill-zinc-50/15 stroke-zinc-50/60" />
+  );
 }

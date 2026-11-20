@@ -1,8 +1,7 @@
-import { cn } from '@toolpath/ui';
 import { useState, type PointerEvent } from 'react';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import type { Machine } from '../../types';
-import { TimeLabels } from './ChartParts';
+import { MIN_DRAG_PX, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
 import { timeLabels, viewText, type ChartRange } from './historyChart';
 import { StateBand } from './StateBand';
 import { liveStateOf, type StateSegment } from './stateTimeline';
@@ -12,10 +11,6 @@ const BAND_HEIGHT = 16;
 /** The space between the band and the time labels */
 const TIME_LABEL_GAP = 15;
 const SVG_HEIGHT = BAND_HEIGHT + TIME_LABEL_GAP + 3;
-/** A press this near to an edge of the box, in pixels, moves that edge */
-const EDGE_PX = 6;
-/** The box is at least this wide while the user drags an edge, so the edges do not cross */
-const MIN_BOX_PX = 4;
 
 interface ChartOverviewProps {
   machine: Machine;
@@ -26,6 +21,9 @@ interface ChartOverviewProps {
   /** The time in the chart, which the box shows */
   view: ChartRange;
   viewEnd: number | null;
+  /** The time that the user highlights now, also shown on the chart */
+  selection: ZoomSelection | null;
+  onSelect: (selection: ZoomSelection | null) => void;
   /** The space left and right of the band, so the band lines up with the plot above it */
   left: number;
   right: number;
@@ -37,7 +35,7 @@ interface ChartOverviewProps {
 
 /**
  * A thin machine state band of the full range under the chart, with a box on the time that the chart shows.
- * Drag the box to move in time, drag an edge of the box to zoom, or click the band to move the box there.
+ * Drag on the band to highlight a time and zoom in to it. Click the band to move the chart there.
  */
 export function ChartOverview({ machine, overview, overviewEnd, ...plotProps }: ChartOverviewProps) {
   const { segments, now } = useStateTimeline(machine.id, liveStateOf(machine), overview, undefined, overviewEnd);
@@ -51,19 +49,6 @@ export function ChartOverview({ machine, overview, overviewEnd, ...plotProps }: 
   );
 }
 
-type DragKind = 'move' | 'left' | 'right';
-
-interface Drag {
-  kind: DragKind;
-  /** Where the pointer went down */
-  startX: number;
-  /** The time in the box when the drag started */
-  from: number;
-  to: number;
-  /** True when the press was outside the box, so the box went there: the release changes the chart also with no move */
-  jumped: boolean;
-}
-
 interface OverviewPlotProps extends Omit<ChartOverviewProps, 'machine' | 'overviewEnd'> {
   segments: StateSegment[];
   live: boolean;
@@ -71,104 +56,86 @@ interface OverviewPlotProps extends Omit<ChartOverviewProps, 'machine' | 'overvi
   width: number;
 }
 
-function OverviewPlot({ segments, overview, live, now, width, view, viewEnd, left, right, onMove, onZoom }: OverviewPlotProps) {
-  const [drag, setDrag] = useState<Drag | null>(null);
-  const [pointerX, setPointerX] = useState<number | null>(null);
-  const bandWidth = width - left - right;
+function OverviewPlot(props: OverviewPlotProps) {
+  const { segments, overview, live, now, width, view, viewEnd, selection, onSelect, left, right, onMove, onZoom } = props;
+  /** Where the pointer went down, or null when the user does not drag */
+  const [startX, setStartX] = useState<number | null>(null);
+  const bandRight = width - right;
   const startTime = now - overview.ms;
-  const msPerPx = overview.ms / bandWidth;
+  const msPerPx = overview.ms / (bandRight - left);
   const x = (time: number) => left + (time - startTime) / msPerPx;
+  /** The time at an x position. A position outside the band is its edge. */
+  const timeAt = (offsetX: number) => startTime + (Math.min(Math.max(offsetX, left), bandRight) - left) * msPerPx;
   const viewTo = viewEnd ?? now;
   const viewFrom = viewTo - view.ms;
-
-  /** The time in the box while the user drags. The box cannot go after now, and an edge stays in the band. */
-  const boxAt = (current: Drag, pointer: number) => {
-    const delta = (pointer - current.startX) * msPerPx;
-    const minMs = MIN_BOX_PX * msPerPx;
-    if (current.kind === 'left') {
-      return { from: Math.min(Math.max(current.from + delta, startTime), current.to - minMs), to: current.to };
-    }
-    if (current.kind === 'right') {
-      return { from: current.from, to: Math.max(Math.min(current.to + delta, now), current.from + minMs) };
-    }
-    const moved = Math.min(delta, Date.now() - current.to);
-    return { from: current.from + moved, to: current.to + moved };
-  };
-
-  const box = drag && pointerX !== null ? boxAt(drag, pointerX) : { from: viewFrom, to: viewTo };
-  const boxLeft = Math.max(left, x(box.from));
-  const boxRight = Math.min(left + bandWidth, x(box.to));
-
-  /** What a press at `offsetX` does. A narrow box moves from inside, so it is easy to grab. */
-  const kindAt = (offsetX: number): DragKind | 'jump' => {
-    const inside = offsetX >= boxLeft && offsetX <= boxRight;
-    if (boxRight - boxLeft < 3 * EDGE_PX && inside) return 'move';
-    if (Math.abs(offsetX - boxLeft) <= EDGE_PX) return 'left';
-    if (Math.abs(offsetX - boxRight) <= EDGE_PX) return 'right';
-    return inside ? 'move' : 'jump';
-  };
+  const boxLeft = Math.max(left, x(viewFrom));
+  const boxRight = Math.min(bandRight, x(viewTo));
 
   const offsetXOf = (event: PointerEvent<SVGSVGElement>) => event.clientX - event.currentTarget.getBoundingClientRect().left;
+  const selectionTo = (start: number, offsetX: number): ZoomSelection | null => {
+    if (Math.abs(offsetX - start) < MIN_DRAG_PX) return null;
+    const [from, to] = [timeAt(start), timeAt(offsetX)].sort((a, b) => a - b);
+    return { from, to };
+  };
 
   const startDrag = (event: PointerEvent<SVGSVGElement>) => {
     const offsetX = offsetXOf(event);
-    if (event.button !== 0 || offsetX < left - EDGE_PX || offsetX > left + bandWidth + EDGE_PX) return;
-    const kind = kindAt(offsetX);
-    let start = { from: viewFrom, to: viewTo };
-    if (kind === 'jump') {
-      // The box goes to the press, with its middle there
-      const moved = Math.min(startTime + (offsetX - left) * msPerPx - (viewFrom + viewTo) / 2, Date.now() - viewTo);
-      start = { from: viewFrom + moved, to: viewTo + moved };
-    }
-    setDrag({ kind: kind === 'jump' ? 'move' : kind, startX: offsetX, ...start, jumped: kind === 'jump' });
-    setPointerX(offsetX);
+    if (event.button !== 0 || offsetX < left || offsetX > bandRight) return;
+    setStartX(offsetX);
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
-
-  const endDrag = (event: PointerEvent<SVGSVGElement>) => {
-    if (!drag) return;
-    setDrag(null);
-    const shown = boxAt(drag, offsetXOf(event));
-    // A move under one pixel is a click on the box, which changes nothing
-    const changed = (ms: number) => Math.abs(ms) >= msPerPx;
-    if (drag.kind === 'move') {
-      const moved = shown.from - viewFrom;
-      if (drag.jumped ? moved !== 0 : changed(moved)) onMove(moved);
-    } else if (changed(shown.from - viewFrom) || changed(shown.to - viewTo)) {
-      onZoom(shown.from, shown.to);
-    }
+  const followDrag = (event: PointerEvent<SVGSVGElement>) => {
+    if (startX !== null) onSelect(selectionTo(startX, offsetXOf(event)));
   };
-
-  const hoverKind = drag ? drag.kind : pointerX === null ? null : kindAt(pointerX);
-  const cursor = hoverKind === 'left' || hoverKind === 'right'
-    ? 'cursor-ew-resize'
-    : hoverKind === 'move' ? (drag ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-pointer';
+  const endDrag = (event: PointerEvent<SVGSVGElement>) => {
+    if (startX === null) return;
+    setStartX(null);
+    onSelect(null);
+    const offsetX = offsetXOf(event);
+    const highlighted = selectionTo(startX, offsetX);
+    if (highlighted) {
+      onZoom(highlighted.from, highlighted.to);
+      return;
+    }
+    // A click moves the chart, so the middle of its time is at the click. The chart cannot go after now.
+    const moved = Math.min(timeAt(offsetX) - (viewFrom + viewTo) / 2, Date.now() - viewTo);
+    if (Math.abs(moved) >= msPerPx) onMove(moved);
+  };
+  const cancelDrag = () => {
+    setStartX(null);
+    onSelect(null);
+  };
 
   return (
     <svg
       width={width}
       height={SVG_HEIGHT}
       role="img"
-      aria-label={`Overview ${live ? `of the last ${overview.words}` : viewText(overview, now)}. The box shows the time in the chart. Drag the box to move in time. Drag an edge of the box to zoom.`}
+      aria-label={`Overview ${live ? `of the last ${overview.words}` : viewText(overview, now)}. The box shows the time in the chart. Drag on the overview to zoom in. Click it to move the chart there.`}
       onPointerDown={startDrag}
-      onPointerMove={event => setPointerX(offsetXOf(event))}
+      onPointerMove={followDrag}
       onPointerUp={endDrag}
-      onPointerCancel={() => setDrag(null)}
-      onPointerLeave={() => { if (!drag) setPointerX(null); }}
-      className={cn('block touch-none', cursor)}
+      onPointerCancel={cancelDrag}
+      className="block cursor-crosshair touch-none"
     >
-      <rect x={left} width={bandWidth} height={BAND_HEIGHT} rx={3} className="fill-zinc-800" />
-      <StateBand segments={segments} startTime={startTime} rangeMs={overview.ms} left={left} width={bandWidth} y={0} height={BAND_HEIGHT} />
-      {/* The time outside the box is dim, so the box stands out */}
+      <rect x={left} width={bandRight - left} height={BAND_HEIGHT} rx={3} className="fill-zinc-800" />
+      <StateBand segments={segments} startTime={startTime} rangeMs={overview.ms} left={left} width={bandRight - left} y={0} height={BAND_HEIGHT} />
+      {/* The time outside the box is dim, so the time in the chart stands out */}
       <rect x={left} width={Math.max(0, boxLeft - left)} height={BAND_HEIGHT} className="fill-zinc-950/65" />
-      <rect x={boxRight} width={Math.max(0, left + bandWidth - boxRight)} height={BAND_HEIGHT} className="fill-zinc-950/65" />
+      <rect x={boxRight} width={Math.max(0, bandRight - boxRight)} height={BAND_HEIGHT} className="fill-zinc-950/65" />
       {boxRight > boxLeft && (
-        <g className="pointer-events-none">
-          <rect x={boxLeft} y={0.75} width={boxRight - boxLeft} height={BAND_HEIGHT - 1.5} rx={2} fill="none" strokeWidth={1.5} className="stroke-zinc-50" />
-          <rect x={boxLeft - 1.5} y={3} width={3} height={BAND_HEIGHT - 6} rx={1} className="fill-zinc-50" />
-          <rect x={boxRight - 1.5} y={3} width={3} height={BAND_HEIGHT - 6} rx={1} className="fill-zinc-50" />
-        </g>
+        <rect
+          x={boxLeft}
+          y={0.75}
+          width={boxRight - boxLeft}
+          height={BAND_HEIGHT - 1.5}
+          rx={2}
+          fill="none"
+          strokeWidth={1.5}
+          className="pointer-events-none stroke-zinc-50"
+        />
       )}
+      <ZoomHighlight selection={selection} x={x} left={left} right={bandRight} height={BAND_HEIGHT} />
       <TimeLabels labels={timeLabels(overview.ms, now, live)} x={x} y={BAND_HEIGHT + TIME_LABEL_GAP} />
     </svg>
   );

@@ -2,7 +2,7 @@ import { useState, type PointerEvent } from 'react';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
-import { ChartTooltip, TimeLabels, useZoomSelect, ZoomHighlight } from './ChartParts';
+import { ChartTooltip, dragStyle, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
 import { messageFor, timeLabels, viewText, type ChartRange } from './historyChart';
 import { formatDuration, formatShare } from './reportView';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
@@ -32,11 +32,13 @@ interface StateChartProps {
   machine: Machine;
   range: ChartRange;
   end: number | null;
-  /** Shows the time that the user highlighted */
-  onZoom: (from: number, to: number) => void;
+  /** How far the plot follows a drag, in pixels */
+  dragX: number;
+  /** The time that the user highlights on the overview strip */
+  selection: ZoomSelection | null;
 }
 
-export function StateChart({ machine, range, end, onZoom }: StateChartProps) {
+export function StateChart({ machine, range, end, dragX, selection }: StateChartProps) {
   const { segments, status, now } = useStateTimeline(machine.id, liveStateOf(machine), range, undefined, end);
   const { ref, width } = useBoxSize<HTMLDivElement>();
   const totals = stateTotals(segments);
@@ -60,8 +62,8 @@ export function StateChart({ machine, range, end, onZoom }: StateChartProps) {
           </div>
         ))}
       </div>
-      <div ref={ref} className="relative">
-        {width > 0 && <StatePlot segments={segments} totalsText={totalsText(totals, range)} now={now} range={range} live={end === null} width={width} onZoom={onZoom} />}
+      <div ref={ref} className="relative" style={dragStyle(dragX)}>
+        {width > 0 && <StatePlot segments={segments} totalsText={totalsText(totals, range)} now={now} range={range} live={end === null} width={width} selection={selection} />}
       </div>
       <StateLegend explain className="gap-x-4" />
     </div>
@@ -77,14 +79,14 @@ interface StatePlotProps {
   segments: StateSegment[];
   /** False when the chart looks back in time, so its end is not "Now" */
   live: boolean;
-  onZoom: (from: number, to: number) => void;
+  selection: ZoomSelection | null;
   totalsText: string;
   now: number;
   range: ChartRange;
   width: number;
 }
 
-function StatePlot({ segments, totalsText, now, range, live, width, onZoom }: StatePlotProps) {
+function StatePlot({ segments, totalsText, now, range, live, width, selection }: StatePlotProps) {
   // The hovered time, not the segment: the live segment grows, so the segment is found again on each render
   const [hoveredTime, setHoveredTime] = useState<number | undefined>();
   const hovered = hoveredTime === undefined ? undefined : segmentAt(segments, hoveredTime);
@@ -92,13 +94,8 @@ function StatePlot({ segments, totalsText, now, range, live, width, onZoom }: St
   const x = (time: number) => ((time - startTime) / range.ms) * width;
 
   const timeAt = (offsetX: number) => startTime + (offsetX / width) * range.ms;
-  const { handlers, highlight } = useZoomSelect(timeAt, onZoom);
 
   const showSegment = (event: PointerEvent<SVGSVGElement>) => {
-    if (handlers.onSelectMove(event)) {
-      setHoveredTime(undefined);
-      return;
-    }
     setHoveredTime(timeAt(event.clientX - event.currentTarget.getBoundingClientRect().left));
   };
 
@@ -109,12 +106,9 @@ function StatePlot({ segments, totalsText, now, range, live, width, onZoom }: St
         height={SVG_HEIGHT}
         role="img"
         aria-label={`Machine state ${viewText(range, live ? null : now)}. ${totalsText}.`}
-        onPointerDown={handlers.onPointerDown}
         onPointerMove={showSegment}
-        onPointerUp={handlers.onPointerUp}
-        onPointerCancel={handlers.onPointerCancel}
         onPointerLeave={() => setHoveredTime(undefined)}
-        className="block cursor-crosshair"
+        className="block"
       >
         <rect width={width} height={BAND_HEIGHT} rx={6} className="fill-zinc-800" />
         <StateBand segments={segments} startTime={startTime} rangeMs={range.ms} left={0} width={width} y={0} height={BAND_HEIGHT} />
@@ -130,7 +124,7 @@ function StatePlot({ segments, totalsText, now, range, live, width, onZoom }: St
           />
         )}
         <TimeLabels labels={timeLabels(range.ms, now, live)} x={x} y={BAND_HEIGHT + TIME_LABEL_GAP} />
-        {highlight && <ZoomHighlight x={highlight.x} width={highlight.width} height={BAND_HEIGHT} />}
+        <ZoomHighlight selection={selection} x={x} left={0} right={width} height={BAND_HEIGHT} />
       </svg>
       {hovered && <SegmentTooltip segment={hovered} left={Math.min(Math.max(0, x(hovered.start)), width - TOOLTIP_WIDTH)} />}
     </>
