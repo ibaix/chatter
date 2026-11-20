@@ -2,7 +2,6 @@ import { autoHistoryWindow } from '@local-chatter/shared';
 import { describe, expect, it } from 'vitest';
 import {
   axisTicks,
-  CHART_RANGE_MS,
   durationMs,
   formatChartNumber,
   GAP_MS,
@@ -11,7 +10,7 @@ import {
   mergeHistory,
   nearestPoint,
   pannedEnd,
-  recentPoints,
+  pointsFrom,
   stepPoints,
   CHART_RANGES,
   timeLabels,
@@ -46,11 +45,9 @@ describe('mergeHistory', () => {
   });
 });
 
-describe('recentPoints', () => {
-  it('keeps only the points of the last 10 minutes', () => {
-    const now = CHART_RANGE_MS + 5000;
-
-    expect(recentPoints([point(0, 1), point(5000, 2), point(now, 3)], now)).toEqual([point(5000, 2), point(now, 3)]);
+describe('pointsFrom', () => {
+  it('keeps the points from a time on', () => {
+    expect(pointsFrom([point(0, 1), point(5000, 2), point(9000, 3)], 5000)).toEqual([point(5000, 2), point(9000, 3)]);
   });
 });
 

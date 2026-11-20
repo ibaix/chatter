@@ -8,13 +8,11 @@ import {
   gapFor,
   loadSpan,
   mergeHistory,
-  recentPoints,
+  pointsFrom,
   withLivePoint,
   type ChartRange,
   type HistoryStatus,
 } from './historyChart';
-
-
 
 /**
  * One value over the chart's range: the saved history first, then each live value.
@@ -48,7 +46,7 @@ export function useChartHistory(
   useEffect(() => {
     let stopped = false;
     // Another time of the same value keeps the old points until the new ones come
-    if (loadedKey.current !== pointsKey) setPoints(latestLive.current && end === null ? [latestLive.current] : []);
+    if (loadedKey.current !== pointsKey) setPoints(latestLive.current ? [latestLive.current] : []);
     loadedKey.current = pointsKey;
     setShownKey(pointsKey);
     setStatus('loading');
@@ -77,5 +75,5 @@ export function useChartHistory(
   const chartNow = end ?? Math.max(now, live?.time ?? 0);
   if (shownKey !== pointsKey) return { points: [], status: 'loading' as const, now: chartNow, gapMs: gapFor(windowMs) };
   // The points of the loaded span: the range that shows, and one range before it (loadSpan)
-  return { points: recentPoints(points, chartNow, 2 * range.ms), status, now: chartNow, gapMs: gapFor(windowMs) };
+  return { points: pointsFrom(points, chartNow - 2 * range.ms), status, now: chartNow, gapMs: gapFor(windowMs) };
 }

@@ -18,7 +18,7 @@ export function durationMs(text: string): number {
 }
 
 export interface ChartRange {
-  /** A range button, or 'zoom' for a time that the user highlighted on the chart */
+  /** A range button, or 'zoom' for a time that the user highlighted on the overview strip */
   id: '10m' | '1h' | '24h' | '7d' | 'zoom';
   /** The words after "in the last" */
   words: string;
@@ -37,8 +37,6 @@ export const CHART_RANGES: ChartRange[] = [
   { id: '7d', words: '7 days', ms: 7 * DAY, query: '-7d' },
 ];
 
-/** The chart shows the last 10 minutes at first */
-export const CHART_RANGE_MS = CHART_RANGES[0].ms;
 /** Points that are further apart than this have no data between them, so the line has a gap there */
 export const GAP_MS = 15_000;
 
@@ -74,8 +72,9 @@ export function mergeHistory(history: HistoryPoint[], live: HistoryPoint[]): His
   return [...history, ...live.filter(point => point.time > historyEnd)];
 }
 
-export function recentPoints(points: HistoryPoint[], now: number, rangeMs = CHART_RANGE_MS): HistoryPoint[] {
-  return points.filter(point => point.time >= now - rangeMs);
+/** The points from `from` on. The points after the end of a chart in the past stay, because a drag can show them. */
+export function pointsFrom(points: HistoryPoint[], from: number): HistoryPoint[] {
+  return points.filter(point => point.time >= from);
 }
 
 /**
