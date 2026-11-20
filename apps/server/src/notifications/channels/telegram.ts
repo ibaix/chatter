@@ -73,6 +73,8 @@ function refusalOf(status: number, answer: TelegramError, token: string): string
     return `The group is now a supergroup, and it has a new chat ID. Change the chat ID to ${newChatId}.`;
   }
   const reason = typeof answer.description === 'string' ? answer.description : '';
-  if (!reason || /chat not found/i.test(reason)) return 'Telegram cannot find the chat. Check the chat ID.';
+  // A 400 with no reason can be from a proxy, so Chatter does not guess the reason
+  if (!reason) return `Telegram answered ${status}.`;
+  if (/chat not found/i.test(reason)) return 'Telegram cannot find the chat. Check the chat ID.';
   return `Telegram refused the message: ${cutText(reason.replaceAll(token, '(bot token)'), MAX_REASON).replace(/\.$/, '')}.`;
 }

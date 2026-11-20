@@ -101,8 +101,14 @@ describe('telegramChannel', () => {
     expect(await resultFor(status)).toEqual({ ok: false, retry: false, error: 'Telegram refused the bot token. Check the bot token.' });
   });
 
-  it('stops at once when Telegram answers 400, because the chat ID is wrong', async () => {
-    expect(await resultFor(400)).toEqual({ ok: false, retry: false, error: 'Telegram cannot find the chat. Check the chat ID.' });
+  it('stops at once when Telegram answers 400 with no reason, and does not guess the reason', async () => {
+    expect(await resultFor(400)).toEqual({ ok: false, retry: false, error: 'Telegram answered 400.' });
+  });
+
+  it('does not guess the reason when a proxy answers 400 with a web page', async () => {
+    const page = fakeFetch(() => new Response('<html>Bad Request</html>', { status: 400, headers: { 'content-type': 'text/html' } }));
+
+    expect(await telegramChannel.send(settings, MESSAGE, page.context())).toEqual({ ok: false, retry: false, error: 'Telegram answered 400.' });
   });
 
   it('tells that the chat ID is wrong when Telegram cannot find the chat', async () => {
