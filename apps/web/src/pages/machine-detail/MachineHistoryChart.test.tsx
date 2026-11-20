@@ -310,6 +310,17 @@ describe('MachineHistoryChart', () => {
       expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
     });
 
+    it('starts a new scroll step when the scroll changes its direction', async () => {
+      render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));
+
+      // A small scroll on, then a scroll back that is longer than one step
+      fireEvent.wheel(chartBody(), { deltaX: 50, deltaY: 0 });
+      fireEvent.wheel(chartBody(), { deltaX: -70, deltaY: 0 });
+
+      expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
+    });
+
     it('loads the history once after a quick series of sideways scroll steps', async () => {
       render(<ChartWithMenu machine={runningMachine()} />);
       await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledTimes(1));

@@ -67,6 +67,8 @@ export function useChartDrag({ rangeMs, end, now, margins, onMove }: ChartDragOp
     const sideways = event.shiftKey && event.deltaX === 0 ? event.deltaY : event.deltaX;
     if (!event.shiftKey && Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
     event.preventDefault();
+    // A scroll in the other direction starts a new step, so the scroll before it does not hold it back
+    if (Math.sign(sideways) !== Math.sign(wheelDelta.current)) wheelDelta.current = 0;
     wheelDelta.current += sideways;
     if (Math.abs(wheelDelta.current) < WHEEL_STEP_PX) return;
     onMove(Math.sign(wheelDelta.current) * WHEEL_STEP * rangeMs);
