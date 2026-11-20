@@ -12,3 +12,4 @@ export * from './updates.js';
 export * from './alertRules.js';
 export * from './running.js';
 export * from './notifications.js';
+export * from './ignorePatterns.js';
