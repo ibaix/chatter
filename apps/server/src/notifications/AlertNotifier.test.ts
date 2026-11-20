@@ -216,6 +216,33 @@ describe('AlertNotifier', () => {
     });
   });
 
+  describe('an event alert, such as "program ended"', () => {
+    const programEnded = anAlert({
+      name: 'Program ended',
+      labels: { alertname: 'Program ended', machine: 'haas-vf2', severity: 'warning', event: 'true' },
+    });
+
+    it('sends the start message, and no end message when the alert clears', () => {
+      channels = [channel('phones')];
+      notifier.alertChanged(change('started', programEnded));
+      const [start] = outbox.takeDue(NOW);
+      outbox.markSent(start.id, 'Sent', NOW);
+
+      notifier.alertChanged(change('ended', programEnded));
+
+      expect(queued()).toEqual(['phones started: WARNING - Haas VF-2: Program ended. Started 9:02 AM.']);
+    });
+
+    it('does not combine a start that still waits: the start goes as it is', () => {
+      channels = [channel('phones')];
+
+      notifier.alertChanged(change('started', programEnded));
+      notifier.alertChanged(change('ended', programEnded));
+
+      expect(queued()).toEqual(['phones started: WARNING - Haas VF-2: Program ended. Started 9:02 AM.']);
+    });
+  });
+
   it('sends an alert that is not about one machine only to the channels for all machines', () => {
     channels = [channel('all'), channel('one-machine', { machineIds: ['haas-vf2'] })];
 

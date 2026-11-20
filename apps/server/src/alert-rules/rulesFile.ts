@@ -1,7 +1,7 @@
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { stringify } from 'yaml';
-import { ALERT_SUBJECTS, ruleName, ruleQuery, type AlertRule } from '@local-chatter/shared';
+import { ALERT_SUBJECTS, EVENT_LABEL, isEventSubject, ruleName, ruleQuery, type AlertRule } from '@local-chatter/shared';
 
 /** The file in the shared folder. vmalert reads every .yml file in that folder. */
 export const RULES_FILE_NAME = 'rules.yml';
@@ -38,12 +38,17 @@ export function rulesFileText(rulesByMachine: Map<string, AlertRule[]>): string 
   return HEADER + stringify({ groups });
 }
 
+/**
+ * An event rule, such as "program ended", fires at the first true check, because its alert clears by itself after a minute.
+ * Its event label tells Chatter to send no "OK" message when the alert clears.
+ */
 function vmalertRule(rule: AlertRule, machineId: string): VmalertRule {
+  const isEvent = rule.kind === 'simple' && isEventSubject(rule.subject);
   return {
     alert: ruleName(rule),
     expr: ruleQuery(rule, machineId),
-    for: `${rule.forMinutes}m`,
-    labels: { machine: machineId, severity: rule.severity, rule_id: rule.id },
+    for: `${isEvent ? 0 : rule.forMinutes}m`,
+    labels: { machine: machineId, severity: rule.severity, rule_id: rule.id, ...(isEvent && { [EVENT_LABEL]: 'true' }) },
     annotations: { summary: summaryOf(rule) },
   };
 }
@@ -53,7 +58,7 @@ function summaryOf(rule: AlertRule): string {
   if (rule.kind === 'query') return 'The query value is {{ $value }}';
   const subject = ALERT_SUBJECTS[rule.subject];
   if (subject.kind === 'value') return `${subject.name} is {{ $value }}${subject.unitSuffix}`;
-  return rule.forMinutes > 0 ? `${subject.name} for ${rule.forMinutes} min or more` : subject.name;
+  return subject.kind === 'state' && rule.forMinutes > 0 ? `${subject.name} for ${rule.forMinutes} min or more` : subject.name;
 }
 
 /** Writes the rules file in the folder that vmalert also reads */

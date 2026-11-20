@@ -1,4 +1,4 @@
-import { type AlertSeverity, channelWantsAlert, firstMatchingPattern, type NotificationChannel } from '@local-chatter/shared';
+import { type AlertSeverity, channelWantsAlert, EVENT_LABEL, firstMatchingPattern, type NotificationChannel } from '@local-chatter/shared';
 import type { Alert } from '../alerts/AlertStore.js';
 import { createLogger } from '../logging/logger.js';
 import type { AlertChange, AlertChangeListener } from './AlertChangeFinder.js';
@@ -32,6 +32,9 @@ export interface NotifierOptions {
  *
  * A message whose text matches an ignore pattern of the channel stays in the list as "ignored", and the channel does not get it.
  * When the start of an alert was ignored, its end is ignored too.
+ *
+ * An event alert, such as "program ended", gets only its start message. It clears by itself, so its end tells nothing,
+ * and a start that still waits goes as it is, not as a combined message.
  */
 export class AlertNotifier implements AlertChangeListener {
   constructor(private readonly options: NotifierOptions) {}
@@ -49,6 +52,7 @@ export class AlertNotifier implements AlertChangeListener {
   }
 
   private queueMessages({ kind, alertId, alert }: AlertChange): void {
+    if (kind === 'ended' && isEventAlert(alert)) return;
     const { outbox, textOptions, now = Date.now } = this.options;
     const machineName = alert.machineId === undefined ? null : this.options.machineName(alert.machineId);
     const message = (messageKind: 'started' | 'ended' | 'combined') =>
@@ -83,6 +87,11 @@ export class AlertNotifier implements AlertChangeListener {
   private channelsThatWant(alert: Alert): NotificationChannel[] {
     return this.options.channels.list().filter(channel => channel.enabled && wantsAlert(channel, alert));
   }
+}
+
+/** The label comes from the vmalert rules file of an event rule */
+function isEventAlert(alert: Alert): boolean {
+  return alert.labels[EVENT_LABEL] === 'true';
 }
 
 /**
