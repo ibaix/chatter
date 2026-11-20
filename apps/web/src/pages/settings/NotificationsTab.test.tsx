@@ -175,42 +175,42 @@ describe('NotificationsTab', () => {
       Array.from({ length: count }, (_, index) => message({ id: count - index, channelId, text: `Message ${count - index}` }));
     const messageRows = () => within(screen.getByRole('region', { name: 'Messages' })).getAllByRole('row').slice(1);
 
-    it('shows the newest 50 messages and a button for more', async () => {
+    it('shows the newest 10 messages and a button for more', async () => {
       await renderTab(manyMessages(120));
 
-      expect(messageRows()).toHaveLength(50);
+      expect(messageRows()).toHaveLength(10);
       expect(messageRows()[0]).toHaveTextContent('Message 120');
-      expect(screen.getByText('Showing 50 of 120 messages.')).toBeInTheDocument();
+      expect(screen.getByText('Showing 10 of 120 messages.')).toBeInTheDocument();
     });
 
-    it('shows 50 more each time the admin clicks Show more, and then no button', async () => {
-      await renderTab(manyMessages(120));
+    it('shows 10 more each time the admin clicks Show more, and then no button', async () => {
+      await renderTab(manyMessages(25));
 
       fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
-      expect(messageRows()).toHaveLength(100);
+      expect(messageRows()).toHaveLength(20);
 
       fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
-      expect(messageRows()).toHaveLength(120);
+      expect(messageRows()).toHaveLength(25);
       expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
       expect(screen.queryByText(/^Showing/)).not.toBeInTheDocument();
     });
 
     it('shows no button when all the messages fit', async () => {
-      await renderTab(manyMessages(50));
+      await renderTab(manyMessages(10));
 
-      expect(messageRows()).toHaveLength(50);
+      expect(messageRows()).toHaveLength(10);
       expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
     });
 
-    it('starts again at 50 when the admin selects another channel', async () => {
+    it('starts again at 10 when the admin selects another channel', async () => {
       await renderTab([...manyMessages(60, 'slack').map(entry => ({ ...entry, id: entry.id + 100 })), ...manyMessages(80)]);
       fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
-      expect(messageRows()).toHaveLength(100);
+      expect(messageRows()).toHaveLength(20);
 
       fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'phones' } });
 
-      expect(messageRows()).toHaveLength(50);
-      expect(screen.getByText('Showing 50 of 80 messages.')).toBeInTheDocument();
+      expect(messageRows()).toHaveLength(10);
+      expect(screen.getByText('Showing 10 of 80 messages.')).toBeInTheDocument();
     });
   });
 

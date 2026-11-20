@@ -11,7 +11,7 @@ import { KIND_LABELS } from './notificationLabels';
 
 const ALL_CHANNELS = '';
 /** The list can have up to 1000 messages, so it shows this many at first, and this many more for each click */
-export const MESSAGES_PAGE_SIZE = 50;
+export const MESSAGES_PAGE_SIZE = 10;
 const NO_CHANNEL_NAME = 'Deleted channel';
 
 interface MessagesPanelProps {
