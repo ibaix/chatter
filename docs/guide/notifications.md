@@ -255,6 +255,8 @@ The title is `Chatter: ` and the machine name. When you tap the message, the pho
 
 The **Messages** panel shows each message of the last 30 days, the newest first. Chatter keeps at most 1000 messages, so a busy shop sees fewer days. Select a channel in **Channel** to see only its messages.
 
+The panel shows the newest 50 messages. To see older messages, click **Show more** at the bottom of the list. While the tab is open, Chatter adds new messages to the list every 20 seconds.
+
 | Result | Meaning |
 | --- | --- |
 | **Sent** | The service took the message. Under it is the answer of the service, for example "Sent to 2 phones". Twilio can still fail to deliver a text after that. |

@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addChannel, fetchChannels, fetchChannelTypes, fetchMessages, fetchNotificationSettings, removeChannel, saveNotificationSettings, sendTestMessage, updateChannel,
   type ChannelTypeInfo, type NotificationChannel, type NotificationMessage,
@@ -168,6 +168,107 @@ describe('NotificationsTab', () => {
 
     expect(within(messages).queryByText('Slack text')).not.toBeInTheDocument();
     expect(within(messages).getByText('Phone text')).toBeInTheDocument();
+  });
+
+  describe('a long message list', () => {
+    const manyMessages = (count: number, channelId = 'phones') =>
+      Array.from({ length: count }, (_, index) => message({ id: count - index, channelId, text: `Message ${count - index}` }));
+    const messageRows = () => within(screen.getByRole('region', { name: 'Messages' })).getAllByRole('row').slice(1);
+
+    it('shows the newest 50 messages and a button for more', async () => {
+      await renderTab(manyMessages(120));
+
+      expect(messageRows()).toHaveLength(50);
+      expect(messageRows()[0]).toHaveTextContent('Message 120');
+      expect(screen.getByText('Showing 50 of 120 messages.')).toBeInTheDocument();
+    });
+
+    it('shows 50 more each time the admin clicks Show more, and then no button', async () => {
+      await renderTab(manyMessages(120));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+      expect(messageRows()).toHaveLength(100);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+      expect(messageRows()).toHaveLength(120);
+      expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Showing/)).not.toBeInTheDocument();
+    });
+
+    it('shows no button when all the messages fit', async () => {
+      await renderTab(manyMessages(50));
+
+      expect(messageRows()).toHaveLength(50);
+      expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+    });
+
+    it('starts again at 50 when the admin selects another channel', async () => {
+      await renderTab([...manyMessages(60, 'slack').map(entry => ({ ...entry, id: entry.id + 100 })), ...manyMessages(80)]);
+      fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+      expect(messageRows()).toHaveLength(100);
+
+      fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'phones' } });
+
+      expect(messageRows()).toHaveLength(50);
+      expect(screen.getByText('Showing 50 of 80 messages.')).toBeInTheDocument();
+    });
+  });
+
+  describe('new messages', () => {
+    let visibility: DocumentVisibilityState = 'visible';
+
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      visibility = 'visible';
+      vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it('loads the messages again every 20 seconds, and not the other parts of the tab', async () => {
+      await renderTab([message({ id: 1, text: 'Old message' })]);
+      vi.mocked(fetchMessages).mockResolvedValue([message({ id: 2, text: 'New message' }), message({ id: 1, text: 'Old message' })]);
+      const channelLoads = vi.mocked(fetchChannels).mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(await screen.findByText('New message')).toBeInTheDocument();
+      expect(fetchMessages).toHaveBeenCalledTimes(2);
+      expect(fetchChannels).toHaveBeenCalledTimes(channelLoads);
+    });
+
+    it('does not load while the page is hidden, and loads at once when the page shows again', async () => {
+      await renderTab();
+      visibility = 'hidden';
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fetchMessages).toHaveBeenCalledTimes(1);
+
+      visibility = 'visible';
+      document.dispatchEvent(new Event('visibilitychange'));
+      await waitFor(() => expect(fetchMessages).toHaveBeenCalledTimes(2));
+    });
+
+    it('keeps the list when a load fails, for example while the server restarts', async () => {
+      await renderTab([message({ id: 1, text: 'Old message' })]);
+      vi.mocked(fetchMessages).mockRejectedValue(new Error('offline'));
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(screen.getByText('Old message')).toBeInTheDocument();
+    });
+
+    it('stops loading when the admin leaves the tab', async () => {
+      await renderTab();
+      cleanup();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(fetchMessages).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('shows the error of a failed message in the message list', async () => {

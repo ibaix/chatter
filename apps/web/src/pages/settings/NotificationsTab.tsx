@@ -1,5 +1,5 @@
 import { cn } from '@toolpath/ui';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   addChannel, fetchChannels, fetchChannelTypes, fetchMessages, fetchNotificationSettings, inputOf, removeChannel, saveNotificationSettings,
   sendTestMessage, updateChannel,
@@ -36,6 +36,27 @@ async function loadNotifications(): Promise<NotificationsReport> {
   return { types, channels, messages, settings };
 }
 
+/** New messages come in while the tab is open, so the tab loads the message list again this often */
+export const MESSAGES_REFRESH_MS = 20_000;
+
+/**
+ * Loads the messages again every MESSAGES_REFRESH_MS while the page is in view, and at once when the page shows again.
+ * Only the message list: the channels and the settings change only when an admin changes them.
+ */
+function useMessageRefresh(refreshPart: (loadPart: () => Promise<Partial<NotificationsReport>>) => Promise<void>) {
+  useEffect(() => {
+    const loadMessages = () => {
+      if (document.visibilityState === 'visible') void refreshPart(async () => ({ messages: await fetchMessages() }));
+    };
+    const timer = setInterval(loadMessages, MESSAGES_REFRESH_MS);
+    document.addEventListener('visibilitychange', loadMessages);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', loadMessages);
+    };
+  }, [refreshPart]);
+}
+
 /** The place of the last change, so its error shows next to the button that the user clicked */
 type ChangedPanel = 'channels' | 'settings' | 'form';
 
@@ -53,7 +74,8 @@ interface TestOutcome {
  * the messages of the last 30 days, and the settings of the message text.
  */
 export function NotificationsTab({ machines }: { machines: MachineName[] }) {
-  const { report, loadError, changeError, isChanging, change, refresh } = useServerReport(loadNotifications);
+  const { report, loadError, changeError, isChanging, change, refresh, refreshPart } = useServerReport(loadNotifications);
+  useMessageRefresh(refreshPart);
   const [changedPanel, setChangedPanel] = useState<ChangedPanel | null>(null);
   const [openForm, setOpenForm] = useState<OpenForm>(null);
   if (loadError || !report) return <ReportPending loadError={loadError} />;

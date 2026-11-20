@@ -1,6 +1,7 @@
 import { cn } from '@toolpath/ui';
 import { useState } from 'react';
 import type { NotificationChannel, NotificationMessage } from '../../api/notifications';
+import { Button } from '../../components/ui/Button';
 import { Field, SelectInput } from '../../components/ui/fields';
 import { Panel } from '../../components/ui/Panel';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
@@ -9,6 +10,8 @@ import { MessageResult } from './MessageResult';
 import { KIND_LABELS } from './notificationLabels';
 
 const ALL_CHANNELS = '';
+/** The list can have up to 1000 messages, so it shows this many at first, and this many more for each click */
+export const MESSAGES_PAGE_SIZE = 50;
 const NO_CHANNEL_NAME = 'Deleted channel';
 
 interface MessagesPanelProps {
@@ -20,14 +23,20 @@ interface MessagesPanelProps {
 /** Each message that Chatter sent or tried to send in the last 30 days, and its result */
 export function MessagesPanel({ channels, messages }: MessagesPanelProps) {
   const [channelId, setChannelId] = useState(ALL_CHANNELS);
-  const shown = channelId === ALL_CHANNELS ? messages : messages.filter(message => message.channelId === channelId);
+  const [shownCount, setShownCount] = useState(MESSAGES_PAGE_SIZE);
+  const matching = channelId === ALL_CHANNELS ? messages : messages.filter(message => message.channelId === channelId);
+  const shown = matching.slice(0, shownCount);
+  const pickChannel = (id: string) => {
+    setChannelId(id);
+    setShownCount(MESSAGES_PAGE_SIZE);
+  };
   const channelNameOf = (id: string) => channels.find(channel => channel.id === id)?.name ?? NO_CHANNEL_NAME;
 
   return (
     <Panel
       title="Messages"
       description="The messages of the last 30 days. Chatter removes older ones."
-      actions={<ChannelFilter channels={channels} value={channelId} onChange={setChannelId} />}
+      actions={<ChannelFilter channels={channels} value={channelId} onChange={pickChannel} />}
     >
       {shown.length === 0 ? (
         <p className="m-0 px-5 py-4 text-zinc-200">No messages in the last 30 days.</p>
@@ -48,6 +57,12 @@ export function MessagesPanel({ channels, messages }: MessagesPanelProps) {
               ))}
             </tbody>
           </table>
+          {matching.length > shown.length && (
+            <div className="flex items-center justify-between gap-3 border-t border-zinc-800 px-5 py-3">
+              <p className="m-0 text-xs text-zinc-300">Showing {shown.length} of {matching.length} messages.</p>
+              <Button size="sm" onClick={() => setShownCount(count => count + MESSAGES_PAGE_SIZE)}>Show more</Button>
+            </div>
+          )}
         </div>
       )}
     </Panel>
