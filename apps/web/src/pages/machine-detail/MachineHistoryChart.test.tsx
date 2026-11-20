@@ -310,6 +310,20 @@ describe('MachineHistoryChart', () => {
       expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
     });
 
+    it('loads the history once after a quick series of sideways scroll steps', async () => {
+      render(<ChartWithMenu machine={runningMachine()} />);
+      await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledTimes(1));
+
+      // Five steps of a quarter of the range back, as a trackpad swipe gives them
+      for (let step = 0; step < 5; step++) fireEvent.wheel(chartBody(), { deltaX: -80, deltaY: 0 });
+
+      expect(await screen.findByText(`How fast the spindle turned ${pastText(10 * MINUTE, NOW - 12.5 * MINUTE)}.`)).toBeInTheDocument();
+      await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledTimes(2));
+      await new Promise(resolve => setTimeout(resolve, 400));
+      expect(fetchValueHistory).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(fetchValueHistory).mock.lastCall?.[4]).toBe(NOW - 2.5 * MINUTE);
+    });
+
     it('stops a sideways scroll on the chart, so the browser does not go back a page', async () => {
       render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
       await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));

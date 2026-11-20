@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchStateTimeline } from '../../api/stateTimeline';
 import { useNow } from '../../hooks/useNow';
-import { CHART_CLOCK_TICK_MS, loadSpan, type ChartRange, type HistoryStatus } from './historyChart';
+import { CHART_CLOCK_TICK_MS, loadSpan, MOVE_LOAD_DELAY_MS, type ChartRange, type HistoryStatus } from './historyChart';
 import { clipSegments, withLiveState, type LiveState, type StateSegment } from './stateTimeline';
 
 /** The timelines that load now. Two charts that ask for the same timeline at the same time share one request. */
@@ -48,6 +48,8 @@ export function useStateTimeline(
   const [segmentsMachine, setSegmentsMachine] = useState(machineId);
   /** The machine of the last load, or null before the first load */
   const loadedMachine = useRef<string | null>(null);
+  /** The range of the last load */
+  const loadedRange = useRef<ChartRange | null>(null);
   /** True while a load runs. The old segments stay until it ends, so a live state does not stretch them. */
   const loadRuns = useRef(false);
   const ownNow = useNow(CHART_CLOCK_TICK_MS);
@@ -59,6 +61,8 @@ export function useStateTimeline(
 
   useEffect(() => {
     let stopped = false;
+    // Only the end changed: the user moved in time
+    const moved = loadedMachine.current === machineId && loadedRange.current === range;
     // Another time of the same machine keeps the old segments until the new ones come
     if (loadedMachine.current !== machineId) {
       const startLive = latestLive.current;
@@ -66,28 +70,36 @@ export function useStateTimeline(
       lastKnownAt.current = undefined;
     }
     loadedMachine.current = machineId;
+    loadedRange.current = range;
     setSegmentsMachine(machineId);
     setStatus('loading');
     loadRuns.current = true;
-    const span = loadSpan(range, end, Date.now());
-    const request = sharedTimeline(key, machineId, span.query, span.end);
-    request
-      .then(loaded => {
-        if (stopped) return;
-        loadRuns.current = false;
-        const current = latestLive.current;
-        setSegments(current ? withLiveState(loaded, current) : loaded);
-        setStatus('ready');
-      })
-      .catch(() => {
-        if (stopped) return;
-        loadRuns.current = false;
-        setStatus('failed');
-      });
+    let request: Promise<StateSegment[]> | undefined;
+    const load = () => {
+      const span = loadSpan(range, end, Date.now());
+      request = sharedTimeline(key, machineId, span.query, span.end);
+      request
+        .then(loaded => {
+          if (stopped) return;
+          loadRuns.current = false;
+          const current = latestLive.current;
+          setSegments(current ? withLiveState(loaded, current) : loaded);
+          setStatus('ready');
+        })
+        .catch(() => {
+          if (stopped) return;
+          loadRuns.current = false;
+          setStatus('failed');
+        });
+    };
+    // A move waits, so a quick series of moves loads once. Two charts that move together still share the request.
+    const timer = moved ? setTimeout(load, MOVE_LOAD_DELAY_MS) : undefined;
+    if (!moved) load();
     return () => {
       stopped = true;
+      clearTimeout(timer);
       // A request that never ends must not hold up a later chart
-      if (loading.get(key) === request) loading.delete(key);
+      if (request && loading.get(key) === request) loading.delete(key);
     };
   }, [machineId, range, end]);
 

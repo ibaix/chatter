@@ -5,6 +5,7 @@ import {
   durationMs,
   gapFor,
   loadSpan,
+  MOVE_LOAD_DELAY_MS,
   mergeHistory,
   pointsFrom,
   withLivePoint,
@@ -36,6 +37,8 @@ export function useChartHistory(
   const [shownKey, setShownKey] = useState(pointsKey);
   /** The machine and value that the last load was for, or null before the first load */
   const loadedKey = useRef<string | null>(null);
+  /** The range of the last load */
+  const loadedRange = useRef<ChartRange | null>(null);
   /** The time each history point covers. Live values are kept one per window of this length. */
   const [windowMs, setWindowMs] = useState(0);
   // The newest live value, so a new range or value starts with it and does not wait for the next one
@@ -44,25 +47,36 @@ export function useChartHistory(
 
   useEffect(() => {
     let stopped = false;
+    // Only the end changed: the user moved in time
+    const moved = loadedKey.current === pointsKey && loadedRange.current === range;
     // Another time of the same value keeps the old points until the new ones come
     if (loadedKey.current !== pointsKey) setPoints(latestLive.current ? [latestLive.current] : []);
     loadedKey.current = pointsKey;
+    loadedRange.current = range;
     setShownKey(pointsKey);
     setStatus('loading');
-    const span = loadSpan(range, end, Date.now());
-    const window = range.window ?? autoHistoryWindow(range.ms);
-    fetchValueHistory(machineId, value, span.query, window, span.end ?? undefined)
-      .then(history => {
-        if (stopped) return;
-        // A live chart keeps the live values that came while it loaded
-        setPoints(known => (end === null ? mergeHistory(history.points, known) : history.points));
-        setWindowMs(durationMs(history.window));
-        setStatus('ready');
-      })
-      .catch(() => {
-        if (!stopped) setStatus('failed');
-      });
-    return () => { stopped = true; };
+    const load = () => {
+      const span = loadSpan(range, end, Date.now());
+      const window = range.window ?? autoHistoryWindow(range.ms);
+      fetchValueHistory(machineId, value, span.query, window, span.end ?? undefined)
+        .then(history => {
+          if (stopped) return;
+          // A live chart keeps the live values that came while it loaded
+          setPoints(known => (end === null ? mergeHistory(history.points, known) : history.points));
+          setWindowMs(durationMs(history.window));
+          setStatus('ready');
+        })
+        .catch(() => {
+          if (!stopped) setStatus('failed');
+        });
+    };
+    // A move waits, so a quick series of moves loads once
+    const timer = moved ? setTimeout(load, MOVE_LOAD_DELAY_MS) : undefined;
+    if (!moved) load();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
   }, [machineId, value, range, end]);
 
   // `live` is a new object on each render, so the effect runs only when its values change

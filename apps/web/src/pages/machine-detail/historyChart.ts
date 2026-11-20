@@ -5,6 +5,12 @@ export type HistoryStatus = 'loading' | 'ready' | 'failed';
 /** The charts move on this often, also when no new value comes */
 export const CHART_CLOCK_TICK_MS = 5000;
 
+/**
+ * A chart waits this long after a move in time before it loads, so a quick series of moves (a scroll or a swipe)
+ * sends one request, not one for each step.
+ */
+export const MOVE_LOAD_DELAY_MS = 200;
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
