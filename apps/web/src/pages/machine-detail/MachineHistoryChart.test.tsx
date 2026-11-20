@@ -173,6 +173,40 @@ describe('MachineHistoryChart', () => {
       // Two points in a row at the same x: the vertical part of the step
       expect(path).toMatch(/L([\d.]+),[\d.]+L\1,/);
     });
+
+    it('tells that a new time did not load, also when it has points of the last time', async () => {
+      vi.mocked(fetchValueHistory).mockResolvedValueOnce({ points: [{ time: Date.now() - MINUTE, value: 1000 }], window: '5s' });
+      render(<ChartWithMenu machine={runningMachine()} />);
+      await screen.findByRole('img', { name: /^Spindle speed in the last 10 minutes/ });
+
+      vi.mocked(fetchValueHistory).mockRejectedValueOnce(new Error('Chatter cannot be reached'));
+      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+
+      expect(await screen.findByText('Could not load the spindle speed history. Reload the page to try again.')).toBeInTheDocument();
+      expect(screen.queryByRole('img', { name: /^Spindle speed/ })).not.toBeInTheDocument();
+    });
+
+    it('shows a loading mark over the old line while a new time loads', async () => {
+      vi.mocked(fetchValueHistory).mockResolvedValueOnce({ points: [{ time: Date.now() - 8 * MINUTE, value: 1000 }], window: '5s' });
+      render(<ChartWithMenu machine={runningMachine()} />);
+      await screen.findByRole('img', { name: /^Spindle speed in the last 10 minutes/ });
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+      vi.mocked(fetchValueHistory).mockReturnValue(new Promise(() => {}));
+      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+
+      expect(await screen.findByRole('status')).toHaveTextContent('Loading');
+      expect(screen.getByRole('img', { name: /^Spindle speed from / })).toBeInTheDocument();
+    });
+
+    it('tells that the shown time has no data, when the data is only in the time around it', async () => {
+      // The chart loads 10 more minutes before the 10 minutes that show
+      vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: Date.now() - 15 * MINUTE, value: 1000 }], window: '5s' });
+      render(<ChartWithMenu machine={testMachine({}, { spindleSpeed: 1200 })} />);
+
+      expect(await screen.findByText('No spindle speed in the last 10 minutes. Chatter saves it while the machine is connected.')).toBeInTheDocument();
+    });
+
   });
 
   /** The part of the chart that moves in time with a drag */

@@ -225,7 +225,10 @@ function ValueChart({ machine, value, range, end, shiftMs, selection }: ValueCha
   // The chart's clock, so the strip ends where the line ends
   const { segments: stripSegments, status: stateStatus } = useStateTimeline(machine.id, liveStateOf(machine), range, now, end);
   const { ref, width, height } = useBoxSize<HTMLDivElement>();
-  const showPlot = points.length > 0 && width > 0;
+  // The chart keeps the old points while a new time loads. They show only when some of them are in the time that shows.
+  const shownEnd = now + shiftMs;
+  const hasShownPoints = points.some(point => point.time >= shownEnd - range.ms && point.time <= shownEnd);
+  const showPlot = status !== 'failed' && hasShownPoints && width > 0;
 
   return (
     <>
@@ -248,6 +251,9 @@ function ValueChart({ machine, value, range, end, shiftMs, selection }: ValueCha
           />
         ) : (
           <p className="m-0 flex h-full items-center justify-center text-center text-zinc-300">{messageFor(status, value.name, range, end)}</p>
+        )}
+        {showPlot && status === 'loading' && (
+          <span role="status" className="absolute top-0 text-xs text-zinc-400" style={{ right: MARGIN.right }}>Loading…</span>
         )}
       </div>
       {showPlot && (
