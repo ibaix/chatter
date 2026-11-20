@@ -1,4 +1,5 @@
 import { renderHook, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchStateTimeline } from '../../api/stateTimeline';
 import { CHART_RANGES } from './historyChart';
@@ -54,7 +55,7 @@ describe('useStateTimeline', () => {
     expect(result.current.status).toBe('loading');
     expect(result.current.segments.map(segment => segment.state)).toEqual(['alarm', 'idle']);
     expect(fetchStateTimeline).toHaveBeenNthCalledWith(1, 'm1', '-20m', undefined);
-    expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-2h', undefined);
+    await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-2h', undefined));
   });
 
   it('does not show the segments of the last machine for a new machine', async () => {
@@ -147,19 +148,42 @@ describe('useStateTimeline', () => {
     expect(fetchStateTimeline).toHaveBeenCalledTimes(2);
   });
 
+  it('sends one request in StrictMode, which runs each effect twice in development', async () => {
+    vi.mocked(fetchStateTimeline).mockResolvedValue([]);
+    const { result } = renderHook(() => useStateTimeline('m1', undefined, TEN_MINUTES), { wrapper: StrictMode });
+
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps sharing a request when an older request for the same timeline ends', async () => {
     let endOldRequest = () => {};
     vi.mocked(fetchStateTimeline).mockReturnValueOnce(new Promise(resolve => { endOldRequest = () => resolve([]); }));
     const first = renderHook(() => useStateTimeline('m1', undefined, TEN_MINUTES));
+    await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));
+    // The first chart stops waiting, so the next chart makes a new request
     first.unmount();
     vi.mocked(fetchStateTimeline).mockReturnValueOnce(waitingLoad());
     renderHook(() => useStateTimeline('m1', undefined, TEN_MINUTES));
+    await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
 
+    // The old request ends. A timer lets all its follow-up work run.
     endOldRequest();
-    await Promise.resolve();
-    renderHook(() => useStateTimeline('m1', undefined, TEN_MINUTES));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const third = renderHook(() => useStateTimeline('m1', undefined, TEN_MINUTES));
+    await new Promise(resolve => setTimeout(resolve, 20));
 
     expect(fetchStateTimeline).toHaveBeenCalledTimes(2);
+    expect(third.result.current.status).toBe('loading');
+  });
+
+  it('sends no request for a chart that stops waiting before the request starts', async () => {
+    vi.mocked(fetchStateTimeline).mockResolvedValue([]);
+    const first = renderHook(() => useStateTimeline('m1', undefined, TEN_MINUTES));
+    first.unmount();
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    expect(fetchStateTimeline).not.toHaveBeenCalled();
   });
 
   it('gives the segments after the end of a chart in the past, so a drag on shows them at once', async () => {

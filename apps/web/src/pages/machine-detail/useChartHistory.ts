@@ -37,8 +37,9 @@ export function useChartHistory(
   const [shownKey, setShownKey] = useState(pointsKey);
   /** The machine and value that the last load was for, or null before the first load */
   const loadedKey = useRef<string | null>(null);
-  /** The range of the last load */
+  /** The range and the end of the last load */
   const loadedRange = useRef<ChartRange | null>(null);
+  const loadedEnd = useRef<number | null>(null);
   /** The time each history point covers. Live values are kept one per window of this length. */
   const [windowMs, setWindowMs] = useState(0);
   // The newest live value, so a new range or value starts with it and does not wait for the next one
@@ -47,12 +48,13 @@ export function useChartHistory(
 
   useEffect(() => {
     let stopped = false;
-    // Only the end changed: the user moved in time
-    const moved = loadedKey.current === pointsKey && loadedRange.current === range;
+    // Only the end changed: the user moved in time. (StrictMode runs the effect again with the same end.)
+    const moved = loadedKey.current === pointsKey && loadedRange.current === range && loadedEnd.current !== end;
     // Another time of the same value keeps the old points until the new ones come
     if (loadedKey.current !== pointsKey) setPoints(latestLive.current ? [latestLive.current] : []);
     loadedKey.current = pointsKey;
     loadedRange.current = range;
+    loadedEnd.current = end;
     setShownKey(pointsKey);
     setStatus('loading');
     const load = () => {
@@ -70,9 +72,9 @@ export function useChartHistory(
           if (!stopped) setStatus('failed');
         });
     };
-    // A move waits, so a quick series of moves loads once
-    const timer = moved ? setTimeout(load, MOVE_LOAD_DELAY_MS) : undefined;
-    if (!moved) load();
+    // A move waits, so a quick series of moves loads once. The other loads start after the effect, so StrictMode,
+    // which runs each effect twice, sends one request.
+    const timer = setTimeout(load, moved ? MOVE_LOAD_DELAY_MS : 0);
     return () => {
       stopped = true;
       clearTimeout(timer);

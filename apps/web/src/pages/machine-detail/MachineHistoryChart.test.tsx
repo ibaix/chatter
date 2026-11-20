@@ -110,7 +110,7 @@ describe('MachineHistoryChart', () => {
 
   it('loads the history of the value that the user picks', async () => {
     render(<ChartWithMenu machine={testMachine({}, { spindleSpeed: 1200, spindleLoad: 30 })} />);
-    expect(vi.mocked(fetchValueHistory).mock.lastCall?.[1]).toBe('spindle-speed');
+    await waitFor(() => expect(vi.mocked(fetchValueHistory).mock.lastCall?.[1]).toBe('spindle-speed'));
 
     const valueButton = screen.getByRole('button', { name: 'Value in the chart: Spindle speed' });
     // The menu trigger is the button itself, not a second button around it
@@ -228,7 +228,7 @@ describe('MachineHistoryChart', () => {
       vi.mocked(fetchValueHistory).mockResolvedValueOnce({ points: [{ time: Date.now() - 8 * MINUTE, value: 1000 }], window: '5s' });
       render(<ChartWithMenu machine={runningMachine()} />);
       await screen.findByRole('img', { name: /^Spindle speed in the last 10 minutes/ });
-      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
 
       vi.mocked(fetchValueHistory).mockReturnValue(new Promise(() => {}));
       fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));

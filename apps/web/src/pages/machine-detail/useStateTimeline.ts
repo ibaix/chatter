@@ -4,21 +4,55 @@ import { useNow } from '../../hooks/useNow';
 import { CHART_CLOCK_TICK_MS, loadSpan, MOVE_LOAD_DELAY_MS, type ChartRange, type HistoryStatus } from './historyChart';
 import { clipSegments, withLiveState, type LiveState, type StateSegment } from './stateTimeline';
 
+interface SharedLoad {
+  request: Promise<StateSegment[]>;
+  /** The number of charts that wait for the request */
+  waiting: number;
+  /** The timer that starts the request, until it starts */
+  timer: ReturnType<typeof setTimeout>;
+}
+
 /** The timelines that load now. Two charts that ask for the same timeline at the same time share one request. */
-const loading = new Map<string, Promise<StateSegment[]>>();
+const loading = new Map<string, SharedLoad>();
 
 /**
- * Loads a timeline, or joins the request for it that is already open.
- * Until the user zooms, the overview strip and the chart show the same time, so the server reads it once.
+ * Joins the request for a timeline, or makes it. The request starts after `delayMs`, so all the charts that ask for
+ * the same timeline in the same render join it first. Until the user zooms, the overview strip and the chart show
+ * the same time, so the server reads it once.
+ * Call `leave` when the chart does not wait any more. When no chart waits, the request does not start, and a later
+ * chart makes a new one.
  */
-function sharedTimeline(key: string, machineId: string, query: string, end: number | null): Promise<StateSegment[]> {
-  const open = loading.get(key);
-  if (open) return open;
-  const request: Promise<StateSegment[]> = fetchStateTimeline(machineId, query, end ?? undefined)
-    // A newer request for the same key can be in the map now, when a chart stopped waiting for this one
-    .finally(() => { if (loading.get(key) === request) loading.delete(key); });
-  loading.set(key, request);
-  return request;
+function joinTimeline(
+  key: string,
+  delayMs: number,
+  load: () => Promise<StateSegment[]>,
+): { request: Promise<StateSegment[]>; leave: () => void } {
+  let shared = loading.get(key);
+  if (!shared) {
+    const made = { waiting: 0 } as SharedLoad;
+    made.request = new Promise<StateSegment[]>((resolve, reject) => {
+      made.timer = setTimeout(() => load().then(resolve, reject), delayMs);
+    }).finally(() => {
+      // A newer request for the same key can be in the map now, when all the charts stopped waiting for this one
+      if (loading.get(key) === made) loading.delete(key);
+    });
+    // The request of a chart that stopped waiting can fail. Nobody reads that result.
+    made.request.catch(() => {});
+    loading.set(key, made);
+    shared = made;
+  }
+  const joined = shared;
+  joined.waiting += 1;
+  let left = false;
+  const leave = () => {
+    if (left) return;
+    left = true;
+    joined.waiting -= 1;
+    if (joined.waiting > 0 || loading.get(key) !== joined) return;
+    clearTimeout(joined.timer);
+    loading.delete(key);
+  };
+  return { request: joined.request, leave };
 }
 
 /**
@@ -48,8 +82,9 @@ export function useStateTimeline(
   const [segmentsMachine, setSegmentsMachine] = useState(machineId);
   /** The machine of the last load, or null before the first load */
   const loadedMachine = useRef<string | null>(null);
-  /** The range of the last load */
+  /** The range and the end of the last load */
   const loadedRange = useRef<ChartRange | null>(null);
+  const loadedEnd = useRef<number | null>(null);
   /** True while a load runs. The old segments stay until it ends, so a live state does not stretch them. */
   const loadRuns = useRef(false);
   const ownNow = useNow(CHART_CLOCK_TICK_MS);
@@ -61,8 +96,8 @@ export function useStateTimeline(
 
   useEffect(() => {
     let stopped = false;
-    // Only the end changed: the user moved in time
-    const moved = loadedMachine.current === machineId && loadedRange.current === range;
+    // Only the end changed: the user moved in time. (StrictMode runs the effect again with the same end.)
+    const moved = loadedMachine.current === machineId && loadedRange.current === range && loadedEnd.current !== end;
     // Another time of the same machine keeps the old segments until the new ones come
     if (loadedMachine.current !== machineId) {
       const startLive = latestLive.current;
@@ -71,35 +106,32 @@ export function useStateTimeline(
     }
     loadedMachine.current = machineId;
     loadedRange.current = range;
+    loadedEnd.current = end;
     setSegmentsMachine(machineId);
     setStatus('loading');
     loadRuns.current = true;
-    let request: Promise<StateSegment[]> | undefined;
-    const load = () => {
+    // A move waits, so a quick series of moves loads once. The other loads start after the effect, so StrictMode,
+    // which runs each effect twice, sends one request.
+    const { request, leave } = joinTimeline(key, moved ? MOVE_LOAD_DELAY_MS : 0, () => {
       const span = loadSpan(range, end, Date.now());
-      request = sharedTimeline(key, machineId, span.query, span.end);
-      request
-        .then(loaded => {
-          if (stopped) return;
-          loadRuns.current = false;
-          const current = latestLive.current;
-          setSegments(current ? withLiveState(loaded, current) : loaded);
-          setStatus('ready');
-        })
-        .catch(() => {
-          if (stopped) return;
-          loadRuns.current = false;
-          setStatus('failed');
-        });
-    };
-    // A move waits, so a quick series of moves loads once. Two charts that move together still share the request.
-    const timer = moved ? setTimeout(load, MOVE_LOAD_DELAY_MS) : undefined;
-    if (!moved) load();
+      return fetchStateTimeline(machineId, span.query, span.end ?? undefined);
+    });
+    request
+      .then(loaded => {
+        if (stopped) return;
+        loadRuns.current = false;
+        const current = latestLive.current;
+        setSegments(current ? withLiveState(loaded, current) : loaded);
+        setStatus('ready');
+      })
+      .catch(() => {
+        if (stopped) return;
+        loadRuns.current = false;
+        setStatus('failed');
+      });
     return () => {
       stopped = true;
-      clearTimeout(timer);
-      // A request that never ends must not hold up a later chart
-      if (request && loading.get(key) === request) loading.delete(key);
+      leave();
     };
   }, [machineId, range, end]);
 

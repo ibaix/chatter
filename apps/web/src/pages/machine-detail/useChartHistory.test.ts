@@ -1,4 +1,5 @@
 import { renderHook, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchValueHistory, type HistoryPoint } from '../../api/history';
 import { CHART_RANGES, type ChartRange } from './historyChart';
@@ -32,6 +33,14 @@ function renderChartHistory(initialProps: Partial<Props> = {}) {
 describe('useChartHistory', () => {
   beforeEach(() => {
     vi.mocked(fetchValueHistory).mockReset();
+  });
+
+  it('sends one request in StrictMode, which runs each effect twice in development', async () => {
+    vi.mocked(fetchValueHistory).mockResolvedValue({ points: [], window: '5s' });
+    const { result } = renderHook(() => useChartHistory('m1', 'spindle-speed', null, TEN_MINUTES, null, Date.now()), { wrapper: StrictMode });
+
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(fetchValueHistory).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the old points of the same value while another time loads', async () => {
