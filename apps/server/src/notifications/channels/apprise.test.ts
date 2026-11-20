@@ -42,6 +42,10 @@ describe('appriseChannel', () => {
     ]);
   });
 
+  it('puts the login under Advanced, because Apprise asks for it only when it has a login, and keeps the tag in view', () => {
+    expect(appriseChannel.fields.filter(field => field.advanced).map(field => field.key)).toEqual(['username', 'password']);
+  });
+
   it('tells the admin before they start that Apprise runs on another computer, with a saved config key', () => {
     expect(appriseChannel.note).toContain('config key');
     expect(appriseChannel.note).toContain('64-bit');

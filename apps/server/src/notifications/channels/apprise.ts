@@ -49,8 +49,8 @@ export const appriseChannel: ChannelDefinition<AppriseSettings> = {
       key: 'tag', label: 'Tag (optional)', kind: 'text', required: false, mono: true,
       hint: 'Sends only to the services with this tag. Empty sends to the services with no tag. "all" sends to each service.',
     },
-    { key: 'username', label: 'User name (optional)', kind: 'text', required: false, hint: 'Only when Apprise asks for a login.' },
-    { key: 'password', label: 'Password (optional)', kind: 'secret', required: false, hint: 'Only when Apprise asks for a login.' },
+    { key: 'username', label: 'User name (optional)', kind: 'text', required: false, advanced: true, hint: 'Only when Apprise asks for a login.' },
+    { key: 'password', label: 'Password (optional)', kind: 'secret', required: false, advanced: true, hint: 'Only when Apprise asks for a login.' },
   ],
   note: 'Apprise API runs on another computer with a 64-bit processor. It does not run on the Chatter Raspberry Pi card. '
     + 'First save the addresses of your services in Apprise under a config key, for example "chatter".',

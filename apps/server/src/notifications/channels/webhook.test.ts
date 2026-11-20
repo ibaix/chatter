@@ -16,6 +16,10 @@ describe('webhookChannel', () => {
     ]);
   });
 
+  it('puts the secret under Advanced, because Slack and Home Assistant do not use it', () => {
+    expect(webhookChannel.fields.filter(field => field.advanced).map(field => field.key)).toEqual(['secret']);
+  });
+
   it('sends the message as JSON, with the text line that Slack shows', async () => {
     const service = fakeFetch(() => new Response('ok', { status: 200 }));
 

@@ -95,12 +95,12 @@ A webhook channel sends each message as JSON to a web address, with `POST`:
 - `level` is `warning`, `critical`, or `null` (for `more`, `test`, and an alert with an unknown level).
 - `machine`, `alert`, `summary`, `startedAt`, `endedAt`, and `link` can be `null`.
 
-If you type a **Secret (optional)**, Chatter sends it in the header `Authorization: Bearer <secret>`. Then the other app can check that the message is from Chatter.
+**Secret (optional)** is under **Advanced**. If you type a secret, Chatter sends it in the header `Authorization: Bearer <secret>`. Then the other app can check that the message is from Chatter.
 
 ### Slack
 
 1. In Slack, make an app with an **incoming webhook** for your channel, and copy its address. It starts with `https://hooks.slack.com/`.
-2. In Chatter, add a **Webhook** channel, and paste the address in **Web address**. Leave **Secret** empty.
+2. In Chatter, add a **Webhook** channel, and paste the address in **Web address**. Leave **Advanced** closed.
 
 Slack shows the `text` line.
 
@@ -113,12 +113,12 @@ ntfy can show one field of the JSON, so the address of the topic ends with <code
 https://ntfy.sh/your-topic?tpl=yes&m={{.text}}
 ```
 
-Use a topic name that other people cannot guess. If your topic needs a login, put an ntfy access token in **Secret**.
+Use a topic name that other people cannot guess. If your topic needs a login, open **Advanced**, and put an ntfy access token in **Secret**.
 
 ### Home Assistant
 
 1. In Home Assistant, make an automation with a **Webhook** trigger, and copy its webhook address, for example `http://homeassistant.local:8123/api/webhook/chatter-alerts`.
-2. In Chatter, add a **Webhook** channel with that address. Leave **Secret** empty.
+2. In Chatter, add a **Webhook** channel with that address. Leave **Advanced** closed.
 
 In the automation, `trigger.json.text` is the message, and `trigger.json.machine.name` is the machine name.
 
@@ -151,7 +151,7 @@ Apprise API runs on a computer with a 64-bit processor (Intel, AMD, or 64-bit AR
 4. In Chatter, add a channel of the type **Apprise**:
    - **Apprise address:** the Apprise address, then `/notify/`, then your config key, for example `http://apprise.local:8000/notify/chatter`.
    - **Tag (optional):** sends only to the services that have this tag in Apprise. Leave it empty to send to the services with no tag. Type `all` to send to each service.
-   - **User name** and **Password (optional):** only when your Apprise asks for a login (`APPRISE_AUTH_REQUIRED=yes`).
+   - **User name** and **Password (optional):** under **Advanced**. Only when your Apprise asks for a login (`APPRISE_AUTH_REQUIRED=yes`).
 5. Click **Send test**.
 
 Chatter gives each message an Apprise type, so each service can show it with its own color or icon:

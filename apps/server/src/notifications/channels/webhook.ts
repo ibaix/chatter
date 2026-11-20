@@ -29,7 +29,7 @@ export const webhookChannel: ChannelDefinition<WebhookSettings> = {
       hint: 'For Slack, make an incoming webhook in Slack and paste its address here.',
     },
     {
-      key: 'secret', label: 'Secret (optional)', kind: 'secret', required: false, mono: true,
+      key: 'secret', label: 'Secret (optional)', kind: 'secret', required: false, mono: true, advanced: true,
       hint: 'Chatter sends it in the Authorization header, so the other app knows the message is from Chatter.',
     },
   ],
