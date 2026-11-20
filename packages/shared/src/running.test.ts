@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { combinedRunState, isMachineRunning, type RunningValues } from './running.js';
+import { combinedRunState, isMachineRunning, isProgramEnded, type RunningValues } from './running.js';
 
 describe('isMachineRunning', () => {
   it.each([
@@ -53,5 +53,46 @@ describe('combinedRunState', () => {
   it('gives the state of a control with one path as it is', () => {
     expect(combinedRunState(['STOP'])).toBe('STOP');
     expect(combinedRunState([])).toBeUndefined();
+  });
+});
+
+describe('isProgramEnded', () => {
+  it.each([
+    ['RESET', true],
+    ['STOP', false],
+    ['HOLD', false],
+    ['START', false],
+    ['MSTR', false],
+  ])('FANUC: counts the run state %s as a program end: %s', (runState, ended) => {
+    expect(isProgramEnded({ runState })).toBe(ended);
+  });
+
+  // Brother (operation status), Haas (Q500), Siemens (channel status) and MTConnect all give execution words
+  it.each([
+    ['READY', true],
+    ['STOPPED', true],
+    ['PROGRAM_COMPLETED', true],
+    ['ACTIVE', false],
+    ['FEED_HOLD', false],
+    ['INTERRUPTED', false],
+    ['OPTIONAL_STOP', false],
+    ['PROGRAM_STOPPED', false],
+    ['WAIT', false],
+    ['UNKNOWN_7', false],
+  ])('counts the execution %s as a program end: %s', (execution, ended) => {
+    expect(isProgramEnded({ execution })).toBe(ended);
+  });
+
+  it('does not count a stop for an alarm or an emergency stop', () => {
+    expect(isProgramEnded({ runState: 'RESET', alarm: true })).toBe(false);
+    expect(isProgramEnded({ runState: 'RESET', emergency: true })).toBe(false);
+    expect(isProgramEnded({ execution: 'STOPPED', alarm: true })).toBe(false);
+    expect(isProgramEnded({ execution: 'READY', emergency: true })).toBe(false);
+    expect(isProgramEnded({ execution: 'READY', alarm: false, emergency: false })).toBe(true);
+  });
+
+  it('does not know when the machine tells neither a run state nor an execution', () => {
+    expect(isProgramEnded({})).toBeUndefined();
+    expect(isProgramEnded({ alarm: true })).toBeUndefined();
   });
 });
