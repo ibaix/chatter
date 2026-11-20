@@ -53,7 +53,7 @@ Each alert sends 2 messages: one when it starts, and one when it ends.
 - To delete a channel, click **Edit**, then **Delete channel**, then **Delete the channel**. Chatter stops its waiting messages. Its sent and failed messages stay in the message list as **Deleted channel**, until Chatter removes them.
 
 After you save, Chatter never shows a secret again, such as the Twilio auth token, the Apprise password, the Discord webhook address, the Telegram bot token, or the ntfy topic and access token. To keep the saved secret, leave its box empty.
-To change it, type the new one. To stop sending a webhook secret, select **Delete the saved secret**.
+To change it, type the new one. To stop sending an optional secret, for example a webhook secret or an ntfy access token, select **Delete the saved secret**.
 
 ## Text messages with Twilio
 
@@ -232,12 +232,12 @@ The message has the same text as a text message.
 3. In the ntfy app, subscribe to the topic. For your own server, type its address in the app too.
 4. In Chatter, add a channel of the type **ntfy**:
    - **Topic:** the topic from step 2. Chatter never shows it again after you save.
-   - **Server (optional):** only for your own ntfy server, for example `http://ntfy.shop.local`. Do not put the topic in the address. Leave it empty for `ntfy.sh`.
+   - **Server (optional):** only for your own ntfy server, for example `http://ntfy.shop.local`. Do not put the topic in the address. Leave it empty for `ntfy.sh`. If you type the address of `ntfy.sh`, type only `https://ntfy.sh`, with no path after it.
    - **Access token (optional):** only when the topic needs a login. In ntfy, make a token under **Account > Access tokens**.
 5. Click **Send test**.
 
 ::: warning
-On `ntfy.sh`, a topic has no login. Each person that knows the topic name can read your alerts and send messages to it. Use a name that is hard to guess, or use an access token on a reserved topic or on your own server.
+On `ntfy.sh`, a topic has no login. Each person who knows the topic name can read your alerts and send messages to it. Use a name that is hard to guess, or use an access token on a reserved topic or on your own server.
 :::
 
 Chatter gives each message a priority and an icon:
@@ -249,7 +249,7 @@ Chatter gives each message a priority and an icon:
 | An alert ends | 3 (default) | ✅ |
 | A test | 3 (default) | 🔔 |
 
-The title is `Chatter: ` and the machine name. When you tap the message, the phone opens the machine in Chatter. For this, set **Chatter address for links** in **Message settings**, and the phone must be on the shop network.
+The title is `Chatter: ` and the machine name. When you tap the message, the phone opens the machine in Chatter. For this, set **Chatter address for links** in **Message settings**. The phone must also be on the shop network.
 
 ## The message list
 
@@ -283,6 +283,7 @@ The **Messages** panel shows each message of the last 30 days, the newest first.
 | **Failed:** Telegram refused the bot token | The bot token is wrong. Copy it again from @BotFather. |
 | **Failed:** Telegram cannot find the chat | The chat ID is wrong. Look in `getUpdates` again. |
 | **Failed:** The group is now a supergroup | Telegram gave the group a new chat ID. Type the new chat ID from the message in **Chat ID**. |
+| **Failed:** Telegram answered 400 | The answer had no reason. A proxy of the shop network can cause this. Check the chat ID and the bot token. |
 | **Failed:** Telegram refused the message: ... | The text after the colon is the reason from Telegram. |
 | **Failed:** The bot cannot write to the chat | Send a message to the bot, or add the bot to the group or channel. For a channel, make the bot an admin. |
 | **Failed:** ntfy refused the access | The access token is wrong, or it cannot write to the topic. Make a new token in ntfy. |
