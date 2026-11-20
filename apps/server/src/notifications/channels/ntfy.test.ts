@@ -137,6 +137,20 @@ describe('ntfyChannel', () => {
     expect(result).toEqual({ ok: false, retry: false, error: 'ntfy refused the message: invalid request: topic (topic) with (access token).' });
   });
 
+  it('hides only the whole topic in the reason of ntfy, not the same letters in other words', async () => {
+    const answer = () => new Response(JSON.stringify({ error: 'invalid request: topic a is a bad topic' }), { status: 400 });
+
+    expect(await ntfyChannel.send({ topic: 'a' }, MESSAGE, fakeFetch(answer).context()))
+      .toEqual({ ok: false, retry: false, error: 'ntfy refused the message: invalid request: topic (topic) is (topic) bad topic.' });
+  });
+
+  it('hides the topic also in an address in the reason of ntfy', async () => {
+    const answer = () => new Response(JSON.stringify({ error: `cannot publish to https://ntfy.sh/${TOPIC}/json` }), { status: 400 });
+
+    expect(await ntfyChannel.send(settings, MESSAGE, fakeFetch(answer).context()))
+      .toEqual({ ok: false, retry: false, error: 'ntfy refused the message: cannot publish to https://ntfy.sh/(topic)/json.' });
+  });
+
   it('tells to check the server for another refusal', async () => {
     expect(await resultFor(404)).toEqual({ ok: false, retry: false, error: 'ntfy answered 404. Check the server address.' });
   });

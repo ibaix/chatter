@@ -125,9 +125,21 @@ function refusalOf(status: number, json: unknown, { topic, token }: NtfySettings
   if (status === 413) return 'ntfy refused the message because it is too long.';
   const reason = typeof json === 'object' && json !== null ? (json as NtfyError).error : undefined;
   if (status === 400 && typeof reason === 'string' && reason) {
-    let safe = reason.replaceAll(topic, '(topic)');
+    let safe = reason.replace(wholeWord(topic), '(topic)');
     if (token) safe = safe.replaceAll(token, '(access token)');
     return `ntfy refused the message: ${cutText(safe, MAX_REASON).replace(/\.$/, '')}.`;
   }
   return `ntfy answered ${status}. Check the server address.`;
+}
+
+/**
+ * The topic as a whole word: a topic can be short, for example "a", and "invalid" must stay a word.
+ * A topic has only letters, digits, - and _, so a letter, a digit, - or _ next to it makes another word.
+ */
+function wholeWord(text: string): RegExp {
+  return new RegExp(`(?<![\\w-])${escapedForRegExp(text)}(?![\\w-])`, 'g');
+}
+
+function escapedForRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
 }
