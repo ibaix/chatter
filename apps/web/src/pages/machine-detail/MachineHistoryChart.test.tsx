@@ -434,10 +434,15 @@ describe('MachineHistoryChart', () => {
       vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: Date.now() - MINUTE, value: 1000 }], window: '5s' });
       render(<ChartWithMenu machine={runningMachine()} />);
       const overview = await screen.findByRole('img', { name: /^Overview/ });
+      // A zoom in the past, so a click at the right end of the strip moves the chart
+      drag(overview, 100, 200);
+      await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledTimes(2));
 
       drag(overview, BOX_WIDTH - PLOT_RIGHT_MARGIN / 2, BOX_WIDTH - PLOT_RIGHT_MARGIN / 2);
+      expect(fetchValueHistory).toHaveBeenCalledTimes(2);
 
-      expect(fetchValueHistory).toHaveBeenCalledTimes(1);
+      drag(overview, BOX_WIDTH - PLOT_RIGHT_MARGIN - 1, BOX_WIDTH - PLOT_RIGHT_MARGIN - 1);
+      await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledTimes(3));
     });
   });
 });
