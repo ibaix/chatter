@@ -80,7 +80,7 @@ describe('alert rule routes', () => {
 
     expect(res.status).toBe(200);
     const { rules } = (await res.json()) as { rules: AlertRule[] };
-    expect(rules.map(rule => rule.kind === 'simple' && rule.subject)).toEqual(['not-connected', 'in-alarm', 'spindle-load']);
+    expect(rules.map(rule => rule.kind === 'simple' && rule.subject)).toEqual(['in-alarm', 'emergency-stop']);
   });
 
   it('saves a new list for an admin', async () => {
@@ -98,7 +98,7 @@ describe('alert rule routes', () => {
     const res = await send(await viewerCookie(), 'PUT', `/machine/${haasId}/alert-rules`, { rules: [] });
 
     expect(res.status).toBe(403);
-    expect(await rulesOf(haasId)).toHaveLength(3);
+    expect(await rulesOf(haasId)).toHaveLength(2);
   });
 
   it('refuses a rule with a bad shape', async () => {
@@ -115,7 +115,7 @@ describe('alert rule routes', () => {
 
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'cannot parse', ruleIndex: 1 });
-    expect(await rulesOf(haasId)).toHaveLength(3);
+    expect(await rulesOf(haasId)).toHaveLength(2);
   });
 
   it('copies the rules to another machine', async () => {
@@ -124,7 +124,7 @@ describe('alert rule routes', () => {
     const res = await asAdmin('POST', `/machine/${haasId}/alert-rules/copy`, { machineIds: [brotherId] });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ copied: 1, notCopied: 0, vmalertReloaded: true });
+    expect(await res.json()).toEqual({ copied: 2, notCopied: 0, vmalertReloaded: true });
     expect(await rulesOf(brotherId)).toHaveLength(4);
   });
 

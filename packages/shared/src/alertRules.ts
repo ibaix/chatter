@@ -83,9 +83,8 @@ export const MAX_ALERT_FOR_MINUTES = 1440;
 
 /** The rules that each new machine gets */
 export const STARTER_RULES: readonly NewAlertRule[] = [
-  { kind: 'simple', enabled: true, subject: 'not-connected', check: 'above', limit: 0, forMinutes: 10, severity: 'warning' },
-  { kind: 'simple', enabled: true, subject: 'in-alarm', check: 'above', limit: 0, forMinutes: 5, severity: 'critical' },
-  { kind: 'simple', enabled: true, subject: 'spindle-load', check: 'above', limit: 90, forMinutes: 1, severity: 'warning' },
+  { kind: 'simple', enabled: true, subject: 'in-alarm', check: 'above', limit: 0, forMinutes: 0, severity: 'critical' },
+  { kind: 'simple', enabled: true, subject: 'emergency-stop', check: 'above', limit: 0, forMinutes: 0, severity: 'critical' },
 ];
 
 /** The MetricsQL query that vmalert runs for the rule on one machine */

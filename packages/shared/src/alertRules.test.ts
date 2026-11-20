@@ -81,11 +81,10 @@ describe('ruleName', () => {
 });
 
 describe('STARTER_RULES', () => {
-  it('are offline 10 min, alarm 5 min (critical) and spindle load above 90% for 1 min, all on', () => {
+  it('are in alarm and emergency stop, both at once (0 min), critical and on', () => {
     expect(STARTER_RULES.map(rule => [ruleName({ ...rule, id: '' }), rule.forMinutes, rule.severity, rule.enabled])).toEqual([
-      ['Not connected', 10, 'warning', true],
-      ['In alarm', 5, 'critical', true],
-      ['Spindle load above 90%', 1, 'warning', true],
+      ['In alarm', 0, 'critical', true],
+      ['Emergency stop', 0, 'critical', true],
     ]);
   });
 });
