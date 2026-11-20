@@ -34,7 +34,7 @@ const TYPES: ChannelTypeInfo[] = [
 const phones: NotificationChannel = {
   id: 'phones', type: 'twilio-sms', name: 'Shop phones',
   settings: { accountSid: 'AC1', from: '+15551230000', to: ['+15559870001', '+15559870002'] },
-  hasSecret: { authToken: true }, minSeverity: 'critical', machineIds: null, ignorePatterns: [], enabled: true, createdAt: '2026-11-13T09:00:00.000Z',
+  hasSecret: { authToken: true }, minSeverity: 'critical', machineIds: null, ignorePatterns: ['Door open'], enabled: true, createdAt: '2026-11-13T09:00:00.000Z',
 };
 
 const slack: NotificationChannel = {
@@ -95,7 +95,7 @@ describe('NotificationsTab', () => {
     expect(channelRow('Slack #shop-floor')).toHaveTextContent('The address answered 404 Not found.');
   });
 
-  it('turns a channel off, and keeps its saved secrets', async () => {
+  it('turns a channel off, and keeps its saved secrets and its ignore patterns', async () => {
     vi.mocked(updateChannel).mockResolvedValue({ ...phones, enabled: false });
     await renderTab();
 
@@ -104,7 +104,8 @@ describe('NotificationsTab', () => {
 
     await waitFor(() => expect(toggle).toBeEnabled());
     expect(updateChannel).toHaveBeenCalledWith('phones', {
-      type: 'twilio-sms', name: 'Shop phones', values: phones.settings, minSeverity: 'critical', machineIds: null, enabled: false,
+      type: 'twilio-sms', name: 'Shop phones', values: phones.settings, minSeverity: 'critical', machineIds: null,
+      ignorePatterns: ['Door open'], enabled: false,
     });
   });
 

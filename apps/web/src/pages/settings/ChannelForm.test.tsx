@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { sendTestMessage, type ChannelTypeInfo, type NotificationChannel } from '../../api/notifications';
+import { sendTestMessage, type ChannelTypeInfo, type NotificationChannel, type NotificationMessage } from '../../api/notifications';
 import { ChannelForm } from './ChannelForm';
 
 vi.mock('../../api/notifications', async importOriginal => ({
@@ -190,7 +190,7 @@ describe('ChannelForm', () => {
 
     expect(onSave).toHaveBeenCalledWith({
       type: 'twilio-sms', name: 'Shop phones', values: { accountSid: 'AC1', authToken: 'token', to: ['+15559870001', '+15559870002'] },
-      minSeverity: 'warning', machineIds: null, enabled: true,
+      minSeverity: 'warning', machineIds: null, ignorePatterns: [], enabled: true,
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
@@ -227,6 +227,65 @@ describe('ChannelForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save channel' }));
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ machineIds: ['haas-vf2'], minSeverity: 'critical' }));
+  });
+
+  describe('ignore patterns', () => {
+    function sent(text: string, kind: NotificationMessage['kind'] = 'started'): NotificationMessage {
+      return {
+        id: 1, channelId: 'phones', alertId: 7, kind, machineId: 'haas-vf2', severity: 'critical', text, status: 'sent',
+        attempts: 1, lastError: null, detail: null, createdAt: '2026-11-13T09:00:00.000Z', sentAt: '2026-11-13T09:00:00.000Z',
+      };
+    }
+
+    it('adds and removes pattern boxes, and saves only the filled patterns', () => {
+      const { onSave } = renderForm();
+      fillTwilio();
+
+      type('Ignore pattern 1', 'Door open');
+      fireEvent.click(screen.getByRole('button', { name: 'Add a pattern' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add a pattern' }));
+      type('Ignore pattern 2', 'Coolant');
+      type('Ignore pattern 3', 'Program 9*');
+      fireEvent.click(screen.getByRole('button', { name: 'Remove ignore pattern 2' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add a pattern' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Save channel' }));
+
+      expect(screen.getAllByLabelText(/^Ignore pattern \d$/)).toHaveLength(3);
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ ignorePatterns: ['Door open', 'Program 9*'] }));
+    });
+
+    it('starts with the saved patterns of a channel', () => {
+      renderForm({ channel: { ...slack, ignorePatterns: ['Door open', 'Coolant'] } });
+
+      expect(screen.getByLabelText('Ignore pattern 1')).toHaveValue('Door open');
+      expect(screen.getByLabelText('Ignore pattern 2')).toHaveValue('Coolant');
+    });
+
+    it('shows how many of the last alert messages each pattern matches', () => {
+      renderForm({
+        messages: [
+          sent('CRITICAL - Haas VF-2: Door open. Started 9:02 AM.'),
+          sent('OK - Haas VF-2: Door open ended at 9:04 AM.', 'ended'),
+          sent('WARNING - Okuma LB3000: Idle for 20 minutes. Started 9:10 AM.'),
+          // A test is never ignored, so the preview does not count it
+          sent('Test from Chatter. Door open.', 'test'),
+        ],
+      });
+
+      type('Ignore pattern 1', 'door OPEN');
+      expect(screen.getByText('Matches 2 of the last 3 messages.')).toBeInTheDocument();
+
+      type('Ignore pattern 1', 'Haas*Started');
+      expect(screen.getByText('Matches 1 of the last 3 messages.')).toBeInTheDocument();
+    });
+
+    it('tells why a pattern cannot be saved, in place of the count', () => {
+      renderForm({ messages: [sent('CRITICAL - Haas VF-2: Door open. Started 9:02 AM.')] });
+
+      type('Ignore pattern 1', '*');
+
+      expect(screen.getByText('This pattern matches each message. To stop all messages, turn the channel off.')).toBeInTheDocument();
+    });
   });
 
   it('keeps the form open and shows the error when the save fails', () => {

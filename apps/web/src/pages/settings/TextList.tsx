@@ -13,6 +13,8 @@ interface TextListProps {
   itemLabel: string;
   /** The text of the button that adds a box, for example "Add a number" */
   addLabel: string;
+  /** False hides the Add button, for a list that is at its limit */
+  canAdd?: boolean;
   inputType?: HTMLInputTypeAttribute;
   placeholder?: string;
   mono?: boolean;
@@ -22,7 +24,9 @@ interface TextListProps {
 }
 
 /** A list of text boxes with a button to add a box and a button to remove each box. The last box cannot be removed. */
-export function TextList({ legend, values, onChange, itemLabel, addLabel, inputType, placeholder, mono, hint, below }: TextListProps) {
+export function TextList({
+  legend, values, onChange, itemLabel, addLabel, canAdd = true, inputType, placeholder, mono, hint, below,
+}: TextListProps) {
   const setValue = (index: number, value: string) => onChange(values.map((entry, at) => (at === index ? value : entry)));
   return (
     <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
@@ -55,9 +59,11 @@ export function TextList({ legend, values, onChange, itemLabel, addLabel, inputT
           {below?.(value, index)}
         </div>
       ))}
-      <div>
-        <Button size="sm" onClick={() => onChange([...values, ''])}><PlusIcon /> {addLabel}</Button>
-      </div>
+      {canAdd && (
+        <div>
+          <Button size="sm" onClick={() => onChange([...values, ''])}><PlusIcon /> {addLabel}</Button>
+        </div>
+      )}
       {hint && <p className="m-0 text-xs text-zinc-300">{hint}</p>}
     </fieldset>
   );

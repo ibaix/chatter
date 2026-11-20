@@ -11,6 +11,8 @@ export interface ChannelFormState {
   minSeverity: AlertSeverity;
   /** null gets the alerts of all machines */
   machineIds: string[] | null;
+  /** One box for each pattern, and one empty box when there are none. The empty boxes are dropped on save. */
+  ignorePatterns: string[];
   enabled: boolean;
 }
 
@@ -18,18 +20,21 @@ export interface ChannelFormState {
 export function newChannelForm(type: ChannelTypeInfo | undefined): ChannelFormState {
   return {
     type: type?.id ?? '', name: '', values: emptyValuesOf(type?.fields ?? []), clearSecrets: [],
-    minSeverity: 'warning', machineIds: null, enabled: true,
+    minSeverity: 'warning', machineIds: null, ignorePatterns: [''], enabled: true,
   };
 }
 
 /** The form of a saved channel. Each secret box is empty: an empty secret keeps the saved one. */
 export function editChannelForm(channel: NotificationChannel, type: ChannelTypeInfo | undefined): ChannelFormState {
-  const { name, settings, minSeverity, machineIds, enabled } = channel;
+  const { name, settings, minSeverity, machineIds, ignorePatterns, enabled } = channel;
   const values = { ...emptyValuesOf(type?.fields ?? []), ...settings };
   for (const field of type?.fields ?? []) {
     if (field.kind === 'phone-list' && (values[field.key] as string[]).length === 0) values[field.key] = [''];
   }
-  return { type: channel.type, name, values, clearSecrets: [], minSeverity, machineIds, enabled };
+  return {
+    type: channel.type, name, values, clearSecrets: [], minSeverity, machineIds,
+    ignorePatterns: ignorePatterns.length > 0 ? [...ignorePatterns] : [''], enabled,
+  };
 }
 
 /** Another type has other fields, so the values start again. The name and the alert choices stay. */
@@ -37,10 +42,11 @@ export function withType(form: ChannelFormState, type: ChannelTypeInfo): Channel
   return { ...form, type: type.id, values: emptyValuesOf(type.fields), clearSecrets: [] };
 }
 
-/** The body for the server: the texts trimmed and no empty phone boxes. The server checks the rest. */
+/** The body for the server: the texts trimmed and no empty phone or pattern boxes. The server checks the rest. */
 export function channelInputOf(form: ChannelFormState): ChannelInput {
   const { type, name, values, minSeverity, machineIds, enabled } = form;
-  const input: ChannelInput = { type, name: name.trim(), values: trimmed(values), minSeverity, machineIds, enabled };
+  const ignorePatterns = filledTexts(form.ignorePatterns);
+  const input: ChannelInput = { type, name: name.trim(), values: trimmed(values), minSeverity, machineIds, ignorePatterns, enabled };
   // A new secret in the box takes the place of the saved one, so there is nothing to delete
   const clearSecrets = form.clearSecrets.filter(key => input.values[key] === '');
   return clearSecrets.length > 0 ? { ...input, clearSecrets } : input;
@@ -51,7 +57,9 @@ function emptyValuesOf(fields: ChannelField[]): ChannelValues {
 }
 
 function trimmed(values: ChannelValues): ChannelValues {
-  return Object.fromEntries(Object.entries(values).map(([key, value]) => [
-    key, Array.isArray(value) ? value.map(entry => entry.trim()).filter(entry => entry !== '') : value.trim(),
-  ]));
+  return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, Array.isArray(value) ? filledTexts(value) : value.trim()]));
+}
+
+function filledTexts(texts: string[]): string[] {
+  return texts.map(text => text.trim()).filter(text => text !== '');
 }

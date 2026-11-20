@@ -58,6 +58,6 @@ export async function saveNotificationSettings(settings: NotificationSettings): 
 
 /** The form of a saved channel. The secrets are empty, so the server keeps the saved ones. */
 export function inputOf(channel: NotificationChannel): ChannelInput {
-  const { type, name, settings, minSeverity, machineIds, enabled } = channel;
-  return { type, name, values: settings, minSeverity, machineIds, enabled };
+  const { type, name, settings, minSeverity, machineIds, ignorePatterns, enabled } = channel;
+  return { type, name, values: settings, minSeverity, machineIds, ignorePatterns, enabled };
 }

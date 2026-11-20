@@ -124,6 +124,7 @@ export function NotificationsTab({ machines }: { machines: MachineName[] }) {
         <ChannelForm
           types={report.types}
           machines={machines}
+          messages={report.messages}
           channel={openForm.channel}
           error={errorIn('form')}
           isSaving={isChanging}
