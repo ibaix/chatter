@@ -17,6 +17,7 @@ import {
   viewText,
   withLivePoint,
   fittedOverviewEnd,
+  loadSpan,
   zoomView,
 } from './historyChart';
 
@@ -263,5 +264,30 @@ describe('fittedOverviewEnd', () => {
   it('moves on so that a view after the overview ends at its right edge, and is live again at now', () => {
     expect(fittedOverviewEnd(NOW - 2 * DAY, DAY, NOW - 30 * HOUR, HOUR, NOW)).toBe(NOW - 30 * HOUR);
     expect(fittedOverviewEnd(NOW - 2 * DAY, DAY, NOW - 1000, HOUR, NOW)).toBeNull();
+  });
+});
+
+describe('loadSpan', () => {
+  const NOW = Date.parse('2026-11-19T15:00:00.000Z');
+  const MINUTE = 60_000;
+  const DAY = 24 * 60 * MINUTE;
+  const [TEN_MINUTES, , , SEVEN_DAYS] = CHART_RANGES;
+
+  it('loads one more range before a live chart, so a drag back shows data at once', () => {
+    expect(loadSpan(TEN_MINUTES, null, NOW)).toEqual({ query: '-20m', end: null });
+  });
+
+  it('loads one more range on each side of a chart in the past', () => {
+    expect(loadSpan(TEN_MINUTES, NOW - DAY, NOW)).toEqual({ query: '-30m', end: NOW - DAY + 10 * MINUTE });
+  });
+
+  it('ends now when the range after the chart gets to now', () => {
+    expect(loadSpan(TEN_MINUTES, NOW - 5 * MINUTE, NOW)).toEqual({ query: '-25m', end: null });
+  });
+
+  it('writes a long range in big units, because the server takes at most 6 digits', () => {
+    expect(loadSpan(SEVEN_DAYS, NOW - 30 * DAY, NOW).query).toBe('-21d');
+    const zoom = zoomView(NOW - 30 * DAY, NOW - 30 * DAY + 4 * DAY + 1000, NOW).range;
+    expect(loadSpan(zoom, NOW - 20 * DAY, NOW).query).toMatch(/^-\d{1,6}m$/);
   });
 });

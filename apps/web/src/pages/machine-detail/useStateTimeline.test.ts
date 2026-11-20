@@ -40,7 +40,7 @@ describe('useStateTimeline', () => {
     expect(result.current.segments[1].program).toBe('O1');
   });
 
-  it('drops the old segments while a new range loads', async () => {
+  it('keeps the old segments while a new range loads, and loads one more range before the chart', async () => {
     const now = Date.now();
     vi.mocked(fetchStateTimeline).mockResolvedValueOnce([{ state: 'alarm', start: now - 5 * MINUTE, end: now - 4 * MINUTE }]);
     const { result, rerender } = renderHook((props: Props) => useStateTimeline(props.machineId, props.live, props.range), {
@@ -52,7 +52,9 @@ describe('useStateTimeline', () => {
     rerender({ machineId: 'm1', live: { state: 'idle', time: Date.now() }, range: ONE_HOUR });
 
     expect(result.current.status).toBe('loading');
-    expect(result.current.segments.map(segment => segment.state)).toEqual(['idle']);
+    expect(result.current.segments.map(segment => segment.state)).toEqual(['alarm', 'idle']);
+    expect(fetchStateTimeline).toHaveBeenNthCalledWith(1, 'm1', '-20m');
+    expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-2h');
   });
 
   it('does not show the segments of the last machine for a new machine', async () => {
@@ -143,5 +145,19 @@ describe('useStateTimeline', () => {
 
     await waitFor(() => expect(result.current.every(timeline => timeline.status === 'ready')).toBe(true));
     expect(fetchStateTimeline).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives the segments after the end of a chart in the past, so a drag on shows them at once', async () => {
+    const end = Date.now() - 60 * MINUTE;
+    vi.mocked(fetchStateTimeline).mockResolvedValue([
+      { state: 'running', start: end - 30 * MINUTE, end: end - 5 * MINUTE },
+      { state: 'alarm', start: end - 5 * MINUTE, end: end + 10 * MINUTE },
+    ]);
+    const { result } = renderHook(() => useStateTimeline('m1', { state: 'idle', time: Date.now() }, TEN_MINUTES, undefined, end));
+
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(fetchStateTimeline).toHaveBeenCalledWith('m1', '-30m', end + 10 * MINUTE);
+    expect(result.current.now).toBe(end);
+    expect(result.current.segments.at(-1)).toMatchObject({ state: 'alarm', end: end + 10 * MINUTE });
   });
 });

@@ -246,3 +246,26 @@ export function fittedOverviewEnd(
   if (next === end) return overviewEnd;
   return next >= now - SECOND ? null : next;
 }
+
+/** The server takes a range of at most 6 digits, such as "-999999s" */
+const MAX_RANGE_DIGITS = 999_999;
+
+/** A time length as a range for the server, in the biggest unit that fits: "-20m", "-21d" or "-903s" */
+function rangeQuery(ms: number): string {
+  for (const [unit, unitMs] of [['d', DAY], ['h', HOUR], ['m', MINUTE]] as const) {
+    if (ms % unitMs === 0) return `-${ms / unitMs}${unit}`;
+  }
+  const seconds = Math.ceil(ms / SECOND);
+  return seconds <= MAX_RANGE_DIGITS ? `-${seconds}s` : `-${Math.ceil(ms / MINUTE)}m`;
+}
+
+/**
+ * The time that a chart loads: one more range before the time that it shows, and one more after it, up to now.
+ * A drag then shows data at once, and the next load comes in while the old data still shows.
+ * `end` null is a span that ends now.
+ */
+export function loadSpan(range: ChartRange, end: number | null, now: number): { query: string; end: number | null } {
+  const from = (end ?? now) - 2 * range.ms;
+  const to = end === null || end + range.ms >= now - SECOND ? null : end + range.ms;
+  return { query: rangeQuery((to ?? now) - from), end: to };
+}

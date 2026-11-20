@@ -2,11 +2,11 @@ import { useState, type PointerEvent } from 'react';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
-import { ChartTooltip, dragStyle, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
+import { ChartTooltip, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
 import { messageFor, timeLabels, viewText, type ChartRange } from './historyChart';
 import { formatDuration, formatShare } from './reportView';
 import { StateBand, StateLegend, StateSwatch } from './StateBand';
-import { liveStateOf, segmentAt, segmentTimesText, stateTotals, type StateSegment, type StateTotal } from './stateTimeline';
+import { liveStateOf, segmentAt, segmentsWithin, segmentTimesText, stateTotals, type StateSegment, type StateTotal } from './stateTimeline';
 import { useStateTimeline } from './useStateTimeline';
 
 const BAND_HEIGHT = 88;
@@ -32,18 +32,21 @@ interface StateChartProps {
   machine: Machine;
   range: ChartRange;
   end: number | null;
-  /** How far the plot follows a drag, in pixels */
-  dragX: number;
+  /** How far a drag moves the time, in milliseconds: negative goes back. The chart loaded this time already. */
+  shiftMs: number;
   /** The time that the user highlights on the overview strip */
   selection: ZoomSelection | null;
 }
 
-export function StateChart({ machine, range, end, dragX, selection }: StateChartProps) {
-  const { segments, status, now } = useStateTimeline(machine.id, liveStateOf(machine), range, undefined, end);
+export function StateChart({ machine, range, end, shiftMs, selection }: StateChartProps) {
+  const { segments, status, now: loadedNow } = useStateTimeline(machine.id, liveStateOf(machine), range, undefined, end);
   const { ref, width } = useBoxSize<HTMLDivElement>();
-  const totals = stateTotals(segments);
+  // The end of the time that shows, also while the user drags
+  const now = loadedNow + shiftMs;
+  const totals = stateTotals(segmentsWithin(segments, now - range.ms, now));
 
-  if (status !== 'ready') {
+  // While another time loads, the chart keeps the segments that it has
+  if (status === 'failed' || (status === 'loading' && segments.length === 0)) {
     return <p className="m-0 flex h-[13.75rem] items-center justify-center text-center text-zinc-300">{messageFor(status, 'machine state', range, end)}</p>;
   }
 
@@ -62,8 +65,8 @@ export function StateChart({ machine, range, end, dragX, selection }: StateChart
           </div>
         ))}
       </div>
-      <div ref={ref} className="relative" style={dragStyle(dragX)}>
-        {width > 0 && <StatePlot segments={segments} totalsText={totalsText(totals, range)} now={now} range={range} live={end === null} width={width} selection={selection} />}
+      <div ref={ref} className="relative">
+        {width > 0 && <StatePlot segments={segments} totalsText={totalsText(totals, range)} now={now} range={range} live={end === null && shiftMs === 0} width={width} selection={selection} />}
       </div>
       <StateLegend explain className="gap-x-4" />
     </div>

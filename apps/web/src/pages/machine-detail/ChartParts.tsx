@@ -65,11 +65,6 @@ export function PanButtons({ canGoLater, onEarlier, onLater, onNow }: PanButtons
 /** A drag shorter than this, in pixels, is a click, for example to see a hover box */
 export const MIN_DRAG_PX = 5;
 
-/** Moves a plot with the mouse while the user drags it. No style when it does not move. */
-export function dragStyle(dragX: number): CSSProperties | undefined {
-  return dragX ? { transform: `translateX(${dragX}px)` } : undefined;
-}
-
 /** A time that the user highlights on the overview strip, to zoom in */
 export interface ZoomSelection {
   from: number;

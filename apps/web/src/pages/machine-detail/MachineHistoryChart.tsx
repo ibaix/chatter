@@ -1,6 +1,6 @@
 import { historyWindowValue } from '@local-chatter/shared';
 import { cn } from '@toolpath/ui';
-import { useRef, useState, type PointerEvent, type WheelEvent } from 'react';
+import { useId, useRef, useState, type PointerEvent, type WheelEvent } from 'react';
 import type { HistoryPoint } from '../../api/history';
 import { CHOICE_HEIGHT, ChoiceMenu } from '../../components/ui/ChoiceMenu';
 import { RangeButtons } from '../../components/ui/RangeButtons';
@@ -8,7 +8,7 @@ import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 import { ChartOverview } from './ChartOverview';
-import { AXIS_LABEL_CLASS, ChartTooltip, dragStyle, MIN_DRAG_PX, PanButtons, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
+import { AXIS_LABEL_CLASS, ChartTooltip, MIN_DRAG_PX, PanButtons, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
 import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
   axisTicks,
@@ -113,35 +113,43 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
     wheelDelta.current = 0;
   };
 
-  /** Where a drag on the chart started, and the width of the chart then */
-  const dragStart = useRef<{ x: number; width: number } | null>(null);
-  /** How far the chart follows the mouse while the user drags. The new time loads once, when the drag ends. */
-  const [dragX, setDragX] = useState(0);
-  /** The live chart ends now, so it cannot go on: a drag to the left does not move it */
-  const shownDragX = (x: number) => (end === null ? Math.max(0, x) : x);
+  const isStateChart = choice.id === MACHINE_STATE.id;
+  /** Where a drag on the chart started, and the width of the plot then */
+  const dragStart = useRef<{ x: number; plotWidth: number } | null>(null);
+  /**
+   * How far a drag moves the time, in milliseconds: negative goes back. While the user drags, the chart draws the
+   * data that it loaded around its time (loadSpan). The new time loads once, when the drag ends.
+   */
+  const [shiftMs, setShiftMs] = useState(0);
+  /** The time that a drag of `x` pixels moves. A drag to the right goes back. The live chart cannot go after now. */
+  const dragMs = (x: number, plotWidth: number) => {
+    const ms = (-x / plotWidth) * range.ms;
+    return end === null ? Math.min(0, ms) : ms;
+  };
 
-  /** A drag on the chart moves the time. A drag to the right goes back. */
   const startDrag = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
-    dragStart.current = { x: event.clientX, width: event.currentTarget.getBoundingClientRect().width };
+    const margins = isStateChart ? 0 : MARGIN.left + MARGIN.right;
+    dragStart.current = { x: event.clientX, plotWidth: event.currentTarget.getBoundingClientRect().width - margins };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
   const followDrag = (event: PointerEvent<HTMLDivElement>) => {
-    if (dragStart.current) setDragX(shownDragX(event.clientX - dragStart.current.x));
+    const start = dragStart.current;
+    if (start && start.plotWidth > 0) setShiftMs(dragMs(event.clientX - start.x, start.plotWidth));
   };
   const endDrag = (event: PointerEvent<HTMLDivElement>) => {
     const start = dragStart.current;
     dragStart.current = null;
-    setDragX(0);
-    if (!start || start.width <= 0) return;
-    const moved = shownDragX(event.clientX - start.x);
+    setShiftMs(0);
+    if (!start || start.plotWidth <= 0) return;
     // A small move is a click, for example to see a hover box
-    if (Math.abs(moved) >= MIN_DRAG_PX) pan(-moved / start.width);
+    if (Math.abs(event.clientX - start.x) < MIN_DRAG_PX) return;
+    const moved = dragMs(event.clientX - start.x, start.plotWidth);
+    if (moved !== 0) moveBy(moved);
   };
 
   /** The time that the user highlights on the overview strip. The chart shades it also. */
   const [selection, setSelection] = useState<ZoomSelection | null>(null);
-  const isStateChart = choice.id === MACHINE_STATE.id;
 
   return (
     <section
@@ -171,12 +179,12 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
         onPointerMove={followDrag}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        className={cn('flex touch-pan-y flex-col gap-2.5 overflow-hidden select-none', dragX ? 'cursor-grabbing' : 'cursor-grab')}
+        className={cn('flex touch-pan-y flex-col gap-2.5 overflow-hidden select-none', dragStart.current ? 'cursor-grabbing' : 'cursor-grab')}
       >
         {isStateChart ? (
-          <StateChart machine={machine} range={range} end={end} dragX={dragX} selection={selection} />
+          <StateChart machine={machine} range={range} end={end} shiftMs={shiftMs} selection={selection} />
         ) : (
-          <ValueChart machine={machine} value={choice} range={range} end={end} dragX={dragX} selection={selection} />
+          <ValueChart machine={machine} value={choice} range={range} end={end} shiftMs={shiftMs} selection={selection} />
         )}
       </div>
       <ChartOverview
@@ -184,7 +192,7 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
         overview={view.overview}
         overviewEnd={view.overviewEnd}
         view={range}
-        viewEnd={end}
+        viewEnd={shiftMs ? (end ?? Date.now()) + shiftMs : end}
         selection={selection}
         onSelect={setSelection}
         left={isStateChart ? 0 : MARGIN.left}
@@ -201,14 +209,14 @@ interface ValueChartProps {
   value: ChartValue;
   range: ChartRange;
   end: number | null;
-  /** How far the plot follows a drag, in pixels */
-  dragX: number;
+  /** How far a drag moves the time, in milliseconds: negative goes back. The chart loaded this time already. */
+  shiftMs: number;
   /** The time that the user highlights on the overview strip */
   selection: ZoomSelection | null;
 }
 
 /** A machine value as a line, with the machine state as a thin strip under it */
-function ValueChart({ machine, value, range, end, dragX, selection }: ValueChartProps) {
+function ValueChart({ machine, value, range, end, shiftMs, selection }: ValueChartProps) {
   const livePoint = livePointOf(machine, value);
   const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range, end);
   // The chart's clock, so the strip ends where the line ends
@@ -219,13 +227,14 @@ function ValueChart({ machine, value, range, end, dragX, selection }: ValueChart
   return (
     <>
       {/* The box sets the chart height in rem, so the chart follows the page scale */}
-      <div ref={ref} className="relative h-[13.75rem]" style={dragStyle(dragX)}>
+      <div ref={ref} className="relative h-[13.75rem]">
         {showPlot ? (
           <ChartPlot
             points={points}
             value={value}
             stateSegments={stripSegments}
             now={now}
+            shiftMs={shiftMs}
             range={range}
             gapMs={gapMs}
             connected={machine.connected && end === null}
@@ -285,6 +294,8 @@ interface ChartPlotProps {
   /** The machine state over the range, for the strip under the plot */
   stateSegments: StateSegment[];
   now: number;
+  /** How far a drag moves the time that shows, in milliseconds */
+  shiftMs: number;
   range: ChartRange;
   gapMs: number;
   connected: boolean;
@@ -292,10 +303,16 @@ interface ChartPlotProps {
   height: number;
 }
 
-function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected, live, selection, width, height }: ChartPlotProps) {
+function ChartPlot({ points, value, stateSegments, now, shiftMs, range, gapMs, connected, live, selection, width, height }: ChartPlotProps) {
   const [hovered, setHovered] = useState<HistoryPoint | undefined>();
+  const clipId = useId();
+  // The axis is of all the loaded points, so it does not jump while the user drags
   const ticks = axisTicks(highestValue(points), value.smallestAxisTop);
-  const scale = chartScale({ width, height, startTime: now - range.ms, rangeMs: range.ms, topValue: ticks[ticks.length - 1] });
+  /** The end of the time that shows, also while the user drags */
+  const shownEnd = now + shiftMs;
+  const shownLive = live && shiftMs === 0;
+  const startTime = shownEnd - range.ms;
+  const scale = chartScale({ width, height, startTime, rangeMs: range.ms, topValue: ticks[ticks.length - 1] });
   const parts = lineParts(points, now, connected, gapMs);
   // A counter or a tool number holds its value until it changes, so it draws as steps
   const drawnParts = historyWindowValue(value.id) === 'last' ? parts.map(stepPoints) : parts;
@@ -303,7 +320,8 @@ function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected,
 
   const showNearest = (event: PointerEvent<SVGSVGElement>) => {
     const offsetX = event.clientX - event.currentTarget.getBoundingClientRect().left;
-    setHovered(nearestPoint(points, scale.timeAt(offsetX)));
+    const shownPoints = points.filter(point => point.time >= startTime && point.time <= shownEnd);
+    setHovered(nearestPoint(shownPoints, scale.timeAt(offsetX)));
   };
 
   return (
@@ -312,19 +330,27 @@ function ChartPlot({ points, value, stateSegments, now, range, gapMs, connected,
         width={width}
         height={height}
         role="img"
-        aria-label={`${value.name} ${viewText(range, live ? null : now)}. Newest value: ${value.format(newest.value)}.`}
+        aria-label={`${value.name} ${viewText(range, shownLive ? null : shownEnd)}. Newest value: ${value.format(newest.value)}.`}
         onPointerMove={showNearest}
         onPointerLeave={() => setHovered(undefined)}
         className="block"
       >
+        <defs>
+          {/* The chart loads more time than it shows, so the line stays inside the plot */}
+          <clipPath id={clipId}>
+            <rect x={MARGIN.left} y={0} width={width - MARGIN.left - MARGIN.right} height={height} />
+          </clipPath>
+        </defs>
         <ValueAxis ticks={ticks} scale={scale} width={width} />
-        <TimeLabels labels={timeLabels(range.ms, now, live)} x={scale.x} y={height - TIME_LABEL_BOTTOM} />
-        {drawnParts.map(part => (
-          <path key={part[0].time} d={linePath(part, scale)} fill="none" strokeWidth={2} strokeLinejoin="round" className="stroke-primary" />
-        ))}
+        <TimeLabels labels={timeLabels(range.ms, shownEnd, shownLive)} x={scale.x} y={height - TIME_LABEL_BOTTOM} />
+        <g clipPath={`url(#${clipId})`}>
+          {drawnParts.map(part => (
+            <path key={part[0].time} d={linePath(part, scale)} fill="none" strokeWidth={2} strokeLinejoin="round" className="stroke-primary" />
+          ))}
+        </g>
         <StateBand
           segments={stateSegments}
-          startTime={now - range.ms}
+          startTime={startTime}
           rangeMs={range.ms}
           left={MARGIN.left}
           width={width - MARGIN.left - MARGIN.right}

@@ -1,4 +1,4 @@
-import type { HistoryValue } from '@local-chatter/shared';
+import { autoHistoryWindow, type HistoryValue } from '@local-chatter/shared';
 import { useEffect, useRef, useState } from 'react';
 import { fetchValueHistory, type HistoryPoint } from '../../api/history';
 import { useNow } from '../../hooks/useNow';
@@ -6,6 +6,7 @@ import {
   CHART_CLOCK_TICK_MS,
   durationMs,
   gapFor,
+  loadSpan,
   mergeHistory,
   recentPoints,
   withLivePoint,
@@ -19,6 +20,8 @@ import {
  * One value over the chart's range: the saved history first, then each live value.
  * The live values come from the live machine events, so the chart does not ask the server again.
  * With an `end`, the chart looks back in time: it shows the range before `end`, and no live values.
+ * It loads one more range on each side (loadSpan), so a drag shows data at once. While a new time loads,
+ * the old points stay: they have their own times, so they show at the right place.
  */
 export function useChartHistory(
   machineId: string,
@@ -30,8 +33,11 @@ export function useChartHistory(
   const live = end === null ? liveValue : null;
   const [points, setPoints] = useState<HistoryPoint[]>([]);
   const [status, setStatus] = useState<HistoryStatus>('loading');
-  /** The value that `points` belong to. Until the effect starts the new value, the old points must not show. */
-  const [pointsValue, setPointsValue] = useState(value);
+  /** The machine and value that `points` belong to. Until the effect starts a new value, the old points must not show. */
+  const pointsKey = `${machineId} ${value}`;
+  const [shownKey, setShownKey] = useState(pointsKey);
+  /** The machine and value that the last load was for, or null before the first load */
+  const loadedKey = useRef<string | null>(null);
   /** The time each history point covers. Live values are kept one per window of this length. */
   const [windowMs, setWindowMs] = useState(0);
   const now = useNow(CHART_CLOCK_TICK_MS);
@@ -41,16 +47,21 @@ export function useChartHistory(
 
   useEffect(() => {
     let stopped = false;
-    setPoints(latestLive.current && end === null ? [latestLive.current] : []);
-    setPointsValue(value);
+    // Another time of the same value keeps the old points until the new ones come
+    if (loadedKey.current !== pointsKey) setPoints(latestLive.current && end === null ? [latestLive.current] : []);
+    loadedKey.current = pointsKey;
+    setShownKey(pointsKey);
     setStatus('loading');
-    const loading = end === null
-      ? fetchValueHistory(machineId, value, range.query, range.window)
-      : fetchValueHistory(machineId, value, range.query, range.window, end);
+    const span = loadSpan(range, end, Date.now());
+    const window = range.window ?? autoHistoryWindow(range.ms);
+    const loading = span.end === null
+      ? fetchValueHistory(machineId, value, span.query, window)
+      : fetchValueHistory(machineId, value, span.query, window, span.end);
     loading
       .then(history => {
         if (stopped) return;
-        setPoints(livePoints => mergeHistory(history.points, livePoints));
+        // A live chart keeps the live values that came while it loaded
+        setPoints(known => (end === null ? mergeHistory(history.points, known) : history.points));
         setWindowMs(durationMs(history.window));
         setStatus('ready');
       })
@@ -67,6 +78,7 @@ export function useChartHistory(
 
   // The newest time that is known, so the chart never shows a value after "now". A chart in the past ends at `end`.
   const chartNow = end ?? Math.max(now, live?.time ?? 0);
-  if (pointsValue !== value) return { points: [], status: 'loading' as const, now: chartNow, gapMs: gapFor(windowMs) };
-  return { points: recentPoints(points, chartNow, range.ms), status, now: chartNow, gapMs: gapFor(windowMs) };
+  if (shownKey !== pointsKey) return { points: [], status: 'loading' as const, now: chartNow, gapMs: gapFor(windowMs) };
+  // The points of the loaded span: the range that shows, and one range before it (loadSpan)
+  return { points: recentPoints(points, chartNow, 2 * range.ms), status, now: chartNow, gapMs: gapFor(windowMs) };
 }

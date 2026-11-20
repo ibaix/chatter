@@ -31,26 +31,33 @@ interface StateBandProps {
  * Offline has stripes, so it is not told apart by color only.
  * It takes plain numbers, not a function, so memo can skip the redraw when only the hover moves:
  * a 7-day band can have thousands of blocks.
+ * A chart loads more time than it shows, so the band draws only the part of each segment between `left` and `left + width`.
  */
 export const StateBand = memo(function StateBand({ segments, startTime, rangeMs, left, width, y, height }: StateBandProps) {
   const stripesId = useId();
   const x = (time: number) => left + ((time - startTime) / rangeMs) * width;
+  const right = left + width;
   return (
     <g aria-hidden="true">
       <defs>
         <OfflineStripes id={stripesId} />
       </defs>
-      {segments.map((segment, index) => (
-        <rect
-          key={`${segment.start}-${segment.state}-${index}`}
-          x={x(segment.start)}
-          y={y}
-          width={Math.max(MIN_SEGMENT_WIDTH, x(segment.end) - x(segment.start))}
-          height={height}
-          fill={segment.state === 'offline' ? `url(#${stripesId})` : undefined}
-          className={segment.state === 'offline' ? undefined : STATE_FILLS[segment.state]}
-        />
-      ))}
+      {segments.map((segment, index) => {
+        const from = Math.max(left, x(segment.start));
+        const to = Math.min(right, x(segment.end));
+        if (to < left || from > right) return null;
+        return (
+          <rect
+            key={`${segment.start}-${segment.state}-${index}`}
+            x={Math.min(from, right - MIN_SEGMENT_WIDTH)}
+            y={y}
+            width={Math.max(MIN_SEGMENT_WIDTH, to - from)}
+            height={height}
+            fill={segment.state === 'offline' ? `url(#${stripesId})` : undefined}
+            className={segment.state === 'offline' ? undefined : STATE_FILLS[segment.state]}
+          />
+        );
+      })}
     </g>
   );
 });

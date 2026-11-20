@@ -5,6 +5,7 @@ import { fetchValueHistory } from '../../api/history';
 import { fetchStateTimeline } from '../../api/stateTimeline';
 import { testMachine } from '../../test/testMachine';
 import type { Machine } from '../../types';
+import { durationMs } from './historyChart';
 import { chartChoicesFor, shownChartChoice, SPINDLE_SPEED, type ChartChoiceId } from './chartValues';
 import MachineHistoryChart from './MachineHistoryChart';
 
@@ -13,6 +14,16 @@ const BOX_WIDTH = 600;
 /** The plot ends this far from the right edge of the box (MARGIN.right in the chart) */
 const PLOT_RIGHT_MARGIN = 16;
 const MINUTE = 60_000;
+
+/**
+ * The end of the time that a chart shows, from its request. The chart loads one more range before it, and one more
+ * after it up to now (loadSpan). A request with no end ends now.
+ */
+function viewEndOf(call: unknown[], rangeMs: number): number {
+  const [, query, end] = call.length > 3 ? [call[0], call[2], call[4]] : call;
+  const loadedMs = durationMs(query as string);
+  return end === undefined ? Date.now() - (loadedMs - 2 * rangeMs) : (end as number) - rangeMs;
+}
 
 /** The chart with the menu state that the machine page keeps */
 function ChartWithMenu({ machine, start = SPINDLE_SPEED.id }: { machine: Machine; start?: ChartChoiceId }) {
@@ -60,7 +71,7 @@ describe('MachineHistoryChart', () => {
 
   it('loads the history of the value that the user picks', async () => {
     render(<ChartWithMenu machine={testMachine({}, { spindleSpeed: 1200, spindleLoad: 30 })} />);
-    expect(fetchValueHistory).toHaveBeenCalledWith('m1', 'spindle-speed', '-10m', '5s');
+    expect(fetchValueHistory).toHaveBeenCalledWith('m1', 'spindle-speed', '-20m', '5s');
 
     const valueButton = screen.getByRole('button', { name: 'Value in the chart: Spindle speed' });
     // The menu trigger is the button itself, not a second button around it
@@ -68,7 +79,7 @@ describe('MachineHistoryChart', () => {
     fireEvent.click(valueButton);
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Spindle load' }));
 
-    await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledWith('m1', 'spindle-load', '-10m', '5s'));
+    await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledWith('m1', 'spindle-load', '-20m', '5s'));
     expect(screen.getByText('How hard the spindle worked in the last 10 minutes.')).toBeInTheDocument();
   });
 
@@ -83,7 +94,7 @@ describe('MachineHistoryChart', () => {
 
       expect(await screen.findByRole('img', { name: /^Machine state in the last 10 minutes\. Running 50%, Idle 0%, Alarm 0%, Offline 50%/ }))
         .toBeInTheDocument();
-      expect(fetchStateTimeline).toHaveBeenCalledWith('m1', '-10m');
+      expect(fetchStateTimeline).toHaveBeenCalledWith('m1', '-20m');
       expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
       expect(screen.getByText('Running: a program runs')).toBeInTheDocument();
     });
@@ -119,7 +130,7 @@ describe('MachineHistoryChart', () => {
       vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: now - MINUTE, value: 1000 }], window: '5s' });
       render(<ChartWithMenu machine={runningMachine()} />);
 
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledWith('m1', '-10m'));
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledWith('m1', '-20m'));
       expect(await screen.findByRole('list', { name: 'Machine state' })).toHaveTextContent('RunningIdleAlarmOffline');
     });
 
@@ -193,17 +204,18 @@ describe('MachineHistoryChart', () => {
       const before = Date.now();
       fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
 
-      await waitFor(() => expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', '-10m', '5s', expect.any(Number)));
-      const end = vi.mocked(fetchValueHistory).mock.lastCall![4]!;
-      expect(end).toBeGreaterThanOrEqual(before - 5 * MINUTE);
-      expect(end).toBeLessThanOrEqual(Date.now() - 5 * MINUTE);
-      expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m', end);
+      await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledTimes(2));
+      for (const call of [vi.mocked(fetchValueHistory).mock.lastCall!, vi.mocked(fetchStateTimeline).mock.lastCall!]) {
+        const end = viewEndOf(call, 10 * MINUTE);
+        expect(end).toBeGreaterThanOrEqual(before - 5 * MINUTE - 1000);
+        expect(end).toBeLessThanOrEqual(Date.now() - 5 * MINUTE + 1000);
+      }
       expect(screen.getByText(/^How fast the spindle turned from /)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Later' })).toBeEnabled();
 
       fireEvent.click(screen.getByRole('button', { name: 'Now' }));
 
-      await waitFor(() => expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', '-10m', '5s'));
+      await waitFor(() => expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', '-20m', '5s'));
       expect(screen.getByText('How fast the spindle turned in the last 10 minutes.')).toBeInTheDocument();
     });
 
@@ -215,7 +227,8 @@ describe('MachineHistoryChart', () => {
       expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
 
       fireEvent.wheel(chartBody(), { deltaX: -80, deltaY: 0 });
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m', expect.any(Number)));
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
+      expect(viewEndOf(vi.mocked(fetchStateTimeline).mock.lastCall!, 10 * MINUTE)).toBeLessThan(Date.now() - 2 * MINUTE);
     });
 
     it('moves the time when the user drags the chart: to the right goes back', async () => {
@@ -225,10 +238,33 @@ describe('MachineHistoryChart', () => {
       const before = Date.now();
       drag(chartBody(), 100, 100 + BOX_WIDTH / 2);
 
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m', expect.any(Number)));
-      const end = vi.mocked(fetchStateTimeline).mock.lastCall![2]!;
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
+      const end = viewEndOf(vi.mocked(fetchStateTimeline).mock.lastCall!, 10 * MINUTE);
       expect(end).toBeGreaterThanOrEqual(before - 5 * MINUTE - 1000);
       expect(end).toBeLessThanOrEqual(Date.now() - 5 * MINUTE + 1000);
+    });
+
+    it('shows the time before the chart while the user drags, and keeps it while the new time loads', async () => {
+      const now = Date.now();
+      // The chart loads 20 minutes: the alarm is before the 10 minutes that show
+      vi.mocked(fetchStateTimeline).mockResolvedValue([
+        { state: 'alarm', start: now - 20 * MINUTE, end: now - 10 * MINUTE },
+        { state: 'running', start: now - 10 * MINUTE, end: now },
+      ]);
+      render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
+      expect(await screen.findByRole('img', { name: /Running 100%, Idle 0%, Alarm 0%/ })).toBeInTheDocument();
+
+      fireEvent.pointerDown(chartBody(), { button: 0, clientX: 100, pointerId: 1 });
+      fireEvent.pointerMove(chartBody(), { clientX: 100 + BOX_WIDTH / 2, pointerId: 1 });
+
+      expect(screen.getByRole('img', { name: /^Machine state from .* Running 50%, Idle 0%, Alarm 50%/ })).toBeInTheDocument();
+      expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
+
+      vi.mocked(fetchStateTimeline).mockReturnValue(new Promise(() => {}));
+      fireEvent.pointerUp(chartBody(), { clientX: 100 + BOX_WIDTH / 2, pointerId: 1 });
+
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
+      expect(screen.getByRole('img', { name: /^Machine state from .* Alarm 50%/ })).toBeInTheDocument();
     });
 
     it('does not move the time for a click, or for a drag of the live chart into the future', async () => {
@@ -247,7 +283,7 @@ describe('MachineHistoryChart', () => {
 
       fireEvent.click(screen.getByRole('button', { name: '1h' }));
 
-      await waitFor(() => expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', '-1h', undefined));
+      await waitFor(() => expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', '-2h', '10s'));
       expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
     });
   });
@@ -260,8 +296,8 @@ describe('MachineHistoryChart', () => {
       // From 1/4 to 3/4 of the 10-minute strip: 5 minutes that end 2.5 minutes ago
       drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
 
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-300s', expect.any(Number)));
-      const end = vi.mocked(fetchStateTimeline).mock.lastCall![2]!;
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
+      const end = viewEndOf(vi.mocked(fetchStateTimeline).mock.lastCall!, 5 * MINUTE);
       expect(Math.abs(end - (now - 2.5 * MINUTE))).toBeLessThan(5000);
       expect(screen.getByText(/^What the machine did from /)).toBeInTheDocument();
       // The strip keeps the 10 minutes, and no range button shows as pressed while the chart is zoomed in
@@ -306,7 +342,7 @@ describe('MachineHistoryChart', () => {
       await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
       fireEvent.click(screen.getByRole('button', { name: '1h' }));
 
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-1h'));
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-2h'));
       expect(screen.getByRole('button', { name: '1h' })).toHaveAttribute('aria-pressed', 'true');
     });
 
@@ -314,15 +350,15 @@ describe('MachineHistoryChart', () => {
       const now = Date.now();
       const overview = await overviewOfStateView();
       drag(overview, BOX_WIDTH / 2, BOX_WIDTH);
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-300s'));
+      // A zoom that reaches now stays live: it loads 5 minutes and 5 more before them
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m'));
 
       // A click at 1/4 of the 10 minutes: the 5 minutes go from 10 to 5 minutes ago
       drag(overview, BOX_WIDTH / 4, BOX_WIDTH / 4);
 
-      await waitFor(() => {
-        const end = vi.mocked(fetchStateTimeline).mock.lastCall![2]!;
-        expect(Math.abs(end - (now - 5 * MINUTE))).toBeLessThan(5000);
-      });
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(3));
+      const end = viewEndOf(vi.mocked(fetchStateTimeline).mock.lastCall!, 5 * MINUTE);
+      expect(Math.abs(end - (now - 5 * MINUTE))).toBeLessThan(5000);
     });
 
     it('reads the timeline once while the strip shows the same time as the chart', async () => {
