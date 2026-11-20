@@ -40,10 +40,36 @@ The **Message settings** panel is at the bottom of the tab.
 4. Under **Which alerts**, select:
    - **Level:** **Warning and up** sends each alert. **Critical only** sends only the critical alerts.
    - **Machines:** **All machines, also the machines that you add later** sends the alerts of each machine, now and later. **Pick machines** sends only the alerts of the machines that you select.
+   - **Ignore messages (optional):** Chatter does not send a message when its text has one of these patterns. For example, `Door open` stops each message about an open door, and `Haas VF-2*Idle` stops the idle alerts of the Haas VF-2. Click **Add a pattern** to add a box. See [Ignore some messages](#ignore-some-messages).
 5. Click **Send test**. The result shows under the form. Fix the problem if the test fails.
 6. Click **Save channel**.
 
 Each alert sends 2 messages: one when it starts, and one when it ends.
+
+## Ignore some messages
+
+An alert can be useful on the screen, but too frequent for the phones. To stop some messages of a channel, add **ignore patterns** under **Ignore messages**. A channel can have at most 20 patterns.
+
+- A pattern finds text in any part of the message. Chatter looks at the full text that it sends, for example `CRITICAL - Haas VF-2: Door open. Started 9:02 AM.`
+- Upper case and lower case are the same. `door open` also finds `Door open`.
+- `*` finds any text, also no text. `?` finds one character. All the other characters are only text. For example, `.` and `(` are not special.
+- Under each pattern, Chatter tells how many of the last messages it finds, for example "Matches 3 of the last 40 messages." Use this line to check the pattern before you save.
+- Chatter does not keep a pattern of only `*` and `?`, because that pattern finds each message. To stop all the messages, turn the channel off.
+
+| Pattern | Finds |
+| --- | --- |
+| `Door open` | Each message about an open door, on each machine. |
+| `Haas VF-2*Idle` | The idle alerts of the Haas VF-2. |
+| `WARNING - ` | The start of each warning alert. The end of that alert is ignored too. |
+| `Haas VF-?:` | The alerts of the Haas VF-2, the Haas VF-4, and each other Haas VF with one digit. It does not find the Haas VF-10. |
+
+Chatter does not send an ignored message. It shows the message in the message list as **Ignored**, with the pattern that found it.
+
+- When Chatter ignores the start of an alert, it also ignores the end of that alert.
+- When the start of an alert waits and the alert ends, Chatter checks the text of the one message for both.
+- When the start of an alert went, Chatter checks the text of the end alone.
+- Chatter never ignores a test or an "And N more alerts" message.
+- An ignored message does not count in the limit of 10 messages in 10 minutes.
 
 ## Change, turn off, or delete a channel
 
@@ -179,6 +205,7 @@ Chatter sends each message to a channel of a Discord server, through a **webhook
 2. In Chatter, add a channel of the type **Discord**:
    - **Webhook address:** the address from step 1. It starts with `https://discord.com/api/webhooks/`. It has a token in it, so Chatter never shows it again after you save.
    - **Mention (optional):** the people or roles that Discord mentions when an alert starts. See [Mention people in Discord](#mention-people-in-discord).
+   - **Notification sound:** **Normal** or **Quiet**. Quiet still shows each message in the Discord channel, but Discord sends no notification to phones and computers. The sound is the same for each message of the channel, also for a test.
 3. Click **Send test**.
 
 Each message is an embed (a card) with the text of the message. The color of the bar shows the kind of message:
@@ -219,6 +246,7 @@ Chatter sends each message to a Telegram chat, with a bot of your own. The chat 
 4. In Chatter, add a channel of the type **Telegram**:
    - **Bot token:** from step 1. Chatter never shows it again after you save.
    - **Chat ID:** from step 3. For a public channel, you can type `@` and the name of the channel. The bot must be an admin of the channel.
+   - **Notification sound:** **Normal** or **Quiet**. Quiet still shows each message, but the phone makes no sound. The sound is the same for each message of the channel, also for a test.
 5. Click **Send test**.
 
 The message has the same text as a text message.
@@ -231,23 +259,35 @@ The message has the same text as a text message.
 2. In Chatter, add a channel of the type **ntfy**.
 3. In **Topic**, click **Make a random Topic**. Chatter fills in three random words, for example `maple-otter-lantern`. You can also type your own topic name. Use only letters, digits, `-` and `_`, and use a name that other people cannot guess.
 4. In the ntfy app on each phone, subscribe to the same topic. To add a phone later, open the channel in Chatter and read the topic there.
-5. Only for your own ntfy server, or for a topic that needs a login: open **Advanced**.
+5. Select the **Notification sound**. See the table below. Quiet still shows each message.
+6. Only for your own ntfy server, or for a topic that needs a login: open **Advanced**.
    - **Server (optional):** the address of your own ntfy server, for example `http://ntfy.shop.local`. Do not put the topic in the address. Leave it empty for `ntfy.sh`. If you type the address of `ntfy.sh`, type only `https://ntfy.sh`, with no path after it. In the ntfy app, type the same server address.
    - **Access token (optional):** only when the topic needs a login. In ntfy, make a token under **Account > Access tokens**.
-6. Click **Send test**.
+7. Click **Send test**.
 
 ::: warning
 On `ntfy.sh`, a topic has no login. Each person who knows the topic name can read your alerts and send messages to it. Use a name that is hard to guess, or use an access token on a reserved topic or on your own server.
 :::
 
-Chatter gives each message a priority and an icon:
+The **Notification sound** sets the ntfy priority of each message of the channel, also of a test. The level of the alert does not change it.
 
-| Message | Priority | Icon |
+| Notification sound | ntfy priority | On the phone |
 | --- | --- | --- |
-| A critical alert starts | 5 (urgent, a long vibration) | 🚨 |
-| A warning alert starts, or an "And N more alerts" message | 4 (high) | ⚠️ |
-| An alert ends | 3 (default) | ✅ |
-| A test | 3 (default) | 🔔 |
+| **Quiet** | 2 (low) | The message shows, with no sound and no vibration. |
+| **Normal** | 3 (default) | The message shows, with the usual sound and vibration. |
+| **High** | 4 (high) | A longer vibration, and the message shows over other apps. |
+| **Urgent** | 5 (urgent) | The longest vibration, and the message shows over other apps. |
+
+To make the critical alerts louder than the warnings, make two ntfy channels. Give one **Critical only** and **Urgent**. Give the other **Warning and up**, **Normal**, and an ignore pattern `CRITICAL - `.
+
+Chatter gives each message an icon:
+
+| Message | Icon |
+| --- | --- |
+| A critical alert starts | 🚨 |
+| A warning alert starts, or an "And N more alerts" message | ⚠️ |
+| An alert ends | ✅ |
+| A test | 🔔 |
 
 The title is `Chatter: ` and the machine name. When you tap the message, the phone opens the machine in Chatter. For this, set **Chatter address for links** in **Message settings**. The phone must also be on the shop network.
 
@@ -263,12 +303,13 @@ The panel shows the newest 10 messages. To see 10 more, click **Show more** at t
 | **Waiting** | Chatter sends it soon, or tries again soon. |
 | **Failed** | Chatter did not send it. Under it is the reason. |
 | **In an "And more alerts" message** | The channel got too many messages, so this alert went in an "And N more alerts" message. |
+| **Ignored** | Chatter did not send it, because its text has an ignore pattern of the channel. Under it is the pattern. See [Ignore some messages](#ignore-some-messages). |
 
 ## Check
 
 | What you see | What to do |
 | --- | --- |
-| No message comes when an alert starts | Check that the channel is **On**, and that its **Level** and **Machines** include the alert. Then look in the message list. |
+| No message comes when an alert starts | Check that the channel is **On**, and that its **Level** and **Machines** include the alert. Check that no pattern in **Ignore messages** finds the text. Then look in the message list. An ignored message shows as **Ignored**. |
 | **Failed:** Twilio refused the login | The Account SID or the auth token is wrong. Copy them again from the Twilio Console. |
 | **Sent**, but the phone gets no text | **Sent** means only that Twilio took the message. In the Twilio Console, open **Monitor > Logs > Messaging** and look at the status of the message. Error 30034 means that your US number is not registered for A2P 10DLC. See [Before the first message](#before-the-first-message). |
 | **Failed:** a Twilio trial account can send only the message templates of Twilio | Upgrade the Twilio account. |
@@ -306,6 +347,7 @@ When an alert starts or ends, Chatter makes one message for each channel that wa
 The message waits in a queue in `chatter.db`.
 After a restart or a power cut, the message is still in the queue, and Chatter sends it.
 If the end of an alert comes before Chatter sent its start, Chatter sends one message for both.
+When the text of a message has an ignore pattern of the channel, Chatter keeps the message in the list as **Ignored**, and does not send it.
 A channel that did not get the start of an alert gets no end message for it, for example a channel that you add while the alert is on.
 
 Sometimes the service does not answer, or answers that it is busy. Then Chatter tries the message again.

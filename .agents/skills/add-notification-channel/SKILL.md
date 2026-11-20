@@ -13,7 +13,7 @@ Before you write code, write down for the user:
 - The endpoint, the login (token, key, or address with a key in it), and the success status.
 - The error answers: which mean "wrong settings" (do not try again) and which mean "busy or down" (try again). Use the service's own docs.
 - Any rule that stops the first message, for example a sender that the service must verify first. That rule goes in `note`.
-- The inputs of the form. Each must fit one of `CHANNEL_FIELD_KINDS` (`packages/shared/src/notifications.ts`): `text`, `secret`, `url`, `phone-list`. When an input fits none, stop and ask the user: a new kind needs web code in `apps/web/src/pages/settings/ChannelFields.tsx` and `channelFormState.ts`.
+- The inputs of the form. Each must fit one of `CHANNEL_FIELD_KINDS` (`packages/shared/src/notifications.ts`): `text`, `secret`, `url`, `phone-list`, `choice`. When an input fits none, stop and ask the user: a new kind needs web code in `apps/web/src/pages/settings/ChannelFields.tsx` and `channelFormState.ts`.
 - The **license** of each library. Chatter is MIT. Prefer plain `fetch` to an SDK: the Pi has 512 MB of RAM.
 
 Done when the user agrees with the list.
@@ -24,6 +24,8 @@ Write `channels/<service>.test.ts` before the code (see CONTRIBUTING.md). Use `f
 
 - **`id`** is fixed forever: saved channels keep it in `chatter.db`. Use kebab-case, for example `pushover`.
 - **`fields`** are the inputs of the form, in order. Give each token, key, or password `kind: 'secret'`: `ChannelStore` keeps secret fields out of each answer to the browser, and an empty secret box keeps the saved value. Give `hint` a plain line that tells where in the service to find the value.
+- **`kind: 'choice'`** shows a select. Give it `options` (a list of `{ value, label }`) and a `default`. In `settings`, use `z.enum([...]).default(...)`, so a channel that was saved before the field was there gets the default with no change to the database.
+- **Notification sound:** when the service can send a message with no sound, or with a higher priority, give the type the field `sound` with `soundField` and `soundSetting` of `channels/sound.ts`. Its label is **Notification sound**. Do not call it "level", because the form already has a **Level** for the alerts. Put the sound on each message of the channel, also on a test, whatever the level of the alert. See `ntfy.ts`, `telegram.ts`, and `discord.ts`.
 - **`generate: 'words'`** gives a field a button that fills in three random words, for a name that must be hard to guess (the ntfy topic). **`advanced: true`** puts a field that most admins leave empty under a closed **Advanced** heading.
 - **`settings`** is a zod schema of the values, also the secret values. Its messages are for the shop admin, in plain words, and the form shows the first one.
 - **`send(settings, message, { fetch, signal })`** sends one `OutgoingMessage`. Use `message.text` when the service shows one line. Pass `signal` to `fetch`, and use the `fetch` of the context. The signal stops the request after 10 seconds (`SEND_TIMEOUT_MS` in `OutboxSender.ts`). A service that answers only after it sent to each target can set a longer **`timeoutMs`**.
