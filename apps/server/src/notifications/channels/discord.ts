@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import type { ChannelDefinition, OutgoingMessage, SendResult } from './ChannelType.js';
-import { networkFailure } from './networkFailure.js';
-import { REDIRECTS } from './webAddress.js';
+import { cutText, postJson, statusResult } from './http.js';
 
 const BAD_URL = 'Webhook address must start with https://discord.com/api/webhooks/';
 const COPY_AGAIN = 'Copy the webhook address from Discord again.';
@@ -48,19 +47,9 @@ export const discordChannel: ChannelDefinition<DiscordSettings> = {
     },
   ],
   settings: discordSettings,
-  async send(settings, message, { fetch, signal }) {
-    const body = JSON.stringify(discordBody(message, MENTION_KINDS.has(message.kind) ? mentionsOf(settings.mention) : []));
-    try {
-      // A redirect would change the POST to a GET, so Chatter does not follow it
-      const response = await fetch(settings.url, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body, redirect: 'manual', signal,
-      });
-      // Chatter does not read the answer. A failure to close it must not send the message again.
-      response.body?.cancel().catch(() => {});
-      return resultOf(response.status);
-    } catch (error) {
-      return networkFailure(error, 'Discord');
-    }
+  send(settings, message, context) {
+    const body = discordBody(message, MENTION_KINDS.has(message.kind) ? mentionsOf(settings.mention) : []);
+    return postJson(context, 'Discord', { url: settings.url, body }, ({ status }) => resultOf(status));
   },
 };
 
@@ -68,7 +57,7 @@ function discordBody(message: OutgoingMessage, mentions: string[]) {
   const timestamp = (message.kind === 'ended' ? message.endedAt : message.startedAt) ?? undefined;
   return {
     content: mentions.length > 0 ? mentions.join(' ') : undefined,
-    embeds: [{ description: cut(message.text), color: colorOf(message), timestamp }],
+    embeds: [{ description: cutText(message.text, MAX_DESCRIPTION), color: colorOf(message), timestamp }],
     // Only the mentions of the form can call people. A name from the shop, such as "@everyone", cannot.
     allowed_mentions: allowedMentions(mentions),
   };
@@ -100,21 +89,13 @@ function isDiscordWebhook(text: string): boolean {
   return protocol === 'https:' && HOSTS.has(hostname) && !port && !username && !password && WEBHOOK_PATH.test(pathname);
 }
 
-/** Cuts the text to the limit, and does not cut an emoji in two */
-function cut(text: string): string {
-  const short = text.slice(0, MAX_DESCRIPTION);
-  return /[\uD800-\uDBFF]$/.test(short) ? short.slice(0, -1) : short;
-}
-
 function resultOf(status: number): SendResult {
   const answered = `Discord answered ${status}`;
-  if (status >= 200 && status < 300) return { ok: true, detail: answered };
-  if (REDIRECTS.has(status)) return { ok: false, retry: false, error: `${answered} and points to another address. ${COPY_AGAIN}` };
-  if (status === 408 || status === 429 || status >= 500) {
-    return { ok: false, retry: true, error: `${answered}. Chatter tries again later.` };
-  }
-  if (status === 401 || status === 403 || status === 404) {
-    return { ok: false, retry: false, error: `${answered}. The webhook is deleted or the address is wrong. ${COPY_AGAIN}` };
-  }
-  return { ok: false, retry: false, error: `${answered} and refused the message.` };
+  return statusResult(status, {
+    answered,
+    moved: COPY_AGAIN,
+    refused: () => (status === 401 || status === 403 || status === 404
+      ? `${answered}. The webhook is deleted or the address is wrong. ${COPY_AGAIN}`
+      : `${answered} and refused the message.`),
+  });
 }

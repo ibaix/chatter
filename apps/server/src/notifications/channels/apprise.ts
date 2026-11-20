@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ChannelDefinition, OutgoingMessage, SendResult } from './ChannelType.js';
-import { networkFailure } from './networkFailure.js';
-import { hasNoLogin, isHttpAddress, REDIRECTS } from './webAddress.js';
+import { postJson, statusResult } from './http.js';
+import { hasNoLogin, isHttpAddress } from './webAddress.js';
 
 /** Apprise answers only after it sent the message to each service, and an email server can be slow */
 const APPRISE_TIMEOUT_MS = 60_000;
@@ -56,17 +56,9 @@ export const appriseChannel: ChannelDefinition<AppriseSettings> = {
     + 'First save the addresses of your services in Apprise under a config key, for example "chatter".',
   timeoutMs: APPRISE_TIMEOUT_MS,
   settings: appriseSettings,
-  async send(settings, message, { fetch, signal }) {
-    const body = JSON.stringify(appriseBody(message, settings.tag));
-    try {
-      // A redirect would change the POST to a GET, so Chatter does not follow it
-      const response = await fetch(settings.url, { method: 'POST', headers: headersOf(settings), body, redirect: 'manual', signal });
-      // Chatter does not read the answer. A failure to close it must not send the message again.
-      response.body?.cancel().catch(() => {});
-      return resultOf(response.status);
-    } catch (error) {
-      return networkFailure(error, 'Apprise');
-    }
+  send(settings, message, context) {
+    const request = { url: settings.url, headers: headersOf(settings), body: appriseBody(message, settings.tag) };
+    return postJson(context, 'Apprise', request, ({ status }) => resultOf(status));
   },
 };
 
@@ -75,9 +67,7 @@ function hasNotifyPath(text: string): boolean {
 }
 
 function headersOf({ username, password }: AppriseSettings): Record<string, string> {
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
-  if (username || password) headers.authorization = basicLogin(username ?? '', password ?? '');
-  return headers;
+  return username || password ? { authorization: basicLogin(username ?? '', password ?? '') } : {};
 }
 
 /** The Authorization header of HTTP Basic Auth: "Basic" and then "user:password" in base64 */
@@ -114,14 +104,7 @@ function answered(status: number): string {
 }
 
 function resultOf(status: number): SendResult {
-  if (status >= 200 && status < 300) return { ok: true, detail: 'Apprise sent it' };
-  if (REDIRECTS.has(status)) {
-    return { ok: false, retry: false, error: `${answered(status)} and points to another address. Use the new address.` };
-  }
-  if (status === 408 || status === 429 || status >= 500) {
-    return { ok: false, retry: true, error: `${answered(status)}. Chatter tries again later.` };
-  }
-  return { ok: false, retry: false, error: refusalOf(status) };
+  return statusResult(status, { answered: answered(status), sent: 'Apprise sent it', refused: refusalOf });
 }
 
 /** Each refusal stops at once. 424 can mean that some services got the message, so a new try would send it to them 2 times. */
