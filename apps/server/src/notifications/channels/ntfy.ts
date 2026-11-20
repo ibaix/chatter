@@ -3,7 +3,8 @@ import type { ChannelDefinition, OutgoingMessage, SendResult } from './ChannelTy
 import { type Answer, cutText, postJson, statusResult } from './http.js';
 import { hasNoLogin, isHttpAddress } from './webAddress.js';
 
-const PUBLIC_SERVER = 'https://ntfy.sh';
+const PUBLIC_HOST = 'ntfy.sh';
+const PUBLIC_SERVER = `https://${PUBLIC_HOST}`;
 
 const BAD_TOPIC = 'Topic can have only letters, digits, - and _, up to 64 characters';
 const BAD_URL = 'Server must start with http:// or https://';
@@ -25,7 +26,7 @@ const ntfySettings = z.object({
     .refine(hasNoLogin, LOGIN_IN_URL)
     .optional(),
   token: z.string().trim().regex(HEADER_SAFE, BAD_TOKEN).optional(),
-}).refine(({ topic, url }) => !url || !endsWithTopic(url, topic), { message: TOPIC_IN_URL, path: ['url'] });
+}).refine(({ topic, url }) => !url || !hasTopicPath(url, topic), { message: TOPIC_IN_URL, path: ['url'] });
 
 type NtfySettings = z.infer<typeof ntfySettings>;
 
@@ -94,9 +95,16 @@ function serverOf(url: string | undefined): string {
   return new URL(url || PUBLIC_SERVER).href;
 }
 
-/** A pasted topic address, for example https://ntfy.sh/my-topic, would send the JSON as the text of the message */
-function endsWithTopic(url: string, topic: string): boolean {
-  return URL.canParse(url) && new URL(url).pathname.replace(/\/$/, '').split('/').pop() === topic.trim();
+/**
+ * A pasted topic address, for example https://ntfy.sh/my-topic, would send the JSON as the text of the message.
+ * ntfy.sh takes the JSON only at its root, so each path there is a topic. A server of the shop can be under a path,
+ * so there only a path that ends with the topic is refused. A server under /alerts with the topic "alerts" is refused too.
+ */
+function hasTopicPath(url: string, topic: string): boolean {
+  if (!URL.canParse(url)) return false;
+  const { hostname, pathname } = new URL(url);
+  if (hostname === PUBLIC_HOST) return pathname !== '/';
+  return pathname.replace(/\/$/, '').endsWith(`/${topic}`);
 }
 
 /** The error answer of ntfy, for example {"code":40009,"http":400,"error":"invalid request"} */

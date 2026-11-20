@@ -195,6 +195,21 @@ describe('ntfyChannel', () => {
         .toBe('Remove the topic from the server address. Put only the topic in Topic.');
     });
 
+    it.each(['https://ntfy.sh/old-topic', 'https://ntfy.sh/old-topic/', 'https://ntfy.sh/v1/x'])(
+      'refuses a path on ntfy.sh, because ntfy.sh takes the JSON only at its root: %s',
+      url => {
+        expect(firstProblem({ topic: TOPIC, url })).toBe('Remove the topic from the server address. Put only the topic in Topic.');
+      },
+    );
+
+    it.each(['https://ntfy.sh', 'https://ntfy.sh/', 'https://ntfy.shop.local', 'https://shop.local/ntfy/'])('accepts the server %s', url => {
+      expect(firstProblem({ topic: TOPIC, url })).toBeUndefined();
+    });
+
+    it.each([`https://ntfy.shop.local/${TOPIC}/`, `https://shop.local/ntfy/${TOPIC}`])('refuses the server %s, which ends with the topic', url => {
+      expect(firstProblem({ topic: TOPIC, url })).toBe('Remove the topic from the server address. Put only the topic in Topic.');
+    });
+
     it('refuses a token with spaces', () => {
       expect(firstProblem({ topic: TOPIC, token: 'tk_a b' })).toBe('Access token can have only plain letters, digits, and signs, with no spaces');
     });
