@@ -14,7 +14,7 @@ const loading = new Map<string, Promise<StateSegment[]>>();
 function sharedTimeline(key: string, machineId: string, query: string, end: number | null): Promise<StateSegment[]> {
   let request = loading.get(key);
   if (!request) {
-    request = (end === null ? fetchStateTimeline(machineId, query) : fetchStateTimeline(machineId, query, end))
+    request = fetchStateTimeline(machineId, query, end ?? undefined)
       .finally(() => loading.delete(key));
     loading.set(key, request);
   }

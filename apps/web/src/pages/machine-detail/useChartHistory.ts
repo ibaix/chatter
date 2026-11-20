@@ -54,10 +54,7 @@ export function useChartHistory(
     setStatus('loading');
     const span = loadSpan(range, end, Date.now());
     const window = range.window ?? autoHistoryWindow(range.ms);
-    const loading = span.end === null
-      ? fetchValueHistory(machineId, value, span.query, window)
-      : fetchValueHistory(machineId, value, span.query, window, span.end);
-    loading
+    fetchValueHistory(machineId, value, span.query, window, span.end ?? undefined)
       .then(history => {
         if (stopped) return;
         // A live chart keeps the live values that came while it loaded

@@ -53,8 +53,8 @@ describe('useStateTimeline', () => {
 
     expect(result.current.status).toBe('loading');
     expect(result.current.segments.map(segment => segment.state)).toEqual(['alarm', 'idle']);
-    expect(fetchStateTimeline).toHaveBeenNthCalledWith(1, 'm1', '-20m');
-    expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-2h');
+    expect(fetchStateTimeline).toHaveBeenNthCalledWith(1, 'm1', '-20m', undefined);
+    expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-2h', undefined);
   });
 
   it('does not show the segments of the last machine for a new machine', async () => {
