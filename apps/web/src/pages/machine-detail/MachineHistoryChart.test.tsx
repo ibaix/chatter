@@ -321,6 +321,18 @@ describe('MachineHistoryChart', () => {
       expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
     });
 
+    it('does not drag a chart in the past after now', async () => {
+      await overviewOfStateView();
+      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`);
+
+      // A drag of the full width to the left goes 10 minutes on, but the chart stops at now
+      fireEvent.pointerDown(chartBody(), { button: 0, clientX: BOX_WIDTH, pointerId: 1 });
+      fireEvent.pointerMove(chartBody(), { clientX: 0, pointerId: 1 });
+
+      expect(screen.getByRole('img', { name: name => name.startsWith(`Machine state ${pastText(10 * MINUTE, NOW)}.`) })).toBeInTheDocument();
+    });
+
     it('goes back to the live chart when the user picks another range', async () => {
       render(<ChartWithMenu machine={runningMachine()} />);
       fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));

@@ -135,11 +135,8 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
    * data that it loaded around its time (loadSpan). The new time loads once, when the drag ends.
    */
   const [shiftMs, setShiftMs] = useState(0);
-  /** The time that a drag of `x` pixels moves. A drag to the right goes back. The live chart cannot go after now. */
-  const dragMs = (x: number, plotWidth: number) => {
-    const ms = (-x / plotWidth) * range.ms;
-    return end === null ? Math.min(0, ms) : ms;
-  };
+  /** The time that a drag of `x` pixels moves. A drag to the right goes back. A drag cannot go after now. */
+  const dragMs = (x: number, plotWidth: number) => Math.min((-x / plotWidth) * range.ms, end === null ? 0 : Date.now() - end);
 
   const startDrag = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
