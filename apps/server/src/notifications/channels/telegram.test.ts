@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { defineChannelType } from './ChannelType.js';
 import { telegramChannel } from './telegram.js';
 import { fakeFetch, textOf, WARNING_MESSAGE as MESSAGE } from './testSupport.js';
 
 const TOKEN = '123456789:AAH-token_for_tests';
-const settings = { token: TOKEN, chatId: '-1001234567890' };
+const settings = { token: TOKEN, chatId: '-1001234567890', sound: 'normal' as const };
 
 async function resultFor(status: number) {
   return telegramChannel.send(settings, MESSAGE, fakeFetch(() => new Response(null, { status })).context());
@@ -23,9 +24,40 @@ describe('telegramChannel', () => {
     expect(telegramChannel.fields.map(field => [field.key, field.label, field.kind, field.required, field.mono])).toEqual([
       ['token', 'Bot token', 'secret', true, true],
       ['chatId', 'Chat ID', 'text', true, true],
+      ['sound', 'Notification sound', 'choice', false, undefined],
     ]);
     expect(telegramChannel.fields[0].hint).toContain('@BotFather');
     expect(telegramChannel.fields[1].hint).toContain('-1001234567890');
+  });
+
+  it('asks for the notification sound, Normal at first', () => {
+    const sound = telegramChannel.fields.find(field => field.key === 'sound');
+
+    expect(sound?.options).toEqual([{ value: 'normal', label: 'Normal' }, { value: 'quiet', label: 'Quiet' }]);
+    expect(sound?.default).toBe('normal');
+    expect(sound?.hint).toContain('Quiet');
+  });
+
+  describe('notification sound', () => {
+    async function bodyOf(values: unknown, kind: 'started' | 'ended' | 'combined' | 'more' | 'test') {
+      const service = fakeFetch(() => new Response('{"ok":true}', { status: 200 }));
+      await defineChannelType(telegramChannel).send(values, { ...MESSAGE, kind }, service.context());
+      return JSON.parse(String(service.requests[0].init.body));
+    }
+
+    const KINDS = ['started', 'ended', 'combined', 'more', 'test'] as const;
+
+    it('sends each message of a Quiet channel with no sound, whatever its kind', async () => {
+      for (const kind of KINDS) expect((await bodyOf({ ...settings, sound: 'quiet' }, kind)).disable_notification).toBe(true);
+    });
+
+    it('sends each message of a Normal channel with the sound', async () => {
+      for (const kind of KINDS) expect(await bodyOf(settings, kind)).not.toHaveProperty('disable_notification');
+    });
+
+    it('sends with the sound for a channel saved before the sound was there', async () => {
+      expect(await bodyOf({ token: TOKEN, chatId: '-1001234567890' }, 'started')).not.toHaveProperty('disable_notification');
+    });
   });
 
   it('tells the admin before they start that the bot cannot write first', () => {
@@ -186,7 +218,11 @@ describe('telegramChannel', () => {
     });
 
     it('removes the spaces around the token and the chat ID', () => {
-      expect(telegramChannel.settings.parse({ token: ` ${TOKEN} `, chatId: ' @shop ' })).toEqual({ token: TOKEN, chatId: '@shop' });
+      expect(telegramChannel.settings.parse({ token: ` ${TOKEN} `, chatId: ' @shop ' })).toEqual({ token: TOKEN, chatId: '@shop', sound: 'normal' });
+    });
+
+    it('refuses a sound that Chatter does not have for Telegram', () => {
+      expect(firstProblem({ ...settings, sound: 'urgent' })).toBe('Notification sound must be Normal or Quiet');
     });
 
     it.each([undefined, '', 'AAH-token', '123456789', 'abc:AAH', '123:AA H', '123:AA/H'])(

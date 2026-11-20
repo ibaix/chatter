@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ChannelDefinition, SendResult } from './ChannelType.js';
 import { type Answer, cutText, type JsonObject, postJson, serviceReason, statusResult } from './http.js';
+import { soundField, soundSetting } from './sound.js';
 
 const TELEGRAM_API = 'https://api.telegram.org';
 /** Telegram refuses a longer text */
@@ -12,6 +13,7 @@ const BAD_CHAT_ID = 'Chat ID must be a number, for example -1001234567890, or @ 
 const telegramSettings = z.object({
   token: z.string({ error: BAD_TOKEN }).trim().regex(/^\d+:[A-Za-z0-9_-]+$/, BAD_TOKEN),
   chatId: z.string({ error: BAD_CHAT_ID }).trim().regex(/^(-?\d+|@\w+)$/, BAD_CHAT_ID),
+  sound: soundSetting(['normal', 'quiet']),
 });
 
 type TelegramSettings = z.infer<typeof telegramSettings>;
@@ -32,13 +34,19 @@ export const telegramChannel: ChannelDefinition<TelegramSettings> = {
       key: 'chatId', label: 'Chat ID', kind: 'text', required: true, mono: true,
       hint: 'A number, for example -1001234567890 for a group. Or @ and the name of a public channel.',
     },
+    soundField(['normal', 'quiet'], 'For each message of this channel. Quiet shows the message with no sound.'),
   ],
   note: 'Telegram does not let a bot write first. Send a message to the bot, or add the bot to the group or channel, before you send a test.',
   settings: telegramSettings,
   send(settings, message, context) {
     const request = {
       url: `${TELEGRAM_API}/bot${settings.token}/sendMessage`,
-      body: { chat_id: settings.chatId, text: cutText(message.text, MAX_TEXT) },
+      body: {
+        chat_id: settings.chatId,
+        text: cutText(message.text, MAX_TEXT),
+        // Telegram shows the message with no sound
+        ...(settings.sound === 'quiet' ? { disable_notification: true } : {}),
+      },
       readJson: true,
     };
     return postJson(context, 'Telegram', request, answer => resultOf(answer, settings.token));

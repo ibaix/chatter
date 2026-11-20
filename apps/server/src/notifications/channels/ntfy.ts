@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { type ChannelDefinition, type OutgoingMessage, type SendResult, titleOf } from './ChannelType.js';
 import { type Answer, type JsonObject, postJson, serviceReason, statusResult } from './http.js';
+import { soundField, soundSetting } from './sound.js';
 import { HEADER_SAFE, hasNoLogin, isHttpAddress } from './webAddress.js';
 
 const PUBLIC_HOST = 'ntfy.sh';
@@ -22,6 +23,7 @@ const ntfySettings = z.object({
     .refine(hasNoLogin, LOGIN_IN_URL)
     .optional(),
   token: z.string().trim().regex(HEADER_SAFE, BAD_TOKEN).optional(),
+  sound: soundSetting(['quiet', 'normal', 'high', 'urgent']),
 }).refine(({ topic, url }) => !url || !hasTopicPath(url, topic), { message: TOPIC_IN_URL, path: ['url'] });
 
 type NtfySettings = z.infer<typeof ntfySettings>;
@@ -48,6 +50,10 @@ export const ntfyChannel: ChannelDefinition<NtfySettings> = {
       key: 'token', label: 'Access token (optional)', kind: 'secret', required: false, mono: true, advanced: true,
       hint: 'Only when the topic needs a login. Make a token in ntfy under Account > Access tokens.',
     },
+    soundField(
+      ['quiet', 'normal', 'high', 'urgent'],
+      'For each message of this channel. Quiet shows the message with no sound and no vibration. High and Urgent vibrate longer.',
+    ),
   ],
   note: 'Install the ntfy app on each phone, and subscribe to the topic in the ntfy app before you send a test.',
   settings: ntfySettings,
@@ -55,7 +61,7 @@ export const ntfyChannel: ChannelDefinition<NtfySettings> = {
     const request = {
       url: serverOf(settings.url),
       headers: settings.token ? { authorization: `Bearer ${settings.token}` } : undefined,
-      body: ntfyBody(settings.topic, message),
+      body: ntfyBody(settings, message),
       readJson: true,
     };
     return postJson(context, 'the ntfy server', request, answer => resultOf(answer, settings));
@@ -63,22 +69,22 @@ export const ntfyChannel: ChannelDefinition<NtfySettings> = {
 };
 
 /** The JSON publish of ntfy: https://docs.ntfy.sh/publish/#publish-as-json */
-function ntfyBody(topic: string, message: OutgoingMessage) {
+function ntfyBody({ topic, sound }: NtfySettings, message: OutgoingMessage) {
   return {
     topic,
     title: titleOf(message),
     message: message.text,
-    priority: priorityOf(message),
+    priority: PRIORITIES[sound],
     tags: [tagOf(message)],
     ...(message.link ? { click: message.link } : {}),
   };
 }
 
-/** ntfy priorities: 5 is urgent (a long vibration), 4 is high, 3 is the default */
-function priorityOf({ kind, severity }: OutgoingMessage): number {
-  if (kind === 'ended' || kind === 'test') return 3;
-  return severity === 'critical' ? 5 : 4;
-}
+/**
+ * The ntfy priority of each message of the channel: https://docs.ntfy.sh/publish/#message-priority
+ * 2 shows the message with no sound and no vibration, 3 is the default, 4 vibrates longer, and 5 vibrates longest.
+ */
+const PRIORITIES: Record<NtfySettings['sound'], number> = { quiet: 2, normal: 3, high: 4, urgent: 5 };
 
 /** ntfy shows these tags as emoji in front of the title */
 function tagOf({ kind, severity }: OutgoingMessage): string {

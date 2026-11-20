@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { OutgoingMessage } from './ChannelType.js';
+import { defineChannelType, type OutgoingMessage } from './ChannelType.js';
 import { ntfyChannel } from './ntfy.js';
 import { fakeFetch, textOf, WARNING_MESSAGE as MESSAGE } from './testSupport.js';
 
 const TOPIC = 'chatter-x7k2p9';
 const TOKEN = 'tk_AgQdq7mVBoFD37zQVN29RhuMzNIz2';
-const settings = { topic: TOPIC };
+const settings = { topic: TOPIC, sound: 'normal' as const };
 
 async function sent(message: OutgoingMessage, values: Parameters<typeof ntfyChannel.send>[0] = settings) {
   const service = fakeFetch(() => new Response('{"id":"abc"}', { status: 200 }));
@@ -28,11 +28,26 @@ describe('ntfyChannel', () => {
       ['topic', 'Topic', 'text', true],
       ['url', 'Server (optional)', 'url', false],
       ['token', 'Access token (optional)', 'secret', false],
+      ['sound', 'Notification sound', 'choice', false],
     ]);
     expect(ntfyChannel.fields[1].hint).toContain('https://ntfy.sh');
     expect(ntfyChannel.fields[0].generate).toBe('words');
     expect(ntfyChannel.fields.filter(field => field.generate)).toHaveLength(1);
     expect(ntfyChannel.fields.filter(field => field.advanced).map(field => field.key)).toEqual(['url', 'token']);
+  });
+
+  it('asks for the notification sound, Normal at first', () => {
+    const sound = ntfyChannel.fields.find(field => field.key === 'sound');
+
+    expect(sound?.options).toEqual([
+      { value: 'quiet', label: 'Quiet' },
+      { value: 'normal', label: 'Normal' },
+      { value: 'high', label: 'High' },
+      { value: 'urgent', label: 'Urgent' },
+    ]);
+    expect(sound?.default).toBe('normal');
+    expect(sound?.advanced).toBeFalsy();
+    expect(sound?.hint).toContain('Quiet');
   });
 
   it('tells the admin to subscribe to the topic in the ntfy app', () => {
@@ -52,7 +67,7 @@ describe('ntfyChannel', () => {
       topic: TOPIC,
       title: 'Chatter: Haas ST-10',
       message: MESSAGE.text,
-      priority: 4,
+      priority: 3,
       tags: ['warning'],
       click: 'http://chatter.local:3001/machine/haas-st10',
     });
@@ -79,18 +94,39 @@ describe('ntfyChannel', () => {
   });
 
   it.each([
-    ['a critical alert', { kind: 'started', severity: 'critical' }, 5, ['rotating_light']],
-    ['a warning alert', { kind: 'started', severity: 'warning' }, 4, ['warning']],
-    ['an alert with no level', { kind: 'started', severity: null }, 4, ['warning']],
-    ['combined alerts', { kind: 'combined', severity: 'critical' }, 5, ['rotating_light']],
-    ['an alert that ended', { kind: 'ended', severity: 'critical' }, 3, ['white_check_mark']],
-    ['"And 7 more alerts"', { kind: 'more', severity: null }, 4, ['warning']],
-    ['a test', { kind: 'test', severity: null }, 3, ['bell']],
-  ] as const)('gives %s its priority and tag', async (_name, change, priority, tags) => {
-    const { body } = await sent({ ...MESSAGE, ...change });
+    ['a critical alert', { kind: 'started', severity: 'critical' }, ['rotating_light']],
+    ['a warning alert', { kind: 'started', severity: 'warning' }, ['warning']],
+    ['an alert with no level', { kind: 'started', severity: null }, ['warning']],
+    ['combined alerts', { kind: 'combined', severity: 'critical' }, ['rotating_light']],
+    ['an alert that ended', { kind: 'ended', severity: 'critical' }, ['white_check_mark']],
+    ['"And 7 more alerts"', { kind: 'more', severity: null }, ['warning']],
+    ['a test', { kind: 'test', severity: null }, ['bell']],
+  ] as const)('gives %s its tag', async (_name, change, tags) => {
+    expect((await sent({ ...MESSAGE, ...change })).body.tags).toEqual(tags);
+  });
 
-    expect(body.priority).toBe(priority);
-    expect(body.tags).toEqual(tags);
+  const KINDS = [
+    { kind: 'started', severity: 'critical' }, { kind: 'started', severity: 'warning' }, { kind: 'combined', severity: 'warning' },
+    { kind: 'ended', severity: 'critical' }, { kind: 'more', severity: null }, { kind: 'test', severity: null },
+  ] as const;
+
+  it.each([
+    ['quiet', 2],
+    ['normal', 3],
+    ['high', 4],
+    ['urgent', 5],
+  ] as const)('gives each message of a channel with the sound %s the priority %i, whatever its kind and level', async (sound, priority) => {
+    for (const change of KINDS) {
+      expect((await sent({ ...MESSAGE, ...change }, { ...settings, sound })).body.priority).toBe(priority);
+    }
+  });
+
+  it('sends with the Normal priority for a channel saved before the sound was there', async () => {
+    const service = fakeFetch(() => new Response('{"id":"abc"}', { status: 200 }));
+
+    await defineChannelType(ntfyChannel).send({ topic: TOPIC }, MESSAGE, service.context());
+
+    expect(JSON.parse(String(service.requests[0].init.body)).priority).toBe(3);
   });
 
   it('uses the title "Chatter" for a message with no machine, and sends no click without a link', async () => {
@@ -120,7 +156,7 @@ describe('ntfyChannel', () => {
   it('hides only the whole topic in the reason of ntfy, not the same letters in other words', async () => {
     const answer = () => new Response(JSON.stringify({ error: 'invalid request: topic a is a bad topic' }), { status: 400 });
 
-    expect(await ntfyChannel.send({ topic: 'a' }, MESSAGE, fakeFetch(answer).context()))
+    expect(await ntfyChannel.send({ ...settings, topic: 'a' }, MESSAGE, fakeFetch(answer).context()))
       .toEqual({ ok: false, retry: false, error: 'ntfy refused the message: invalid request: topic (topic) is (topic) bad topic.' });
   });
 
@@ -170,8 +206,12 @@ describe('ntfyChannel', () => {
   });
 
   describe('settings', () => {
-    it('accepts a topic alone, and removes the spaces', () => {
-      expect(ntfyChannel.settings.parse({ topic: ` ${TOPIC} ` })).toEqual({ topic: TOPIC });
+    it('accepts a topic alone, removes the spaces, and gives the Normal sound', () => {
+      expect(ntfyChannel.settings.parse({ topic: ` ${TOPIC} ` })).toEqual({ topic: TOPIC, sound: 'normal' });
+    });
+
+    it('refuses a sound that ntfy does not have', () => {
+      expect(firstProblem({ topic: TOPIC, sound: 'loud' })).toBe('Notification sound must be Quiet, Normal, High or Urgent');
     });
 
     it('accepts a server of the shop and a token', () => {
@@ -179,7 +219,7 @@ describe('ntfyChannel', () => {
     });
 
     it('accepts an empty server and an empty token, as the form sends them', () => {
-      expect(ntfyChannel.settings.parse({ topic: TOPIC, url: '', token: '' })).toEqual({ topic: TOPIC, url: '', token: '' });
+      expect(ntfyChannel.settings.parse({ topic: TOPIC, url: '', token: '' })).toEqual({ topic: TOPIC, url: '', token: '', sound: 'normal' });
     });
 
     it.each([undefined, '', 'has space', 'a/b', 'x'.repeat(65), 'ä-topic'])('refuses the topic %s', topic => {

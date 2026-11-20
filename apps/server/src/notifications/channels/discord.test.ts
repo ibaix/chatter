@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { OutgoingMessage } from './ChannelType.js';
+import { defineChannelType, type OutgoingMessage } from './ChannelType.js';
 import { discordChannel } from './discord.js';
 import { fakeFetch, textOf, WARNING_MESSAGE as MESSAGE } from './testSupport.js';
 
 const TOKEN = 'token-for-tests_abc-123';
 const WEBHOOK = `https://discord.com/api/webhooks/123456789012345678/${TOKEN}`;
-const settings = { url: WEBHOOK };
+const settings = { url: WEBHOOK, sound: 'normal' as const };
 const BAD_URL = 'Webhook address must start with https://discord.com/api/webhooks/';
 const BAD_MENTION = 'Mention can have only @everyone, @here, <@USER_ID>, and <@&ROLE_ID>, with a space between them';
 const NO_MENTIONS = { parse: [], roles: [], users: [] };
@@ -30,8 +30,40 @@ describe('discordChannel', () => {
     expect(discordChannel.fields.map(field => [field.key, field.kind, field.required])).toEqual([
       ['url', 'secret', true],
       ['mention', 'text', false],
+      ['sound', 'choice', false],
     ]);
     expect(discordChannel.fields[0].hint).toContain('Copy Webhook URL');
+  });
+
+  it('asks for the notification sound, Normal at first', () => {
+    const sound = discordChannel.fields.find(field => field.key === 'sound');
+
+    expect(sound?.label).toBe('Notification sound');
+    expect(sound?.options).toEqual([{ value: 'normal', label: 'Normal' }, { value: 'quiet', label: 'Quiet' }]);
+    expect(sound?.default).toBe('normal');
+    expect(sound?.hint).toContain('Quiet');
+  });
+
+  describe('notification sound', () => {
+    async function bodyOf(values: unknown, kind: OutgoingMessage['kind']) {
+      const service = fakeFetch(() => new Response(null, { status: 204 }));
+      await defineChannelType(discordChannel).send(values, { ...MESSAGE, kind }, service.context());
+      return JSON.parse(String(service.requests[0].init.body));
+    }
+
+    const KINDS = ['started', 'ended', 'combined', 'more', 'test'] as const;
+
+    it('sends each message of a Quiet channel with no push message (SUPPRESS_NOTIFICATIONS), whatever its kind', async () => {
+      for (const kind of KINDS) expect((await bodyOf({ ...settings, sound: 'quiet' }, kind)).flags).toBe(4096);
+    });
+
+    it('sends each message of a Normal channel with no flags', async () => {
+      for (const kind of KINDS) expect(await bodyOf(settings, kind)).not.toHaveProperty('flags');
+    });
+
+    it('sends with no flags for a channel saved before the sound was there', async () => {
+      expect(await bodyOf({ url: WEBHOOK }, 'started')).not.toHaveProperty('flags');
+    });
   });
 
   it('posts the message as an embed in JSON to the webhook address', async () => {
@@ -95,7 +127,7 @@ describe('discordChannel', () => {
   });
 
   describe('mentions', () => {
-    const withMention = (mention: string) => ({ url: WEBHOOK, mention });
+    const withMention = (mention: string) => ({ ...settings, mention });
 
     async function bodyWith(mention: string, message: OutgoingMessage = MESSAGE) {
       const service = fakeFetch(() => new Response(null, { status: 204 }));
@@ -214,6 +246,10 @@ describe('discordChannel', () => {
   });
 
   describe('settings', () => {
+    it('refuses a sound that Chatter does not have for Discord', () => {
+      expect(firstProblem({ ...settings, sound: 'urgent' })).toBe('Notification sound must be Normal or Quiet');
+    });
+
     it.each([
       WEBHOOK,
       `https://discordapp.com/api/webhooks/1/${TOKEN}`,

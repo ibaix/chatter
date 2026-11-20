@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ChannelDefinition, OutgoingMessage, SendResult } from './ChannelType.js';
 import { cutText, postJson, statusResult } from './http.js';
+import { soundField, soundSetting } from './sound.js';
 
 const BAD_URL = 'Webhook address must start with https://discord.com/api/webhooks/';
 const COPY_AGAIN = 'Copy the webhook address from Discord again.';
@@ -9,6 +10,8 @@ const BAD_MENTION = 'Mention can have only @everyone, @here, <@USER_ID>, and <@&
 
 /** Discord refuses an embed with a longer text */
 const MAX_DESCRIPTION = 4096;
+/** SUPPRESS_NOTIFICATIONS: the message is in the channel, but Discord sends no push message to phones and computers */
+const SUPPRESS_NOTIFICATIONS = 1 << 12;
 /** The side color of the embed */
 const RED = 0xe74c3c;
 const AMBER = 0xf1c40f;
@@ -25,6 +28,7 @@ const WEBHOOK_PATH = /^\/api\/webhooks\/\d+\/[\w-]+\/?$/;
 const discordSettings = z.object({
   url: z.string({ error: BAD_URL }).trim().refine(isDiscordWebhook, BAD_URL),
   mention: z.string().trim().refine(text => mentionsOf(text).every(word => MENTION.test(word)), BAD_MENTION).optional(),
+  sound: soundSetting(['normal', 'quiet']),
 });
 
 type DiscordSettings = z.infer<typeof discordSettings>;
@@ -45,10 +49,17 @@ export const discordChannel: ChannelDefinition<DiscordSettings> = {
       key: 'mention', label: 'Mention (optional)', kind: 'text', required: false, mono: true,
       hint: 'Calls these people when an alert starts. Use <@USER_ID> for a person, <@&ROLE_ID> for a role, or @here or @everyone.',
     },
+    soundField(
+      ['normal', 'quiet'],
+      'For each message of this channel. Quiet shows the message in the Discord channel, but Discord sends no alert to phones and computers.',
+    ),
   ],
   settings: discordSettings,
   send(settings, message, context) {
-    const body = discordBody(message, MENTION_KINDS.has(message.kind) ? mentionsOf(settings.mention) : []);
+    const body = {
+      ...discordBody(message, MENTION_KINDS.has(message.kind) ? mentionsOf(settings.mention) : []),
+      ...(settings.sound === 'quiet' ? { flags: SUPPRESS_NOTIFICATIONS } : {}),
+    };
     return postJson(context, 'Discord', { url: settings.url, body }, ({ status }) => resultOf(status));
   },
 };
