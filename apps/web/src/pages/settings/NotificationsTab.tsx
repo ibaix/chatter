@@ -1,5 +1,5 @@
 import { cn } from '@toolpath/ui';
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   addChannel, fetchChannels, fetchChannelTypes, fetchMessages, fetchNotificationSettings, inputOf, removeChannel, saveNotificationSettings,
   sendTestMessage, updateChannel,
@@ -11,6 +11,7 @@ import { Notice } from '../../components/ui/Notice';
 import { Panel } from '../../components/ui/Panel';
 import { Switch } from '../../components/ui/Switch';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
+import { useRefreshWhileVisible } from '../../hooks/useRefreshWhileVisible';
 import { errorMessageOf } from '../../utils/errorMessage';
 import { formatAgo } from '../../utils/formatters';
 import { ChannelForm } from './ChannelForm';
@@ -39,24 +40,6 @@ async function loadNotifications(): Promise<NotificationsReport> {
 /** New messages come in while the tab is open, so the tab loads the message list again this often */
 export const MESSAGES_REFRESH_MS = 20_000;
 
-/**
- * Loads the messages again every MESSAGES_REFRESH_MS while the page is in view, and at once when the page shows again.
- * Only the message list: the channels and the settings change only when an admin changes them.
- */
-function useMessageRefresh(refreshPart: (loadPart: () => Promise<Partial<NotificationsReport>>) => Promise<void>) {
-  useEffect(() => {
-    const loadMessages = () => {
-      if (document.visibilityState === 'visible') void refreshPart(async () => ({ messages: await fetchMessages() }));
-    };
-    const timer = setInterval(loadMessages, MESSAGES_REFRESH_MS);
-    document.addEventListener('visibilitychange', loadMessages);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', loadMessages);
-    };
-  }, [refreshPart]);
-}
-
 /** The place of the last change, so its error shows next to the button that the user clicked */
 type ChangedPanel = 'channels' | 'settings' | 'form';
 
@@ -75,7 +58,9 @@ interface TestOutcome {
  */
 export function NotificationsTab({ machines }: { machines: MachineName[] }) {
   const { report, loadError, changeError, isChanging, change, refresh, refreshPart } = useServerReport(loadNotifications);
-  useMessageRefresh(refreshPart);
+  // Only the message list: the channels and the settings change only when an admin changes them
+  const refreshMessages = useCallback(() => refreshPart(async () => ({ messages: await fetchMessages() })), [refreshPart]);
+  useRefreshWhileVisible(refreshMessages, MESSAGES_REFRESH_MS);
   const [changedPanel, setChangedPanel] = useState<ChangedPanel | null>(null);
   const [openForm, setOpenForm] = useState<OpenForm>(null);
   if (loadError || !report) return <ReportPending loadError={loadError} />;
