@@ -72,7 +72,7 @@ export function ChannelForm({ types, machines, channel, error, isSaving, onSave,
           </Field>
           {!type && <Notice tone="error" title="This version of Chatter does not know this channel type">You can only delete the channel.</Notice>}
           <Field id="channel-name" label="Name">
-            <TextInput id="channel-name" value={form.name} placeholder="Shop phones" onChange={event => setForm({ ...form, name: event.target.value })} />
+            <TextInput id="channel-name" value={form.name} placeholder="Shop phones" autoComplete="off" onChange={event => setForm({ ...form, name: event.target.value })} />
           </Field>
           {type && <ChannelFields type={type} form={form} hasSecret={channel?.hasSecret ?? {}} onChange={setForm} />}
           {type?.note && <Notice tone="info" title={`About ${type.name}`}>{type.note}</Notice>}

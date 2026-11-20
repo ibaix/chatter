@@ -66,6 +66,12 @@ describe('ChannelForm', () => {
     expect(screen.getByText('Register the number for A2P 10DLC.')).toBeInTheDocument();
   });
 
+  it('keeps the browser from filling in the channel name, because it is not a person or an account', () => {
+    renderForm();
+
+    expect(screen.getByLabelText('Name')).toHaveAttribute('autocomplete', 'off');
+  });
+
   it('saves a new channel with each phone number, and closes', async () => {
     const onSave = vi.fn().mockResolvedValue(true);
     const { onClose } = renderForm({ onSave });
