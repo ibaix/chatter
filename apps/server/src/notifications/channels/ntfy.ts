@@ -89,10 +89,9 @@ function tagOf({ kind, severity }: OutgoingMessage): string {
   return severity === 'critical' ? 'rotating_light' : 'warning';
 }
 
-/** The root of the server. A server under a path, for example https://shop.local/ntfy, keeps its path. */
+/** The address of the server as the admin typed it. A proxy under /ntfy/ answers a redirect for /ntfy, so Chatter does not remove a slash. */
 function serverOf(url: string | undefined): string {
-  const { href, pathname } = new URL(url || PUBLIC_SERVER);
-  return pathname !== '/' && href.endsWith('/') ? href.slice(0, -1) : href;
+  return new URL(url || PUBLIC_SERVER).href;
 }
 
 /** A pasted topic address, for example https://ntfy.sh/my-topic, would send the JSON as the text of the message */

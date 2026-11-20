@@ -85,9 +85,11 @@ describe('ntfyChannel', () => {
     });
   });
 
-  it('sends to the root of a server of the shop, also under a path', async () => {
+  it('sends to the server address as the admin typed it, also under a path', async () => {
     expect((await sent(MESSAGE, { ...settings, url: 'https://ntfy.shop.local' })).request.url).toBe('https://ntfy.shop.local/');
-    expect((await sent(MESSAGE, { ...settings, url: 'https://shop.local/ntfy/' })).request.url).toBe('https://shop.local/ntfy');
+    expect((await sent(MESSAGE, { ...settings, url: 'https://shop.local/ntfy' })).request.url).toBe('https://shop.local/ntfy');
+    // A proxy under /ntfy/ answers a redirect for /ntfy, so Chatter keeps the slash
+    expect((await sent(MESSAGE, { ...settings, url: 'https://shop.local/ntfy/' })).request.url).toBe('https://shop.local/ntfy/');
   });
 
   it('sends the access token as a Bearer token', async () => {
