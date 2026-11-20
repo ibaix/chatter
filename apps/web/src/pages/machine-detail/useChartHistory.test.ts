@@ -7,7 +7,7 @@ import { useChartHistory } from './useChartHistory';
 
 vi.mock('../../api/history', () => ({ fetchValueHistory: vi.fn() }));
 
-const [TEN_MINUTES] = CHART_RANGES;
+const [TEN_MINUTES, ONE_HOUR] = CHART_RANGES;
 const MINUTE = 60_000;
 
 /** A load that never ends, so the test can see the chart while it loads */
@@ -99,6 +99,24 @@ describe('useChartHistory', () => {
       { time: now, value: 1500 },
       { time: now + 10_000, value: 1600 },
     ]);
+  });
+
+  it('adds only the live values to a new range, not the points of the last range', async () => {
+    const now = Date.now();
+    const live = { time: now, value: 1500 };
+    vi.mocked(fetchValueHistory).mockResolvedValueOnce({
+      points: [{ time: now - 2 * MINUTE, value: 800 }, { time: now - MINUTE, value: 900 }],
+      window: '5s',
+    });
+    const { result, rerender } = renderChartHistory({ live });
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    // The history of the hour ends earlier than the history of the 10 minutes (it has bigger windows)
+    vi.mocked(fetchValueHistory).mockResolvedValueOnce({ points: [{ time: now - 5 * MINUTE, value: 700 }], window: '10s' });
+    rerender({ machineId: 'm1', value: 'spindle-speed', live, range: ONE_HOUR, end: null });
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    expect(result.current.points).toEqual([{ time: now - 5 * MINUTE, value: 700 }, live]);
   });
 
   it('tells that the load failed after a move in time, and keeps the old points', async () => {

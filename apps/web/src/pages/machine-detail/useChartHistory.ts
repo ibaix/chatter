@@ -45,6 +45,8 @@ export function useChartHistory(
   // The newest live value, so a new range or value starts with it and does not wait for the next one
   const latestLive = useRef(live);
   latestLive.current = live;
+  /** The live values since the last load started. A live chart adds them after the loaded history. */
+  const liveSinceLoad = useRef<HistoryPoint[]>([]);
 
   useEffect(() => {
     let stopped = false;
@@ -57,14 +59,15 @@ export function useChartHistory(
     loadedEnd.current = end;
     setShownKey(pointsKey);
     setStatus('loading');
+    liveSinceLoad.current = latestLive.current ? [latestLive.current] : [];
     const load = () => {
       const span = loadSpan(range, end, Date.now());
       const window = range.window ?? autoHistoryWindow(range.ms);
       fetchValueHistory(machineId, value, span.query, window, span.end ?? undefined)
         .then(history => {
           if (stopped) return;
-          // A live chart keeps the live values that came while it loaded
-          setPoints(known => (end === null ? mergeHistory(history.points, known) : history.points));
+          // A live chart adds the live values that came while it loaded. The old points of another time do not stay.
+          setPoints(end === null ? mergeHistory(history.points, liveSinceLoad.current) : history.points);
           setWindowMs(durationMs(history.window));
           setStatus('ready');
         })
@@ -83,7 +86,9 @@ export function useChartHistory(
 
   // `live` is a new object on each render, so the effect runs only when its values change
   useEffect(() => {
-    if (live) setPoints(known => withLivePoint(known, live, windowMs));
+    if (!live) return;
+    liveSinceLoad.current = withLivePoint(liveSinceLoad.current, live, windowMs);
+    setPoints(known => withLivePoint(known, live, windowMs));
   }, [live?.time, live?.value]);
 
   // A chart in the past ends at `end`
