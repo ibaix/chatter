@@ -60,6 +60,18 @@ describe('AlertRulesTab', () => {
     expect(limitBox()).toHaveValue(90);
   });
 
+  it('shows "program ended" as an event, with no limit and no minutes', async () => {
+    await renderTab([{ id: 'r3', kind: 'simple', enabled: true, subject: 'program-ended', check: 'above', limit: 0, forMinutes: 0, severity: 'warning' }]);
+
+    const [row] = within(screen.getByRole('list', { name: 'Alert rules' })).getAllByRole('listitem');
+    expect(row).toHaveTextContent('When this machine reports');
+    expect(row).toHaveTextContent('program ended');
+    expect(row).toHaveTextContent(/When this machine reports.*program ended,\s*raise a.*warning\./);
+    expect(row).not.toHaveTextContent(/\bmin\b/);
+    expect(screen.queryByRole('spinbutton', { name: 'Limit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('spinbutton', { name: 'Minutes' })).not.toBeInTheDocument();
+  });
+
   it('links to the alerts docs', async () => {
     await renderTab();
 

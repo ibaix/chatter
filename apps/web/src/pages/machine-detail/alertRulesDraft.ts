@@ -1,5 +1,6 @@
 import {
   ALERT_SUBJECTS,
+  isEventSubject,
   hasMachinePlaceholder,
   isSameRule,
   MACHINE_PLACEHOLDER,
@@ -57,8 +58,12 @@ export function addRule(draft: DraftRule[], kind: 'simple' | 'query'): DraftRule
   return [...draft, { ...rule, key: `new-${newRuleCount}` }];
 }
 
-/** The change for a new subject. A state rule has no real limit, so a rule that gets a limit starts from a sensible one. */
+/**
+ * The change for a new subject. A state rule has no real limit, so a rule that gets a limit starts from a sensible one.
+ * An event, such as "program ended", fires once at the first true check, so its minutes are 0.
+ */
 export function subjectPatch(rule: SimpleAlertRule | Omit<SimpleAlertRule, 'id'>, subject: AlertSubject): RulePatch {
+  if (isEventSubject(subject)) return { subject, forMinutes: 0 };
   const hadLimit = ALERT_SUBJECTS[rule.subject].kind === 'value';
   const needsLimit = ALERT_SUBJECTS[subject].kind === 'value';
   return needsLimit && !hadLimit ? { subject, limit: STARTING_LIMITS[subject] } : { subject };

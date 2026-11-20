@@ -82,13 +82,19 @@ export function AlertRuleRow(props: AlertRuleRowProps) {
   );
 }
 
-/** "When this machine has [spindle load] [above] [90]% for [1] min, raise a [warning]." */
+/** The words before the subject */
+const SENTENCE_STARTS = { value: 'When this machine has', state: 'When this machine is', event: 'When this machine reports' } as const;
+
+/**
+ * "When this machine has [spindle load] [above] [90]% for [1] min, raise a [warning]."
+ * An event has no minutes: "When this machine reports [program ended], raise a [warning]."
+ */
 function SimpleRule({ rule, canChange, onChange, onMakeCustomQuery }: AlertRuleRowProps & { rule: SimpleDraft }) {
   const subject = ALERT_SUBJECTS[rule.subject];
   return (
     <>
       <p className="m-0 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm leading-7 text-zinc-100">
-        {subject.kind === 'value' ? 'When this machine has' : 'When this machine is'}
+        {SENTENCE_STARTS[subject.kind]}
         <Word
           label="What to check" canChange={canChange} choices={SUBJECT_CHOICES} value={rule.subject}
           onChoose={id => onChange(subjectPatch(rule, id))}
@@ -100,8 +106,17 @@ function SimpleRule({ rule, canChange, onChange, onMakeCustomQuery }: AlertRuleR
             <span className={cn(subject.unitSuffix === '%' && '-ml-1')}>{subject.unitSuffix.trim()}</span>
           </>
         )}
-        for
-        <MinutesAndSeverity rule={rule} canChange={canChange} onChange={onChange} />
+        {subject.kind === 'event' ? (
+          <>
+            <span className="-ml-1">,</span>
+            <Severity rule={rule} canChange={canChange} onChange={onChange} />
+          </>
+        ) : (
+          <>
+            for
+            <MinutesAndSeverity rule={rule} canChange={canChange} onChange={onChange} />
+          </>
+        )}
       </p>
       <ExpertQuery rule={rule} canChange={canChange} onMakeCustomQuery={onMakeCustomQuery} />
     </>
@@ -113,7 +128,17 @@ function MinutesAndSeverity({ rule, canChange, onChange }: Pick<AlertRuleRowProp
   return (
     <>
       <NumberBox label="Minutes" value={rule.forMinutes} canChange={canChange} onChange={forMinutes => onChange({ forMinutes })} />
-      min, raise a
+      min,
+      <Severity rule={rule} canChange={canChange} onChange={onChange} />
+    </>
+  );
+}
+
+/** "raise a [warning]." */
+function Severity({ rule, canChange, onChange }: Pick<AlertRuleRowProps, 'canChange' | 'onChange'> & { rule: DraftRule }) {
+  return (
+    <>
+      raise a
       <Word
         label="Level" canChange={canChange} choices={SEVERITY_CHOICES} value={rule.severity}
         onChoose={severity => onChange({ severity })} className={SEVERITY_COLORS[rule.severity]}

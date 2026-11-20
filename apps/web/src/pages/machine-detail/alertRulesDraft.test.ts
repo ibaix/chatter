@@ -73,6 +73,10 @@ describe('alert rules draft', () => {
     expect(subjectPatch(highLoad, 'in-alarm')).toEqual({ subject: 'in-alarm' });
   });
 
+  it('sets the minutes to 0 for an event such as "program ended", because it fires once at the first true check', () => {
+    expect(subjectPatch(highLoad, 'program-ended')).toEqual({ subject: 'program-ended', forMinutes: 0 });
+  });
+
   describe('firstProblem', () => {
     it('is null when every rule can be saved', () => {
       expect(firstProblem(draftOf([highLoad, offline]))).toBeNull();
