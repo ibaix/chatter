@@ -24,8 +24,8 @@ interface ChartDragOptions {
  */
 export function useChartDrag({ rangeMs, end, margins, onMove }: ChartDragOptions) {
   const bodyRef = useRef<HTMLDivElement>(null);
-  /** Where a drag started, and the width of the plot then */
-  const dragStart = useRef<{ x: number; plotWidth: number } | null>(null);
+  /** Where a drag started, and the width of the plot then. State, so the cursor changes at once. */
+  const [dragStart, setDragStart] = useState<{ x: number; plotWidth: number } | null>(null);
   /** How far a drag moves the time, in milliseconds: negative goes back */
   const [shiftMs, setShiftMs] = useState(0);
   const wheelDelta = useRef(0);
@@ -35,16 +35,15 @@ export function useChartDrag({ rangeMs, end, margins, onMove }: ChartDragOptions
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
-    dragStart.current = { x: event.clientX, plotWidth: event.currentTarget.getBoundingClientRect().width - margins };
+    setDragStart({ x: event.clientX, plotWidth: event.currentTarget.getBoundingClientRect().width - margins });
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    const start = dragStart.current;
-    if (start && start.plotWidth > 0) setShiftMs(dragMs(event.clientX - start.x, start.plotWidth));
+    if (dragStart && dragStart.plotWidth > 0) setShiftMs(dragMs(event.clientX - dragStart.x, dragStart.plotWidth));
   };
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
-    const start = dragStart.current;
-    dragStart.current = null;
+    const start = dragStart;
+    setDragStart(null);
     setShiftMs(0);
     if (!start || start.plotWidth <= 0) return;
     // A small move is a click, for example to see a hover box
@@ -76,7 +75,7 @@ export function useChartDrag({ rangeMs, end, margins, onMove }: ChartDragOptions
   return {
     bodyRef,
     shiftMs,
-    dragging: dragStart.current !== null,
+    dragging: dragStart !== null,
     handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp },
   };
 }

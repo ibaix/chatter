@@ -333,6 +333,18 @@ describe('MachineHistoryChart', () => {
       expect(screen.getByRole('img', { name: name => name.startsWith(`Machine state ${pastText(10 * MINUTE, NOW)}.`) })).toBeInTheDocument();
     });
 
+    it('shows a closed hand while the user holds the chart', async () => {
+      await overviewOfStateView();
+      const body = chartBody();
+      expect(body).toHaveClass('cursor-grab');
+
+      fireEvent.pointerDown(body, { button: 0, clientX: 300, pointerId: 1 });
+      expect(body).toHaveClass('cursor-grabbing');
+
+      fireEvent.pointerUp(body, { clientX: 300, pointerId: 1 });
+      expect(body).toHaveClass('cursor-grab');
+    });
+
     it('goes back to the live chart when the user picks another range', async () => {
       render(<ChartWithMenu machine={runningMachine()} />);
       fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
