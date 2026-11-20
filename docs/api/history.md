@@ -17,7 +17,7 @@ An unknown machine id gets `404`.
 Query parameters:
 - `range`: how far back, for example `-10m`, `-1h`, `-7d`, or `-2w` (default `-1h`)
 - `window`: the time that each average covers, in seconds, minutes, hours, or days, for example `10s` or `5m`. Without it, Chatter chooses a window that gives at most 1000 points. One reply has at most 5000 points. A range and window that give more points get `400`.
-- `end`: the end of the time, to look back in time, for example `2026-11-19T15:00:00Z` (default: now). The range goes back from it. An end after now is the same as now.
+- `end`: the end of the time, to look back in time, for example `2026-11-19T15:00:00Z` (default: now). The range goes back from it. An end after now is the same as now. Give the zone: `Z` or an offset such as `+01:00`. A time with no zone gets `400`.
 
 The reply is `{ machineId, value, range, window, data: [{ time, value }] }`. When the history database does not answer, the reply is 503. A window with no data is left out, so a gap in `data` means that the machine sent no data then.
 
@@ -44,7 +44,7 @@ The periods are kept in `chatter.db` for 1 year. When the machine stops answerin
 
 Query parameters:
 - `range`: how far back, for example `-1h` or `-7d` (default `-24h`). It can go back at most 31 days.
-- `end`: the end of the time, for example `2026-11-19T15:00:00Z` (default: now). The range goes back from it. An end after now is the same as now.
+- `end`: the end of the time, for example `2026-11-19T15:00:00Z` (default: now). The range goes back from it. An end after now is the same as now. Give the zone: `Z` or an offset such as `+01:00`. A time with no zone gets `400`.
 
 The reply is `{ machineId, range, from, to, data: [{ state, start, end, detail, program }], more }`, oldest first. The segments cover the full time from `from` to `to`, with no gaps. Chatter makes them from the periods, with the same rule as the dashboard:
 - `alarm`: an alarm is on. An alarm shows over running. `detail` is the alarm code and text.
