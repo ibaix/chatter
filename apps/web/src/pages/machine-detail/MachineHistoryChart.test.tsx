@@ -63,6 +63,43 @@ describe('MachineHistoryChart', () => {
     vi.unstubAllGlobals();
   });
 
+  it('tells that the history did not load, also when it has a live value', async () => {
+    vi.mocked(fetchValueHistory).mockRejectedValue(new Error('Chatter cannot be reached'));
+    const lastPoll = new Date(Date.now() - 17 * 60_000).toISOString();
+    render(<ChartWithMenu machine={testMachine({ connected: true, lastPollTime: lastPoll }, { spindleSpeed: 1200 })} />);
+    // At 1 hour the 17-minute-old live value is in the range, so the chart has a point
+    fireEvent.click(screen.getByRole('button', { name: '1h' }));
+
+    expect(await screen.findByText('Could not load the spindle speed history. Reload the page to try again.')).toBeInTheDocument();
+  });
+
+  it('shows the saved history of a machine that is not connected now', async () => {
+    const start = Date.now() - 40 * 60_000;
+    const points = Array.from({ length: 30 }, (_, index) => ({ time: start + index * 5000, value: 2000 }));
+    vi.mocked(fetchValueHistory).mockResolvedValue({ points, window: '5s' });
+    render(<ChartWithMenu machine={testMachine({ connected: false }, { spindleSpeed: 2000 })} />);
+    fireEvent.click(screen.getByRole('button', { name: '1h' }));
+
+    const plot = await screen.findByRole('img', { name: /^Spindle speed in the last hour/ });
+    expect(plot.querySelector('path.stroke-primary')?.getAttribute('d')?.split('L')).toHaveLength(30);
+  });
+
+  it('draws a value that has no neighbors as a dot, because a line needs two points', async () => {
+    vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: Date.now() - 5 * 60_000, value: 1200 }], window: '5s' });
+    render(<ChartWithMenu machine={testMachine({ connected: false }, { spindleSpeed: 1200 })} />);
+
+    const plot = await screen.findByRole('img', { name: /^Spindle speed in the last 10 minutes/ });
+    expect(plot.querySelectorAll('circle.fill-primary')).toHaveLength(1);
+  });
+
+  it('takes no live value from a machine that is connecting, because its values are old', async () => {
+    vi.mocked(fetchValueHistory).mockReturnValue(new Promise(() => {}));
+    const now = new Date().toISOString();
+    render(<ChartWithMenu machine={testMachine({ connected: true, connecting: true, lastPollTime: now }, { spindleSpeed: 1200 })} />);
+
+    expect(await screen.findByText('Loading the spindle speed history…')).toBeInTheDocument();
+  });
+
   it('offers the machine state in the menu, also when the machine sends only the spindle speed', async () => {
     render(<ChartWithMenu machine={testMachine({}, { spindleSpeed: 1200 })} />);
 
