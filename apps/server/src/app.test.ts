@@ -437,10 +437,15 @@ describe('API Routes', () => {
 
       const future = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-1h&end=2999-01-01T00:00:00.000Z`);
       const bad = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-1h&end=yesterday`);
+      // Without a zone, the time would be the local time of the server
+      const noZone = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-1h&end=2026-11-19T10:30:00`);
+      const offset = await call('GET', `/api/machine/${machine.id}/state-timeline?range=-1h&end=2026-11-19T10:30:00%2B01:00`);
 
       expect(Date.parse(future.body.to)).toBeLessThanOrEqual(Date.now());
       expect(bad.status).toBe(400);
-      expect(bad.body.error).toBe('end must be a time such as 2026-11-19T15:00:00Z');
+      expect(bad.body.error).toBe('end must be a time with a zone, such as 2026-11-19T15:00:00Z');
+      expect(noZone.status).toBe(400);
+      expect(offset.body.to).toBe('2026-11-19T09:30:00.000Z');
     });
 
     it('returns 400 for a range longer than 31 days', async () => {
