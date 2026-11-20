@@ -1,5 +1,7 @@
 import { useReducer } from 'react';
-import { CHART_RANGES, fittedOverviewEnd, pannedEnd, zoomView, type ChartRange } from './historyChart';
+import { useNow } from '../../hooks/useNow';
+import type { Machine } from '../../types';
+import { CHART_CLOCK_TICK_MS, CHART_RANGES, fittedOverviewEnd, pannedEnd, zoomView, type ChartRange } from './historyChart';
 
 /** The time in the chart, and the time in the overview strip under it */
 export interface ChartView {
@@ -52,23 +54,39 @@ export function chartViewReducer(view: ChartView, action: ChartViewAction): Char
   }
 }
 
-/** The time in the chart and in the overview strip, and the ways to change it */
-export function useChartView() {
+/**
+ * The time in the chart and in the overview strip, and the ways to change it.
+ * `now` is the chart clock (useChartClock). The charts draw "now" from the same clock, so a move or a zoom
+ * goes to the time that the user sees.
+ */
+export function useChartView(now: number) {
   const [view, dispatch] = useReducer(chartViewReducer, CHART_RANGES[0], liveView);
   return {
     view,
     /** Shows the last `range` up to now, in the chart and in the strip */
     pick: (range: ChartRange) => dispatch({ type: 'pick', range }),
     /** Moves the time of the chart by `deltaMs`: negative goes back. It cannot go after now. */
-    moveBy: (deltaMs: number) => dispatch({ type: 'move', deltaMs, now: Date.now() }),
+    moveBy: (deltaMs: number) => dispatch({ type: 'move', deltaMs, now }),
     /** Moves the time of the chart by a part of its range: -0.5 goes back half the range */
-    pan: (step: number) => dispatch({ type: 'move', deltaMs: step * view.range.ms, now: Date.now() }),
+    pan: (step: number) => dispatch({ type: 'move', deltaMs: step * view.range.ms, now }),
     /** Shows the chart's range up to now */
-    showNow: () => dispatch({ type: 'now', now: Date.now() }),
+    showNow: () => dispatch({ type: 'now', now }),
     /** Shows the time that the user highlighted. The range buttons and the clear button show the wider times again. */
-    zoomTo: (from: number, to: number) => dispatch({ type: 'zoom', from, to, now: Date.now() }),
+    zoomTo: (from: number, to: number) => dispatch({ type: 'zoom', from, to, now }),
     clearZoom: () => dispatch({ type: 'clearZoom' }),
     /** True while the chart shows a zoom, not the full time of the strip */
     zoomed: view.range !== view.overview,
   };
+}
+
+/**
+ * The "now" of the history charts. All the parts of a chart (the line, the bands, the overview strip, a drag, a move
+ * and a zoom) use this one clock, so they agree about where "now" is.
+ * It ticks every CHART_CLOCK_TICK_MS. When the clock of Chatter is ahead of the page clock, it is the time of the
+ * newest value from Chatter, so the chart never ends before its newest value.
+ */
+export function useChartClock(machine: Machine): number {
+  const pageNow = useNow(CHART_CLOCK_TICK_MS);
+  const lastPoll = machine.lastPollTime ? Date.parse(machine.lastPollTime) : 0;
+  return Math.max(pageNow, Number.isFinite(lastPoll) ? lastPoll : 0);
 }

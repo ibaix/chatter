@@ -476,6 +476,36 @@ describe('MachineHistoryChart', () => {
       expect(await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
     });
 
+    it('stays live for a zoom to the right end of the strip, also between two ticks of the chart clock', async () => {
+      const overview = await overviewOfStateView();
+      // The page clock goes on 3 seconds. The chart clock ticks every 5 seconds, so the strip still ends at NOW.
+      vi.setSystemTime(NOW + 3000);
+
+      drag(overview, BOX_WIDTH / 2, BOX_WIDTH);
+
+      expect(await screen.findByText('What the machine did in the last 5 minutes.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
+    });
+
+    it('does not move a live chart into the past for a click on the strip, also when the clock of Chatter is ahead', async () => {
+      // The clock of Chatter is 4 seconds ahead of the page clock
+      const chatterNow = NOW + 4000;
+      vi.mocked(fetchStateTimeline).mockResolvedValue([{ state: 'running', program: 'O1001', start: NOW - 10 * MINUTE, end: chatterNow }]);
+      const machine = testMachine(
+        { connected: true, lastPollTime: new Date(chatterNow).toISOString() },
+        { spindleSpeed: 1200, execution: 'ACTIVE', program: 'O1001' },
+      );
+      render(<ChartWithMenu machine={machine} start="machine-state" />);
+      const overview = await screen.findByRole('img', { name: /^Overview of the last 10 minutes/ });
+
+      // A click right of the middle of the box. The chart ends now, so it cannot go on.
+      drag(overview, (5 * BOX_WIDTH) / 6, (5 * BOX_WIDTH) / 6);
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
+    });
+
     it('clears the zoom with the button above the box, back to the time of the strip', async () => {
       const overview = await overviewOfStateView();
       expect(screen.queryByRole('button', { name: 'Clear the zoom' })).not.toBeInTheDocument();

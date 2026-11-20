@@ -1,4 +1,4 @@
-import { useEffect, useState, type PointerEvent, type RefObject } from 'react';
+import { useState, type PointerEvent } from 'react';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
@@ -34,15 +34,14 @@ interface StateChartProps {
   end: number | null;
   /** How far a drag moves the time, in milliseconds: negative goes back. The chart loaded this time already. */
   shiftMs: number;
-  /** The chart sets this to the end that it draws, so a drag ends where the chart drew it */
-  drawnNow: RefObject<number | null>;
+  /** The chart clock (useChartClock) */
+  clockNow: number;
   /** The time that the user highlights on the overview strip */
   selection: ZoomSelection | null;
 }
 
-export function StateChart({ machine, range, end, shiftMs, drawnNow, selection }: StateChartProps) {
-  const { segments, status, now: loadedNow } = useStateTimeline(machine.id, liveStateOf(machine), range, undefined, end);
-  useEffect(() => { drawnNow.current = loadedNow; });
+export function StateChart({ machine, range, end, clockNow, shiftMs, selection }: StateChartProps) {
+  const { segments, status, now: loadedNow } = useStateTimeline(machine.id, liveStateOf(machine), range, clockNow, end);
   const { ref, width } = useBoxSize<HTMLDivElement>();
   // The end of the time that shows, also while the user drags
   const now = loadedNow + shiftMs;

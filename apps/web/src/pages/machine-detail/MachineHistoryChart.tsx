@@ -1,6 +1,6 @@
 import { historyWindowValue } from '@local-chatter/shared';
 import { cn } from '@toolpath/ui';
-import { useEffect, useId, useState, type PointerEvent, type RefObject } from 'react';
+import { useId, useState, type PointerEvent } from 'react';
 import type { HistoryPoint } from '../../api/history';
 import { CHOICE_HEIGHT, ChoiceMenu } from '../../components/ui/ChoiceMenu';
 import { RangeButtons } from '../../components/ui/RangeButtons';
@@ -29,7 +29,7 @@ import { StateChart } from './StateChart';
 import { liveStateOf, segmentAt, type StateSegment } from './stateTimeline';
 import { useChartDrag } from './useChartDrag';
 import { useChartHistory } from './useChartHistory';
-import { useChartView } from './useChartView';
+import { useChartClock, useChartView } from './useChartView';
 import { useStateTimeline } from './useStateTimeline';
 
 const MARGIN = { top: 12, right: 16, bottom: 38, left: 52 };
@@ -68,10 +68,11 @@ interface MachineHistoryChartProps {
 
 /** One machine value, or the machine state, over time, with a menu for the value and buttons for the time range */
 function MachineHistoryChart({ machine, choices, choice, onChoose, className }: MachineHistoryChartProps) {
-  const { view, pick, moveBy, pan, showNow, zoomTo, clearZoom, zoomed } = useChartView();
+  const clockNow = useChartClock(machine);
+  const { view, pick, moveBy, pan, showNow, zoomTo, clearZoom, zoomed } = useChartView(clockNow);
   const { range, end } = view;
   const isStateChart = choice.id === MACHINE_STATE.id;
-  const drag = useChartDrag({ rangeMs: range.ms, end, margins: isStateChart ? 0 : MARGIN.left + MARGIN.right, onMove: moveBy });
+  const drag = useChartDrag({ rangeMs: range.ms, end, now: clockNow, margins: isStateChart ? 0 : MARGIN.left + MARGIN.right, onMove: moveBy });
   const { shiftMs } = drag;
 
   /** The time that the user highlights on the overview strip. The chart shades it also. */
@@ -105,9 +106,9 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
         className={cn('flex touch-pan-y flex-col gap-2.5 overflow-hidden select-none', drag.dragging ? 'cursor-grabbing' : 'cursor-grab')}
       >
         {isStateChart ? (
-          <StateChart machine={machine} range={range} end={end} shiftMs={shiftMs} drawnNow={drag.drawnNow} selection={selection} />
+          <StateChart machine={machine} range={range} end={end} clockNow={clockNow} shiftMs={shiftMs} selection={selection} />
         ) : (
-          <ValueChart machine={machine} value={choice} range={range} end={end} shiftMs={shiftMs} drawnNow={drag.drawnNow} selection={selection} />
+          <ValueChart machine={machine} value={choice} range={range} end={end} clockNow={clockNow} shiftMs={shiftMs} selection={selection} />
         )}
       </div>
       <ChartOverview
@@ -115,7 +116,8 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, className }: 
         overview={view.overview}
         overviewEnd={view.overviewEnd}
         view={range}
-        viewEnd={shiftMs ? (end ?? Date.now()) + shiftMs : end}
+        clockNow={clockNow}
+        viewEnd={shiftMs ? (end ?? clockNow) + shiftMs : end}
         selection={selection}
         onSelect={setSelection}
         left={isStateChart ? 0 : MARGIN.left}
@@ -135,19 +137,17 @@ interface ValueChartProps {
   end: number | null;
   /** How far a drag moves the time, in milliseconds: negative goes back. The chart loaded this time already. */
   shiftMs: number;
-  /** The chart sets this to the end that it draws, so a drag ends where the chart drew it */
-  drawnNow: RefObject<number | null>;
+  /** The chart clock (useChartClock) */
+  clockNow: number;
   /** The time that the user highlights on the overview strip */
   selection: ZoomSelection | null;
 }
 
 /** A machine value as a line, with the machine state as a thin strip under it */
-function ValueChart({ machine, value, range, end, shiftMs, drawnNow, selection }: ValueChartProps) {
+function ValueChart({ machine, value, range, end, clockNow, shiftMs, selection }: ValueChartProps) {
   const livePoint = livePointOf(machine, value);
-  const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range, end);
-  useEffect(() => { drawnNow.current = now; });
-  // The chart's clock, so the strip ends where the line ends
-  const { segments: stripSegments, status: stateStatus } = useStateTimeline(machine.id, liveStateOf(machine), range, now, end);
+  const { points, status, now, gapMs } = useChartHistory(machine.id, value.id, livePoint, range, end, clockNow);
+  const { segments: stripSegments, status: stateStatus } = useStateTimeline(machine.id, liveStateOf(machine), range, clockNow, end);
   const { ref, width, height } = useBoxSize<HTMLDivElement>();
   // The chart keeps the old points while a new time loads. They show only when some of them are in the time that shows.
   const shownEnd = now + shiftMs;

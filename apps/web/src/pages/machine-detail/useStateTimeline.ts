@@ -28,7 +28,8 @@ function sharedTimeline(key: string, machineId: string, query: string, end: numb
  * It loads one more range on each side (loadSpan), so a drag shows data at once. The segments are of that span.
  * A new machine starts again from no segments. Another time of the same machine keeps the old segments until the new
  * ones come: they have their own times, so they show at the right place.
- * `clockNow` is the chart's own "now", so a strip under a line ends where the line ends. Without it, the hook keeps its own clock.
+ * `clockNow` is the chart clock (useChartClock), so all the parts of a chart end at the same "now". Without it, the hook
+ * keeps its own clock, and the band goes on to the end of the newest segment.
  * With an `end`, the band looks back in time: it shows the range before `end`, and no live states.
  */
 export function useStateTimeline(
@@ -97,10 +98,11 @@ export function useStateTimeline(
   }, [live?.state, live?.program]);
 
   const last = segments[segments.length - 1];
-  const chartNow = end ?? Math.max(clockNow ?? ownNow, last?.end ?? 0);
+  const clock = clockNow ?? Math.max(ownNow, last?.end ?? 0);
+  const chartNow = end ?? clock;
   if (live) lastKnownAt.current = chartNow;
   // The loaded span (loadSpan): one more range before the chart, and for a chart in the past one more range after it
-  const spanEnd = end === null ? chartNow : Math.min(end + range.ms, Math.max(ownNow, end));
+  const spanEnd = end === null ? chartNow : Math.min(end + range.ms, Math.max(clock, end));
   const lastEnd = status === 'loading' && last
     // The old segments of another time end where they were loaded
     ? Math.min(last.end, spanEnd)

@@ -22,6 +22,8 @@ interface ChartOverviewProps {
   overview: ChartRange;
   /** The end of the strip, or null for a strip that ends now */
   overviewEnd: number | null;
+  /** The chart clock (useChartClock): the end of a live strip */
+  clockNow: number;
   /** The time in the chart, which the box shows */
   view: ChartRange;
   viewEnd: number | null;
@@ -45,7 +47,7 @@ interface ChartOverviewProps {
  * While the chart is zoomed in, a button above the box clears the zoom.
  */
 export function ChartOverview({ machine, overview, overviewEnd, ...plotProps }: ChartOverviewProps) {
-  const { segments, now } = useStateTimeline(machine.id, liveStateOf(machine), overview, undefined, overviewEnd);
+  const { segments, now } = useStateTimeline(machine.id, liveStateOf(machine), overview, plotProps.clockNow, overviewEnd);
   const { ref, width } = useBoxSize<HTMLDivElement>();
   return (
     <div ref={ref}>
@@ -64,7 +66,7 @@ interface OverviewPlotProps extends Omit<ChartOverviewProps, 'machine' | 'overvi
 }
 
 function OverviewPlot(props: OverviewPlotProps) {
-  const { segments, overview, live, now, width, view, viewEnd, selection, onSelect, left, right, onMove, onZoom, onClearZoom } = props;
+  const { segments, overview, live, now, clockNow, width, view, viewEnd, selection, onSelect, left, right, onMove, onZoom, onClearZoom } = props;
   /** Where the pointer went down, or null when the user does not drag */
   const [startX, setStartX] = useState<number | null>(null);
   const bandRight = width - right;
@@ -74,7 +76,7 @@ function OverviewPlot(props: OverviewPlotProps) {
   const { x } = scale;
   /** The time at an x position. A position outside the band is its edge. */
   const timeAt = (offsetX: number) => scale.timeAt(Math.min(Math.max(offsetX, left), bandRight));
-  const viewTo = viewEnd ?? now;
+  const viewTo = viewEnd ?? clockNow;
   const viewFrom = viewTo - view.ms;
   const boxLeft = Math.max(left, x(viewFrom));
   const boxRight = Math.min(bandRight, x(viewTo));
@@ -105,7 +107,7 @@ function OverviewPlot(props: OverviewPlotProps) {
       return;
     }
     // A click moves the chart, so the middle of its time is at the click. The chart cannot go after now.
-    const moved = Math.min(timeAt(offsetX) - (viewFrom + viewTo) / 2, Date.now() - viewTo);
+    const moved = Math.min(timeAt(offsetX) - (viewFrom + viewTo) / 2, clockNow - viewTo);
     if (Math.abs(moved) >= msPerPx) onMove(moved);
   };
   const cancelDrag = () => {

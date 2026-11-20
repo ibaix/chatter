@@ -11,6 +11,8 @@ interface ChartDragOptions {
   rangeMs: number;
   /** The end of the chart, or null for the live chart that ends now */
   end: number | null;
+  /** The chart clock (useChartClock): the end of the live chart */
+  now: number;
   /** The space left and right of the plot in the chart body, in pixels */
   margins: number;
   /** Moves the time of the chart by `deltaMs`: negative goes back */
@@ -22,21 +24,16 @@ interface ChartDragOptions {
  * While the user drags, `shiftMs` tells how far the time moves, so the chart can draw the data that it loaded around
  * its time (loadSpan). The new time loads once, when the drag ends.
  */
-export function useChartDrag({ rangeMs, end, margins, onMove }: ChartDragOptions) {
+export function useChartDrag({ rangeMs, end, now, margins, onMove }: ChartDragOptions) {
   const bodyRef = useRef<HTMLDivElement>(null);
   /** Where a drag started, and the width of the plot then. State, so the cursor changes at once. */
   const [dragStart, setDragStart] = useState<{ x: number; plotWidth: number } | null>(null);
   /** How far a drag moves the time, in milliseconds: negative goes back */
   const [shiftMs, setShiftMs] = useState(0);
   const wheelDelta = useRef(0);
-  /**
-   * The end of the live chart as the chart draws it. The chart sets it. Its clock can be ahead of the page clock
-   * (the time of the newest value comes from Chatter), so a drag ends where the chart drew it.
-   */
-  const drawnNow = useRef<number | null>(null);
 
   /** The time that a drag of `x` pixels moves. A drag to the right goes back. A drag cannot go after now. */
-  const dragMs = (x: number, plotWidth: number) => Math.min((-x / plotWidth) * rangeMs, end === null ? 0 : Date.now() - end);
+  const dragMs = (x: number, plotWidth: number) => Math.min((-x / plotWidth) * rangeMs, end === null ? 0 : now - end);
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -54,9 +51,7 @@ export function useChartDrag({ rangeMs, end, margins, onMove }: ChartDragOptions
     // A small move is a click, for example to see a hover box
     if (Math.abs(event.clientX - start.x) < MIN_DRAG_PX) return;
     const moved = dragMs(event.clientX - start.x, start.plotWidth);
-    if (moved === 0) return;
-    // onMove moves a live chart from the page clock, so add the time between the page clock and the drawn end
-    onMove(end === null && drawnNow.current !== null ? moved + drawnNow.current - Date.now() : moved);
+    if (moved !== 0) onMove(moved);
   };
 
   /**
@@ -82,7 +77,6 @@ export function useChartDrag({ rangeMs, end, margins, onMove }: ChartDragOptions
   return {
     bodyRef,
     shiftMs,
-    drawnNow,
     dragging: dragStart !== null,
     handlers: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp },
   };

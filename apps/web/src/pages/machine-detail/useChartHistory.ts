@@ -1,9 +1,7 @@
 import { autoHistoryWindow, type HistoryValue } from '@local-chatter/shared';
 import { useEffect, useRef, useState } from 'react';
 import { fetchValueHistory, type HistoryPoint } from '../../api/history';
-import { useNow } from '../../hooks/useNow';
 import {
-  CHART_CLOCK_TICK_MS,
   durationMs,
   gapFor,
   loadSpan,
@@ -20,13 +18,15 @@ import {
  * With an `end`, the chart looks back in time: it shows the range before `end`, and no live values.
  * It loads one more range on each side (loadSpan), so a drag shows data at once. While a new time loads,
  * the old points stay: they have their own times, so they show at the right place.
+ * `clockNow` is the chart clock (useChartClock): the end of the live chart.
  */
 export function useChartHistory(
   machineId: string,
   value: HistoryValue,
   liveValue: HistoryPoint | null,
   range: ChartRange,
-  end: number | null = null,
+  end: number | null,
+  clockNow: number,
 ) {
   const live = end === null ? liveValue : null;
   const [points, setPoints] = useState<HistoryPoint[]>([]);
@@ -38,7 +38,6 @@ export function useChartHistory(
   const loadedKey = useRef<string | null>(null);
   /** The time each history point covers. Live values are kept one per window of this length. */
   const [windowMs, setWindowMs] = useState(0);
-  const now = useNow(CHART_CLOCK_TICK_MS);
   // The newest live value, so a new range or value starts with it and does not wait for the next one
   const latestLive = useRef(live);
   latestLive.current = live;
@@ -71,8 +70,8 @@ export function useChartHistory(
     if (live) setPoints(known => withLivePoint(known, live, windowMs));
   }, [live?.time, live?.value]);
 
-  // The newest time that is known, so the chart never shows a value after "now". A chart in the past ends at `end`.
-  const chartNow = end ?? Math.max(now, live?.time ?? 0);
+  // A chart in the past ends at `end`
+  const chartNow = end ?? clockNow;
   if (shownKey !== pointsKey) return { points: [], status: 'loading' as const, now: chartNow, gapMs: gapFor(windowMs) };
   // The points of the loaded span: the range that shows, and one range before it (loadSpan)
   return { points: pointsFrom(points, chartNow - 2 * range.ms), status, now: chartNow, gapMs: gapFor(windowMs) };

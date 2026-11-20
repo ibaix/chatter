@@ -23,7 +23,8 @@ interface Props {
 }
 
 function renderChartHistory(initialProps: Partial<Props> = {}) {
-  return renderHook((props: Props) => useChartHistory(props.machineId, props.value, props.live, props.range, props.end), {
+  // The chart clock is the page clock here
+  return renderHook((props: Props) => useChartHistory(props.machineId, props.value, props.live, props.range, props.end, Date.now()), {
     initialProps: { machineId: 'm1', value: 'spindle-speed', live: null, range: TEN_MINUTES, end: null, ...initialProps },
   });
 }
