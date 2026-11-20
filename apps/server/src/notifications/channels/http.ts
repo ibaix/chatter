@@ -52,8 +52,8 @@ export async function postJson(
 /** An error answer is short. A Pi can have 512 MB of RAM, so Chatter reads no more of an answer than this. */
 const MAX_ERROR_BYTES = 64 * 1024;
 
-/** The JSON object of the answer, or undefined when it is not a JSON object, is too large, or stops before its end */
-async function jsonOf(response: Response): Promise<JsonObject | undefined> {
+/** The JSON object of an error answer, or undefined when it is not a JSON object, is too large, or stops before its end */
+export async function jsonOf(response: Response): Promise<JsonObject | undefined> {
   const text = await textUpTo(response, MAX_ERROR_BYTES);
   if (text === undefined) return undefined;
   try {
@@ -109,10 +109,15 @@ export function statusResult(status: number, texts: StatusTexts): SendResult {
   if (REDIRECTS.has(status)) {
     return { ok: false, retry: false, error: `${answered} and points to another address. ${texts.moved ?? 'Use the new address.'}` };
   }
-  if (status === 408 || status === 429 || status >= 500) {
+  if (isBusy(status)) {
     return { ok: false, retry: true, error: `${answered}. Chatter tries again later.` };
   }
   return { ok: false, retry: false, error: texts.refused() };
+}
+
+/** 408, 429 and 5xx: the service is busy or has a problem, so a new try later can send the message */
+export function isBusy(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
 }
 
 /** A service tells the reason in English. A long reason is cut. */

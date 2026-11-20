@@ -1,7 +1,9 @@
 import { isPhoneNumber } from '@local-chatter/shared';
 import { z } from 'zod';
 import type { ChannelDefinition, OutgoingMessage, SendContext, SendResult } from './ChannelType.js';
+import { isBusy, jsonOf } from './http.js';
 import { networkFailure } from './networkFailure.js';
+import { REDIRECTS } from './webAddress.js';
 
 export const TWILIO_API = 'https://api.twilio.com';
 const THIS_COMPUTER = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -45,11 +47,6 @@ const twilioSettings = z.object({
 });
 
 type TwilioSettings = z.infer<typeof twilioSettings>;
-
-/** What Twilio says when it refuses a message. `code` is the Twilio error code. */
-interface TwilioError {
-  code?: number;
-}
 
 /** The result for one phone. `cause` tells what went wrong, but not what Chatter does next. */
 type PhoneResult = { ok: true } | { ok: false; retry: boolean; cause: string };
@@ -107,32 +104,34 @@ async function sendOne(
       method: 'POST',
       headers: { authorization: `Basic ${login}`, 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ To: phone, From: settings.from, Body: message.text }),
+      // A redirect would change the POST to a GET, so Chatter does not follow it
+      redirect: 'manual',
       signal,
     });
     if (response.ok) {
       response.body?.cancel().catch(() => {});
       return { ok: true };
     }
-    return refusal(response.status, await twilioError(response), phone);
+    return refusal(response.status, await twilioCodeOf(response), phone);
   } catch (error) {
     const { retry, error: cause } = networkFailure(error, 'Twilio');
     return { ok: false, retry, cause };
   }
 }
 
-async function twilioError(response: Response): Promise<TwilioError> {
-  try {
-    const body: unknown = await response.json();
-    return typeof body === 'object' && body !== null ? (body as TwilioError) : {};
-  } catch {
-    return {};
-  }
+/** The Twilio error code in the answer, for example 21211 */
+async function twilioCodeOf(response: Response): Promise<number | undefined> {
+  const code = (await jsonOf(response))?.code;
+  return typeof code === 'number' ? code : undefined;
 }
 
-function refusal(status: number, { code }: TwilioError, phone: string): PhoneResult {
+function refusal(status: number, code: number | undefined, phone: string): PhoneResult {
   const known = status === 401 ? REFUSALS[20003] : code === undefined ? undefined : REFUSALS[code];
   if (known) return { ok: false, retry: false, cause: known(phone) };
-  if (status === 429 || status >= 500) return { ok: false, retry: true, cause: `Twilio answered ${status}.` };
+  if (REDIRECTS.has(status)) {
+    return { ok: false, retry: false, cause: `Twilio answered ${status} and points to another address. A proxy of the shop network can cause this.` };
+  }
+  if (isBusy(status)) return { ok: false, retry: true, cause: `Twilio answered ${status}.` };
   return { ok: false, retry: false, cause: `Twilio refused the message to ${phone} (${code ? `error ${code}` : `answer ${status}`}).` };
 }
 
