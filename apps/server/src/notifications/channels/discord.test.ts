@@ -1,33 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { OutgoingMessage, SendContext, SendResult } from './ChannelType.js';
+import type { OutgoingMessage } from './ChannelType.js';
 import { discordChannel } from './discord.js';
-
-const MESSAGE: OutgoingMessage = {
-  kind: 'started',
-  text: 'WARNING - Haas ST-10: Idle for 20 minutes. Started 9:40 AM.',
-  severity: 'warning',
-  machine: { id: 'haas-st10', name: 'Haas ST-10' },
-  alertName: 'Idle for 20 minutes',
-  summary: 'Idle for 20 min or more',
-  startedAt: '2026-11-13T15:40:00.000Z',
-  endedAt: null,
-  link: 'http://chatter.local:3001/machine/haas-st10',
-};
-
-interface SentRequest {
-  url: string;
-  init: RequestInit;
-}
-
-/** A fetch that keeps each request and gives the answer of `answer` */
-function fakeFetch(answer: () => Response | Promise<Response>) {
-  const requests: SentRequest[] = [];
-  const fetch = (async (url: string | URL | Request, init: RequestInit = {}) => {
-    requests.push({ url: String(url), init });
-    return answer();
-  }) as typeof globalThis.fetch;
-  return { requests, context: (): SendContext => ({ fetch, signal: new AbortController().signal }) };
-}
+import { fakeFetch, textOf, WARNING_MESSAGE as MESSAGE } from './testSupport.js';
 
 const TOKEN = 'token-for-tests_abc-123';
 const WEBHOOK = `https://discord.com/api/webhooks/123456789012345678/${TOKEN}`;
@@ -49,10 +23,6 @@ async function resultFor(status: number) {
 
 function firstProblem(values: unknown): string | undefined {
   return discordChannel.settings.safeParse(values).error?.issues[0].message;
-}
-
-function textOf(result: SendResult): string {
-  return result.ok ? result.detail : result.error;
 }
 
 describe('discordChannel', () => {

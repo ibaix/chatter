@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { OutgoingMessage, SendContext } from './ChannelType.js';
+import type { OutgoingMessage } from './ChannelType.js';
+import { fakeFetch } from './testSupport.js';
 import { createTwilioChannel, TWILIO_API, twilioAddressOf } from './twilio.js';
 
 const MESSAGE: OutgoingMessage = {
@@ -12,19 +13,9 @@ const SID = `AC${'0123456789abcdef'.repeat(2)}`;
 const settings = { accountSid: SID, authToken: 'token-for-tests', from: '+15551230000', to: ['+15559870001', '+15559870002'] };
 const twilioChannel = createTwilioChannel(TWILIO_API);
 
-interface SentRequest {
-  url: string;
-  init: RequestInit;
-}
-
-/** A fetch that keeps each request and gives the answer of `answer` for the number in the request */
+/** A fake Twilio that gives the answer of `answer` for the number in the request */
 function fakeTwilio(answer: (to: string) => Response) {
-  const requests: SentRequest[] = [];
-  const fetch = (async (url: string | URL | Request, init: RequestInit = {}) => {
-    requests.push({ url: String(url), init });
-    return answer(new URLSearchParams(String(init.body)).get('To') ?? '');
-  }) as typeof globalThis.fetch;
-  return { requests, context: (): SendContext => ({ fetch, signal: new AbortController().signal }) };
+  return fakeFetch(({ init }) => answer(new URLSearchParams(String(init.body)).get('To') ?? ''));
 }
 
 const created = () => Response.json({ sid: 'SM1', status: 'queued' }, { status: 201 });

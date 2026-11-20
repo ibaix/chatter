@@ -1,20 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SendContext } from './ChannelType.js';
 import { type Answer, cutText, postJson, serviceReason, statusResult } from './http.js';
-
-interface SentRequest {
-  url: string;
-  init: RequestInit;
-}
-
-function fakeFetch(answer: () => Response | Promise<Response>) {
-  const requests: SentRequest[] = [];
-  const fetch = (async (url: string | URL | Request, init: RequestInit = {}) => {
-    requests.push({ url: String(url), init });
-    return answer();
-  }) as typeof globalThis.fetch;
-  return { requests, context: (): SendContext => ({ fetch, signal: new AbortController().signal }) };
-}
+import { fakeFetch } from './testSupport.js';
 
 const sentOk = () => ({ ok: true as const, detail: 'sent' });
 
