@@ -28,7 +28,7 @@ These limits are known. They are not bugs, but you must know them:
 - **Anyone on the network can see the Chatter version** at `/api/health`, with no login. The update helper needs it.
 - **Chatter asks GitHub once a day for the newest version.** It sends no machine data. To stop this, turn off **Check for updates on GitHub** in **Settings > Updates**.
 - **Chatter runs the FANUC FOCAS2 library as program code.** In **Settings > FANUC library**, upload only the files that you got from FANUC.
-- **Notifications send alert text out of the shop network.** A message has the machine name, the alert, and the value, and can have the Chatter address. It goes to Twilio, to the web address of a webhook channel, to Discord, to Telegram, or to your Apprise server, which sends it on to your services. Only an Admin can add a channel. See [Notifications](./guide/notifications.md).
+- **Notifications send alert text out of the shop network.** A message has the machine name, the alert, and the value, and can have the Chatter address. It goes to Twilio, to the web address of a webhook channel, to Discord, to Telegram, to an ntfy server, or to your Apprise server, which sends it on to your services. Only an Admin can add a channel. See [Notifications](./guide/notifications.md).
 
 ## Updates on the Pi card
 
@@ -42,7 +42,7 @@ Chatter itself cannot install an update. It only puts the update file and a requ
 `chatter.db` is the database file. With Docker, it is in the volume `chatterbox-data`. It holds:
 
 - The FTP passwords of the machines and the OPC UA passwords of Siemens machines, as plain text, because Chatter must send them to the machines.
-- The Twilio auth tokens, the webhook secrets, the Discord webhook addresses, the Telegram bot tokens, and the Apprise passwords of the notification channels, as plain text, because Chatter must send them to the service. Anyone with the file can send text messages with your Twilio account, can post to your Discord channel, and can send messages with your Telegram bot.
+- The Twilio auth tokens, the webhook secrets, the Discord webhook addresses, the Telegram bot tokens, the ntfy topics and access tokens, and the Apprise passwords of the notification channels, as plain text, because Chatter must send them to the service. Anyone with the file can send text messages with your Twilio account, can post to your Discord channel, can send messages with your Telegram bot, and can read and send to your ntfy topic.
 - The usernames and roles. Each password is kept only as a hash (a one-way code, so nobody can read the password back from it).
 - The logged-in browsers and the last 50 password tries, with their addresses. A login cookie is kept only as a hash, so the file cannot be used to log in.
 

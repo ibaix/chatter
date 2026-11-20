@@ -1,13 +1,14 @@
 # Notifications
 
 Chatter can send a message when a machine alert starts and when it ends.
-The message goes to a **channel**. There are five types of channel:
+The message goes to a **channel**. There are six types of channel:
 
 - **Twilio** sends a text message to the phones of the shop.
-- **Webhook** sends the message to a web address, for example Slack, ntfy, or Home Assistant.
+- **Webhook** sends the message to a web address, for example Slack or Home Assistant.
 - **Apprise** sends the message to an Apprise server. Apprise then sends it to Teams, Pushover, email, and many more services.
 - **Discord** sends the message to a channel of a Discord server. It can mention people or roles.
 - **Telegram** sends the message to a Telegram chat, with a bot of your own.
+- **ntfy** sends a push message to the ntfy app on your phones.
 
 You set up the channels in **Settings > Notifications**. Only an **Admin** can see this tab.
 To make the alerts themselves, see [Alerts](./alerts.md).
@@ -35,7 +36,7 @@ The **Message settings** panel is at the bottom of the tab.
 
 1. Click **Add channel**.
 2. Select the **Type**, and type a **Name**, for example "Shop phones".
-3. Fill in the boxes of the type. See [Text messages with Twilio](#text-messages-with-twilio), [Webhooks](#webhooks), [Apprise](#apprise), [Discord](#discord), or [Telegram](#telegram).
+3. Fill in the boxes of the type. See [Text messages with Twilio](#text-messages-with-twilio), [Webhooks](#webhooks), [Apprise](#apprise), [Discord](#discord), [Telegram](#telegram), or [ntfy](#ntfy-app).
 4. Under **Which alerts**, select:
    - **Level:** **Warning and up** sends each alert. **Critical only** sends only the critical alerts.
    - **Machines:** **All machines, also the machines that you add later** sends the alerts of each machine, now and later. **Pick machines** sends only the alerts of the machines that you select.
@@ -51,7 +52,7 @@ Each alert sends 2 messages: one when it starts, and one when it ends.
 - **Edit** opens the channel. Change it, then click **Save channel**.
 - To delete a channel, click **Edit**, then **Delete channel**, then **Delete the channel**. Chatter stops its waiting messages. Its sent and failed messages stay in the message list as **Deleted channel**, until Chatter removes them.
 
-After you save, Chatter never shows a secret again, such as the Twilio auth token, the Apprise password, the Discord webhook address, or the Telegram bot token. To keep the saved secret, leave its box empty.
+After you save, Chatter never shows a secret again, such as the Twilio auth token, the Apprise password, the Discord webhook address, the Telegram bot token, or the ntfy topic and access token. To keep the saved secret, leave its box empty.
 To change it, type the new one. To stop sending a webhook secret, select **Delete the saved secret**.
 
 ## Text messages with Twilio
@@ -103,9 +104,10 @@ If you type a **Secret (optional)**, Chatter sends it in the header `Authorizati
 
 Slack shows the `text` line.
 
-### ntfy
+### ntfy with a webhook
 
-[ntfy](https://ntfy.sh) sends push messages to the ntfy app on a phone. ntfy can show one field of the JSON, so add <code v-pre>?tpl=yes&amp;m={{.text}}</code> to the address of your topic:
+Use the [ntfy](#ntfy-app) channel type for new channels. A webhook channel that you made before for ntfy continues to work.
+ntfy can show one field of the JSON, so the address of the topic ends with <code v-pre>?tpl=yes&amp;m={{.text}}</code>:
 
 ```
 https://ntfy.sh/your-topic?tpl=yes&m={{.text}}
@@ -221,6 +223,34 @@ Chatter sends each message to a Telegram chat, with a bot of your own. The chat 
 
 The message has the same text as a text message.
 
+## ntfy app {#ntfy-app}
+
+[ntfy](https://ntfy.sh) sends push messages to the ntfy app on Android and iPhone. You can use the free public server `ntfy.sh`, or run your own ntfy server in the shop.
+
+1. Install the **ntfy** app on each phone.
+2. Select a **topic** name that other people cannot guess, for example `chatter-x7k2p9`. Use only letters, digits, `-` and `_`.
+3. In the ntfy app, subscribe to the topic. For your own server, type its address in the app too.
+4. In Chatter, add a channel of the type **ntfy**:
+   - **Topic:** the topic from step 2. Chatter never shows it again after you save.
+   - **Server (optional):** only for your own ntfy server, for example `http://ntfy.shop.local`. Do not put the topic in the address. Leave it empty for `ntfy.sh`.
+   - **Access token (optional):** only when the topic needs a login. In ntfy, make a token under **Account > Access tokens**.
+5. Click **Send test**.
+
+::: warning
+On `ntfy.sh`, a topic has no login. Each person that knows the topic name can read your alerts and send messages to it. Use a name that is hard to guess, or use an access token on a reserved topic or on your own server.
+:::
+
+Chatter gives each message a priority and an icon:
+
+| Message | Priority | Icon |
+| --- | --- | --- |
+| A critical alert starts | 5 (urgent, a long vibration) | 🚨 |
+| A warning alert starts, or an "And N more alerts" message | 4 (high) | ⚠️ |
+| An alert ends | 3 (default) | ✅ |
+| A test | 3 (default) | 🔔 |
+
+The title is `Chatter: ` and the machine name. When you tap the message, the phone opens the machine in Chatter. For this, set **Chatter address for links** in **Message settings**, and the phone must be on the shop network.
+
 ## The message list
 
 The **Messages** panel shows each message of the last 30 days, the newest first. Chatter keeps at most 1000 messages, so a busy shop sees fewer days. Select a channel in **Channel** to see only its messages.
@@ -255,6 +285,9 @@ The **Messages** panel shows each message of the last 30 days, the newest first.
 | **Failed:** The group is now a supergroup | Telegram gave the group a new chat ID. Type the new chat ID from the message in **Chat ID**. |
 | **Failed:** Telegram refused the message: ... | The text after the colon is the reason from Telegram. |
 | **Failed:** The bot cannot write to the chat | Send a message to the bot, or add the bot to the group or channel. For a channel, make the bot an admin. |
+| **Failed:** ntfy refused the access | The access token is wrong, or it cannot write to the topic. Make a new token in ntfy. |
+| **Failed:** ntfy answered 404 | The **Server** address is wrong. Do not put the topic in it. |
+| The ntfy app gets no message, but Chatter shows **Sent** | The app subscribes to another topic or another server. Check the topic name in the app. |
 | **Failed:** Chatter could not reach Apprise | Apprise API is not running, or the address is wrong. Chatter tries again for 24 hours. |
 | **Waiting:** Apprise did not answer in time | Apprise needs more than 60 seconds to send to your services. Look in the Apprise log for a slow service. Chatter tries again later. |
 | **Waiting:** Apprise answered 500 (or 502, 503, 429) | Apprise or one of its parts has a problem, or is busy. Look in the Apprise log. Chatter tries again for 24 hours. |
