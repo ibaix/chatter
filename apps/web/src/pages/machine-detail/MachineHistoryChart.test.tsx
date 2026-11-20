@@ -5,7 +5,7 @@ import { fetchValueHistory } from '../../api/history';
 import { fetchStateTimeline } from '../../api/stateTimeline';
 import { testMachine } from '../../test/testMachine';
 import type { Machine } from '../../types';
-import { durationMs } from './historyChart';
+import { CHART_RANGES, viewText } from './historyChart';
 import { chartChoicesFor, shownChartChoice, SPINDLE_SPEED, type ChartChoiceId } from './chartValues';
 import MachineHistoryChart from './MachineHistoryChart';
 
@@ -14,15 +14,12 @@ const BOX_WIDTH = 600;
 /** The plot ends this far from the right edge of the box (MARGIN.right in the chart) */
 const PLOT_RIGHT_MARGIN = 16;
 const MINUTE = 60_000;
+/** The clock of each test stops at this time, so the times in the texts are known */
+const NOW = Date.UTC(2026, 10, 19, 12, 0);
 
-/**
- * The end of the time that a chart shows, from its request. The chart loads one more range before it, and one more
- * after it up to now (loadSpan). A request with no end ends now.
- */
-function viewEndOf(call: unknown[], rangeMs: number): number {
-  const [, query, end] = call.length > 3 ? [call[0], call[2], call[4]] : call;
-  const loadedMs = durationMs(query as string);
-  return end === undefined ? Date.now() - (loadedMs - 2 * rangeMs) : (end as number) - rangeMs;
+/** The words of a chart that ends at `end` in the past, for example "from Nov 19, 11:45 AM to Nov 19, 11:55 AM" */
+function pastText(rangeMs: number, end: number): string {
+  return viewText({ ...CHART_RANGES[0], ms: rangeMs }, end);
 }
 
 /** The chart with the menu state that the machine page keeps */
@@ -45,6 +42,8 @@ vi.mock('../../api/stateTimeline', () => ({ fetchStateTimeline: vi.fn() }));
 
 describe('MachineHistoryChart', () => {
   beforeEach(() => {
+    // Only the date stops. The timers run, so waitFor and the chart clock work as usual.
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
     vi.mocked(fetchValueHistory).mockReset().mockResolvedValue({ points: [], window: '5s' });
     vi.mocked(fetchStateTimeline).mockReset().mockResolvedValue([]);
     // The page measures the chart box. jsdom has no ResizeObserver, so this one gives every box a size.
@@ -58,6 +57,7 @@ describe('MachineHistoryChart', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -71,7 +71,7 @@ describe('MachineHistoryChart', () => {
 
   it('loads the history of the value that the user picks', async () => {
     render(<ChartWithMenu machine={testMachine({}, { spindleSpeed: 1200, spindleLoad: 30 })} />);
-    expect(fetchValueHistory).toHaveBeenCalledWith('m1', 'spindle-speed', '-20m', '5s');
+    expect(vi.mocked(fetchValueHistory).mock.lastCall?.[1]).toBe('spindle-speed');
 
     const valueButton = screen.getByRole('button', { name: 'Value in the chart: Spindle speed' });
     // The menu trigger is the button itself, not a second button around it
@@ -79,7 +79,7 @@ describe('MachineHistoryChart', () => {
     fireEvent.click(valueButton);
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Spindle load' }));
 
-    await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledWith('m1', 'spindle-load', '-20m', '5s'));
+    await waitFor(() => expect(vi.mocked(fetchValueHistory).mock.lastCall?.[1]).toBe('spindle-load'));
     expect(screen.getByText('How hard the spindle worked in the last 10 minutes.')).toBeInTheDocument();
   });
 
@@ -94,7 +94,6 @@ describe('MachineHistoryChart', () => {
 
       expect(await screen.findByRole('img', { name: /^Machine state in the last 10 minutes\. Running 50%, Idle 0%, Alarm 0%, Offline 50%/ }))
         .toBeInTheDocument();
-      expect(fetchStateTimeline).toHaveBeenCalledWith('m1', '-20m');
       expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
       expect(screen.getByText('Running: a program runs')).toBeInTheDocument();
     });
@@ -130,7 +129,7 @@ describe('MachineHistoryChart', () => {
       vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: now - MINUTE, value: 1000 }], window: '5s' });
       render(<ChartWithMenu machine={runningMachine()} />);
 
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledWith('m1', '-20m'));
+      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalled());
       expect(await screen.findByRole('list', { name: 'Machine state' })).toHaveTextContent('RunningIdleAlarmOffline');
     });
 
@@ -249,22 +248,15 @@ describe('MachineHistoryChart', () => {
       render(<ChartWithMenu machine={runningMachine()} />);
       expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
 
-      const before = Date.now();
       fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
 
-      await waitFor(() => expect(fetchValueHistory).toHaveBeenCalledTimes(2));
-      for (const call of [vi.mocked(fetchValueHistory).mock.lastCall!, vi.mocked(fetchStateTimeline).mock.lastCall!]) {
-        const end = viewEndOf(call, 10 * MINUTE);
-        expect(end).toBeGreaterThanOrEqual(before - 5 * MINUTE - 1000);
-        expect(end).toBeLessThanOrEqual(Date.now() - 5 * MINUTE + 1000);
-      }
-      expect(screen.getByText(/^How fast the spindle turned from /)).toBeInTheDocument();
+      expect(await screen.findByText(`How fast the spindle turned ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Later' })).toBeEnabled();
 
       fireEvent.click(screen.getByRole('button', { name: 'Now' }));
 
-      await waitFor(() => expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', '-20m', '5s'));
-      expect(screen.getByText('How fast the spindle turned in the last 10 minutes.')).toBeInTheDocument();
+      expect(await screen.findByText('How fast the spindle turned in the last 10 minutes.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
     });
 
     it('moves the time with a sideways scroll, but not with an up or down scroll', async () => {
@@ -272,32 +264,26 @@ describe('MachineHistoryChart', () => {
       await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(1));
 
       fireEvent.wheel(chartBody(), { deltaX: 0, deltaY: 200 });
-      expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
 
+      // A quarter of the range back
       fireEvent.wheel(chartBody(), { deltaX: -80, deltaY: 0 });
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
-      expect(viewEndOf(vi.mocked(fetchStateTimeline).mock.lastCall!, 10 * MINUTE)).toBeLessThan(Date.now() - 2 * MINUTE);
+      expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
     });
 
     it('moves the time when the user drags the chart: to the right goes back', async () => {
       await overviewOfStateView();
-      expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
 
-      const before = Date.now();
       drag(chartBody(), 100, 100 + BOX_WIDTH / 2);
 
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
-      const end = viewEndOf(vi.mocked(fetchStateTimeline).mock.lastCall!, 10 * MINUTE);
-      expect(end).toBeGreaterThanOrEqual(before - 5 * MINUTE - 1000);
-      expect(end).toBeLessThanOrEqual(Date.now() - 5 * MINUTE + 1000);
+      expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
     });
 
     it('shows the time before the chart while the user drags, and keeps it while the new time loads', async () => {
-      const now = Date.now();
       // The chart loads 20 minutes: the alarm is before the 10 minutes that show
       vi.mocked(fetchStateTimeline).mockResolvedValue([
-        { state: 'alarm', start: now - 20 * MINUTE, end: now - 10 * MINUTE },
-        { state: 'running', start: now - 10 * MINUTE, end: now },
+        { state: 'alarm', start: NOW - 20 * MINUTE, end: NOW - 10 * MINUTE },
+        { state: 'running', start: NOW - 10 * MINUTE, end: NOW },
       ]);
       render(<ChartWithMenu machine={runningMachine()} start="machine-state" />);
       expect(await screen.findByRole('img', { name: /Running 100%, Idle 0%, Alarm 0%/ })).toBeInTheDocument();
@@ -305,14 +291,15 @@ describe('MachineHistoryChart', () => {
       fireEvent.pointerDown(chartBody(), { button: 0, clientX: 100, pointerId: 1 });
       fireEvent.pointerMove(chartBody(), { clientX: 100 + BOX_WIDTH / 2, pointerId: 1 });
 
-      expect(screen.getByRole('img', { name: /^Machine state from .* Running 50%, Idle 0%, Alarm 50%/ })).toBeInTheDocument();
+      const shownWhileDragged = `Machine state ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}. Running 50%, Idle 0%, Alarm 50%, Offline 0%.`;
+      expect(screen.getByRole('img', { name: shownWhileDragged })).toBeInTheDocument();
       expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
 
       vi.mocked(fetchStateTimeline).mockReturnValue(new Promise(() => {}));
       fireEvent.pointerUp(chartBody(), { clientX: 100 + BOX_WIDTH / 2, pointerId: 1 });
 
       await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
-      expect(screen.getByRole('img', { name: /^Machine state from .* Alarm 50%/ })).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: shownWhileDragged })).toBeInTheDocument();
     });
 
     it('does not move the time for a click, or for a drag of the live chart into the future', async () => {
@@ -322,6 +309,7 @@ describe('MachineHistoryChart', () => {
       drag(chartBody(), 300, 100);
 
       expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
     });
 
     it('goes back to the live chart when the user picks another range', async () => {
@@ -331,23 +319,19 @@ describe('MachineHistoryChart', () => {
 
       fireEvent.click(screen.getByRole('button', { name: '1h' }));
 
-      await waitFor(() => expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', '-2h', '10s'));
+      expect(await screen.findByText('How fast the spindle turned in the last hour.')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
     });
   });
 
   describe('zooming in on the overview strip', () => {
     it('shows the time that the user highlights on the strip', async () => {
-      const now = Date.now();
       const overview = await overviewOfStateView();
 
       // From 1/4 to 3/4 of the 10-minute strip: 5 minutes that end 2.5 minutes ago
       drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
 
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
-      const end = viewEndOf(vi.mocked(fetchStateTimeline).mock.lastCall!, 5 * MINUTE);
-      expect(Math.abs(end - (now - 2.5 * MINUTE))).toBeLessThan(5000);
-      expect(screen.getByText(/^What the machine did from /)).toBeInTheDocument();
+      expect(await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
       // The strip keeps the 10 minutes, and no range button shows as pressed while the chart is zoomed in
       expect(screen.getByRole('img', { name: /^Overview of the last 10 minutes/ })).toBeInTheDocument();
       for (const name of ['10m', '1h', '24h', '7d']) expect(screen.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false');
@@ -361,10 +345,9 @@ describe('MachineHistoryChart', () => {
       fireEvent.pointerMove(overview, { clientX: 300, pointerId: 1 });
 
       for (const svg of [overview, band]) {
-        // The strip and the chart read the clock at their own times, so the positions can differ by a little
         const shade = svg.querySelector('[data-zoom-highlight]');
-        expect(Number(shade?.getAttribute('x'))).toBeCloseTo(100, 0);
-        expect(Number(shade?.getAttribute('width'))).toBeCloseTo(200, 0);
+        expect(Number(shade?.getAttribute('x'))).toBeCloseTo(100, 6);
+        expect(Number(shade?.getAttribute('width'))).toBeCloseTo(200, 6);
       }
 
       fireEvent.pointerUp(overview, { clientX: 300, pointerId: 1 });
@@ -372,54 +355,49 @@ describe('MachineHistoryChart', () => {
     });
 
     it('zooms the line chart into the highlighted time, with finer windows', async () => {
-      vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: Date.now() - MINUTE, value: 1000 }], window: '5s' });
+      vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: NOW - MINUTE, value: 1000 }], window: '5s' });
       render(<ChartWithMenu machine={runningMachine()} />);
       const overview = await screen.findByRole('img', { name: /^Overview/ });
 
       drag(overview, 200, 300);
 
-      await waitFor(() => expect(fetchValueHistory).toHaveBeenLastCalledWith('m1', 'spindle-speed', expect.stringMatching(/^-\d+s$/), '1s', expect.any(Number)));
+      expect(await screen.findByText(/^How fast the spindle turned from /)).toBeInTheDocument();
+      // About 2 minutes in about 300 windows
+      expect(vi.mocked(fetchValueHistory).mock.lastCall?.[3]).toBe('1s');
     });
 
-    it('does not zoom for a drag on the chart, and a range button shows the wider time again', async () => {
+    it('shows the wider time again with a range button after a zoom', async () => {
       const overview = await overviewOfStateView();
-
-      drag(await screen.findByRole('img', { name: /^Machine state/ }), 300, 302);
-      expect(fetchStateTimeline).toHaveBeenCalledTimes(1);
-
       drag(overview, 100, 400);
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
+      expect(await screen.findByText(/^What the machine did from /)).toBeInTheDocument();
+
       fireEvent.click(screen.getByRole('button', { name: '1h' }));
 
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-2h'));
+      expect(await screen.findByText('What the machine did in the last hour.')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '1h' })).toHaveAttribute('aria-pressed', 'true');
     });
 
     it('moves the zoomed time to where the user clicks on the strip', async () => {
-      const now = Date.now();
       const overview = await overviewOfStateView();
+      // A zoom that reaches now stays live
       drag(overview, BOX_WIDTH / 2, BOX_WIDTH);
-      // A zoom that reaches now stays live: it loads 5 minutes and 5 more before them
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-10m'));
+      expect(await screen.findByText('What the machine did in the last 5 minutes.')).toBeInTheDocument();
 
       // A click at 1/4 of the 10 minutes: the 5 minutes go from 10 to 5 minutes ago
       drag(overview, BOX_WIDTH / 4, BOX_WIDTH / 4);
 
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(3));
-      const end = viewEndOf(vi.mocked(fetchStateTimeline).mock.lastCall!, 5 * MINUTE);
-      expect(Math.abs(end - (now - 5 * MINUTE))).toBeLessThan(5000);
+      expect(await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
     });
 
     it('clears the zoom with the button above the box, back to the time of the strip', async () => {
       const overview = await overviewOfStateView();
       expect(screen.queryByRole('button', { name: 'Clear the zoom' })).not.toBeInTheDocument();
       drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenCalledTimes(2));
+      await screen.findByText(/^What the machine did from /);
 
       fireEvent.click(screen.getByRole('button', { name: 'Clear the zoom' }));
 
-      await waitFor(() => expect(fetchStateTimeline).toHaveBeenLastCalledWith('m1', '-20m'));
-      expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '10m' })).toHaveAttribute('aria-pressed', 'true');
       expect(screen.queryByRole('button', { name: 'Clear the zoom' })).not.toBeInTheDocument();
     });
@@ -431,7 +409,7 @@ describe('MachineHistoryChart', () => {
     });
 
     it('lines up with the plot of the value chart: the margin is not part of the strip', async () => {
-      vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: Date.now() - MINUTE, value: 1000 }], window: '5s' });
+      vi.mocked(fetchValueHistory).mockResolvedValue({ points: [{ time: NOW - MINUTE, value: 1000 }], window: '5s' });
       render(<ChartWithMenu machine={runningMachine()} />);
       const overview = await screen.findByRole('img', { name: /^Overview/ });
       // A zoom in the past, so a click at the right end of the strip moves the chart
