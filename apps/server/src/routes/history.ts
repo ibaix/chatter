@@ -1,4 +1,4 @@
-import { historyWindowValue } from '@local-chatter/shared';
+import { autoHistoryWindow, historyWindowValue } from '@local-chatter/shared';
 import { Hono } from 'hono';
 import type { HardwarePoller } from '../polling/poller.js';
 import type { HistorySource } from '../recording/MetricsReader.js';
@@ -23,15 +23,6 @@ const DEFAULT_TIMELINE_RANGE = '-24h';
  * has fewer. With more, the timeline starts at the oldest period it read, and `more` is true (readTimelinePeriods).
  */
 const MAX_TIMELINE_PERIODS = 50_000;
-
-/** Without a window, use the smallest of these that keeps the reply within the point limit below */
-const AUTO_WINDOWS = ['10s', '30s', '1m', '5m', '15m', '1h', '6h', '1d'];
-const AUTO_WINDOW_MAX_POINTS = 1000;
-
-function autoWindow(rangeMs: number): string {
-  const fits = (window: string) => rangeMs / durationMs(window) <= AUTO_WINDOW_MAX_POINTS;
-  return AUTO_WINDOWS.find(fits) ?? AUTO_WINDOWS[AUTO_WINDOWS.length - 1];
-}
 
 /** Windows start at whole multiples of the window, so the points stay the same when the chart reloads */
 function alignedWindowStart(time: number, windowMs: number): number {
@@ -103,7 +94,7 @@ export function historyRoutes(poller: HardwarePoller, history: HistorySource, pe
       const query = c.req.valid('query');
       const range = query.range ?? DEFAULT_HISTORY_RANGE;
       const rangeMs = durationMs(range);
-      const window = query.window ?? autoWindow(rangeMs);
+      const window = query.window ?? autoHistoryWindow(rangeMs);
       const windowMs = durationMs(window);
       // The first window starts before the range (at a whole multiple of the window), so a reply can have one more point
       if (rangeMs / windowMs + 1 > MAX_POINTS) {
