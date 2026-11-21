@@ -88,6 +88,9 @@ npm run dup:new         # find code that your branch copied
 npm run dead            # find files, exports and packages that nothing uses
 ```
 
+To run all the checks for your branch and see one table, run `npm run quality`. Add `-- --coverage` to also list the changed lines that no test runs, or `-- --all` for the whole repo.
+The full output of each check is in `.quality/`. The AI review skills `/chatter-review-code` and `/chatter-review-testing` use the same table.
+
 ### Lint
 
 `npm run lint` checks all the code with ESLint. The config is `eslint.config.mjs`.
