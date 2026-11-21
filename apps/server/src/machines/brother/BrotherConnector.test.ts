@@ -674,3 +674,127 @@ describe('Brother command when the connection closes', () => {
     expect(status.errors.join('; ')).toContain('The connection closed before the machine answered');
   });
 });
+
+const MACRO_REPLY = 'RLOD    MCRNI1  00\r\nC100, 42.0000\r\n\r\n00%';
+
+/** A reply of PDSP with this tool in the spindle */
+function pdspWithTool(tool: number): string {
+  return `RLOD    PDSP    00\r\nX01,    0.000 ,     0,0,${tool},10,10,0,0,0,0,4,100,100, 0,0, 0\r\n\r\n03%`;
+}
+
+/** The machine state: each poll reads these */
+const STATE_COMMANDS = ['PANEL', 'MEM', 'ALARM', 'WKCNTR', 'PDSP', 'MCRNI1'];
+/** The tool table and the tool data */
+const TOOL_COMMANDS = ['ATCTL', 'TOLNI1'];
+
+/**
+ * A connected connector on a fake clock. Each reply takes `speed.msPerCommand` on that clock, and the test can change it.
+ * `sent` lists the commands of the last poll, and `replies` can change between polls.
+ */
+function machineThatTakes(msPerCommand: number) {
+  const speed = { msPerCommand };
+  const replies: Record<string, string> = { ...MOCK_RESPONSES, MCRNI1: MACRO_REPLY };
+  const sent: string[] = [];
+  const connector = newConnector({ id: 'b1', host: '127.0.0.1', macros: [{ location: 100, name: 'Count' }] });
+  Object.assign(connector, { socket: { destroy: () => {} }, connected: true });
+  vi.spyOn(connector, 'sendCommand').mockImplementation(async command => {
+    sent.push(command);
+    vi.setSystemTime(Date.now() + speed.msPerCommand);
+    if (!replies[command]) throw new Error(`No reply for ${command}`);
+    return connector.parseResponse(replies[command]);
+  });
+  const poll = async () => {
+    sent.length = 0;
+    return connector.poll();
+  };
+  return { connector, speed, replies, sent, poll };
+}
+
+describe('Brother tool table and tool data, read less often than the machine state', () => {
+  beforeEach(() => {
+    // Only the clock is fake: the replies come at once, but each one moves the clock
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-21T08:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reads the machine state and the tool table in the first poll', async () => {
+    const machine = machineThatTakes(100);
+
+    await machine.poll();
+
+    expect([...machine.sent].sort()).toEqual([...STATE_COMMANDS, ...TOOL_COMMANDS].sort());
+  });
+
+  it('reads the machine state, with the macros, in each later poll, but not the tool table', async () => {
+    const machine = machineThatTakes(100);
+    await machine.poll();
+
+    for (let i = 0; i < 3; i++) {
+      await machine.poll();
+      expect([...machine.sent].sort()).toEqual([...STATE_COMMANDS].sort());
+    }
+  });
+
+  it('keeps the tool table between two reads, so it stays on the screen and in the history', async () => {
+    const machine = machineThatTakes(100);
+    await machine.poll();
+
+    const status = await machine.poll();
+
+    expect(status.data.toolTable?.[1]).toMatchObject({ toolNum: 1, length: 1.5, name: 'ENDMILL' });
+    expect(status.data.hasPocketInfo).toBe(true);
+    expect(machine.connector.getDataSnapshot().custom).toMatchObject({ toolTable: { 1: { toolNum: 1, length: 1.5 } } });
+  });
+
+  it('reads the tool table again after 60 seconds', async () => {
+    const machine = machineThatTakes(100);
+    await machine.poll();
+    vi.setSystemTime(Date.now() + 59_000);
+    await machine.poll();
+    expect(machine.sent).not.toContain('ATCTL');
+
+    vi.setSystemTime(Date.now() + 1_000);
+    await machine.poll();
+
+    expect(machine.sent).toEqual(expect.arrayContaining(TOOL_COMMANDS));
+  });
+
+  it('reads the tool table again at the next poll when the tool in the spindle changes', async () => {
+    const machine = machineThatTakes(100);
+    await machine.poll();
+    machine.replies.PDSP = pdspWithTool(7);
+    await machine.poll();
+
+    await machine.poll();
+
+    expect(machine.sent).toEqual(expect.arrayContaining(TOOL_COMMANDS));
+  });
+
+  it('reads the tool table again after the machine connects again', async () => {
+    const machine = machineThatTakes(100);
+    await machine.poll();
+    vi.spyOn(machine.connector, 'connect').mockImplementation(async () => {
+      Object.assign(machine.connector, { socket: { destroy: () => {} }, connected: true });
+    });
+    machine.connector.disconnect();
+
+    await machine.poll();
+
+    expect(machine.sent).toEqual(expect.arrayContaining(TOOL_COMMANDS));
+  });
+
+  it('finds the control type only once', async () => {
+    const machine = machineThatTakes(100);
+    await machine.poll();
+    vi.setSystemTime(Date.now() + 60_000);
+
+    await machine.poll();
+
+    expect(machine.sent.filter(command => command === 'ATCTL')).toHaveLength(1);
+    expect(machine.sent).not.toContain('ATCTLD');
+  });
+});

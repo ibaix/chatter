@@ -147,6 +147,14 @@ const MAX_TOOL_NUMBER = 99;
 /** The position of each value in a row of the tool data reply */
 const TOOL_DATA_COLUMN = { length: 0, lengthWear: 1, diameter: 2, diameterWear: 3, name: 8 } as const;
 
+/**
+ * The tool table (ATC) and the tool data (TOLN) change only when an operator loads or measures a tool.
+ * So a poll reads them only at the first poll after a connect, when the tool in the spindle changes, and else
+ * every 60 seconds. At the 2 s poll interval, that takes 2 of the 8 commands out of 29 polls in 30. A tool that
+ * is loaded or measured shows within 60 seconds, or at once when it goes into the spindle.
+ */
+export const TOOL_REFRESH_MS = 60_000;
+
 /** A valid ATC reply has M## keys */
 function isValidAtcResponse(response: ParsedResponse): boolean {
   return Object.keys(response).some(key => /^M\d{2}$/.test(key));
@@ -173,6 +181,8 @@ export class BrotherConnector extends BaseMachineConnector {
   private macroCommand: string;
   private dataItems: DataItem[];
   private readonly timings: PollTimingRecorder;
+  /** When the poll read the tool table and the tool data. Null: read them at the next poll. */
+  private toolsReadAt: number | null = null;
 
   constructor(config: BrotherMachineConfig) {
     super(config);
@@ -307,22 +317,25 @@ export class BrotherConnector extends BaseMachineConnector {
     return result;
   }
 
-  /** Find which ATC command this control supports. With neither, the tool table has no pots. */
-  private async detectControlType(): Promise<void> {
-    if (this.atcCommand !== null) return;
-
+  /**
+   * Find which ATC command this control supports, and give its reply, which is the first tool table.
+   * With neither, the tool table has no pots, and the reply is null.
+   */
+  private async detectControlType(): Promise<ParsedResponse | null> {
     for (const { command, controlType } of ATC_COMMANDS) {
       try {
-        if (isValidAtcResponse(await this.send(command))) {
+        const response = await this.send(command);
+        if (isValidAtcResponse(response)) {
           this.atcCommand = command;
           this.controlType = controlType;
-          return;
+          return response;
         }
       } catch (err) {
         // A control that does not know this command; try the next one. With no reply or no connection, stop.
         if (err instanceof NoReplyError || !this.connected) throw err;
       }
     }
+    return null;
   }
 
   /** The tool in each pot, from the ATC reply */
@@ -373,6 +386,8 @@ export class BrotherConnector extends BaseMachineConnector {
   private async pollMachine(): Promise<void> {
     if (!this.socket || !this.connected) {
       if (!(await this.ensureConnected())) return;
+      // The tools can have changed while the machine was not connected
+      this.toolsReadAt = null;
     }
 
     this.prevData = { ...this.data };
@@ -381,6 +396,10 @@ export class BrotherConnector extends BaseMachineConnector {
     if (!responses) return;
 
     this.saveDataItems(responses);
+    if (this.prevData.toolNumber !== undefined && this.data.toolNumber !== this.prevData.toolNumber) {
+      // A tool change: show the offsets of the new tool at the next poll
+      this.toolsReadAt = null;
+    }
     if (this.atcCommand && responses[this.atcCommand]) {
       this.updateToolTable(responses[this.atcCommand]);
     }
@@ -397,13 +416,15 @@ export class BrotherConnector extends BaseMachineConnector {
     return this.timings.time(command, () => this.sendCommand(command));
   }
 
-  /** Find the control type the first time, then send the poll commands. Gives null when a command fails. */
+  /** Send the poll commands, and get the replies by command. Gives null when a command fails. */
   private async readMachine(): Promise<Record<string, ParsedResponse> | null> {
     try {
-      if (this.controlType === null) {
-        await this.detectControlType();
+      const responses: Record<string, ParsedResponse> = {};
+      for (const command of new Set(this.dataItems.map(([, command]) => command))) {
+        responses[command] = await this.send(command);
       }
-      return await this.sendPollCommands();
+      if (this.toolsAreDue()) await this.readTools(responses);
+      return responses;
     } catch (err) {
       if (err instanceof NoReplyError) {
         // The message tells the cause and the fix, so it needs no "Poll failed" in front. sendCommand disconnected.
@@ -415,18 +436,16 @@ export class BrotherConnector extends BaseMachineConnector {
     }
   }
 
-  /** Send each command once, and get the replies by command */
-  private async sendPollCommands(): Promise<Record<string, ParsedResponse>> {
-    const commands = [...new Set(this.dataItems.map(([, command]) => command)), this.toolDataCommand];
-    if (this.atcCommand) {
-      commands.push(this.atcCommand);
-    }
+  private toolsAreDue(): boolean {
+    return this.toolsReadAt === null || Date.now() - this.toolsReadAt >= TOOL_REFRESH_MS;
+  }
 
-    const responses: Record<string, ParsedResponse> = {};
-    for (const command of commands) {
-      responses[command] = await this.send(command);
-    }
-    return responses;
+  /** Read the tool table and the tool data. The first time, find the control type, which also gives the tool table. */
+  private async readTools(responses: Record<string, ParsedResponse>): Promise<void> {
+    const atcResponse = this.atcCommand ? await this.send(this.atcCommand) : await this.detectControlType();
+    if (this.atcCommand && atcResponse) responses[this.atcCommand] = atcResponse;
+    responses[this.toolDataCommand] = await this.send(this.toolDataCommand);
+    this.toolsReadAt = Date.now();
   }
 
   private saveDataItems(responses: Record<string, ParsedResponse>): void {
