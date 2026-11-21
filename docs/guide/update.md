@@ -18,11 +18,13 @@ You do not need to back up first. The update makes a backup for you. If the new 
    - **The Pi has no internet:** on a different computer, open the newest release on the GitHub **Releases** page. Download `chatter-update-<version>-armv7.tar`. In Chatter, click **Upload update file**, and pick that file.
 
    ![Settings, Updates on the Pi card: the installed version, the newest version, and the Download and Upload buttons](../images/chatter-updates-pi.png)
-3. Click **Check the update file**. Chatter makes sure that the file is a real Chatter update, and that it fits this Pi.
+3. Click **Check the update file**. Chatter makes sure that the file is a real Chatter update, and that it fits this Pi. On a Pi, the check can take up to about 10 minutes. The page shows the time since the start, and the last sign of life of the update helper. A card from a newer card image also shows the step that the Pi does now.
 4. Click **Install version X**. Then click **Install** in the box that opens.
 
    ![Update status: version 1.1.0 passed the check, with the Install button](../images/chatter-updates-pi-ready.png)
-5. Wait some minutes. Chatter stops while it updates. During that time, it does not record machine data, and file transfers stop. When Chatter is back, the page shows the result.
+5. Wait some minutes. On a Pi, the install can take up to about 10 minutes. Chatter stops while it updates. During that time, it does not record machine data, and file transfers stop. The page shows **Chatter restarts…** and the minutes since the start. When Chatter is back, the page shows the result.
+
+   If Chatter does not come back in 20 minutes, the page tells you what to do. Make sure that the Pi has power and a network connection. To see what the update helper did, connect to the Pi with SSH and run `journalctl -u chatter-update`.
 :::::
 
 ::::: details Update on a computer with Docker
