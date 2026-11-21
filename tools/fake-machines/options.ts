@@ -11,6 +11,8 @@ export interface CliOptions {
   lan: boolean;
   /** How long the Brother and Haas controls answer slowly after Chatter connects. 0 turns it off. */
   slowStartSeconds: number;
+  /** How long each answer of the Brother and Haas controls takes after the slow start, like a busy control. 0 is at once. */
+  replyDelaySeconds: number;
 }
 
 export function readOptions(args: string[]): CliOptions {
@@ -25,11 +27,14 @@ export function readOptions(args: string[]): CliOptions {
   if (!Number.isFinite(speed) || speed <= 0) throw new Error('--speed must be a number above 0');
   const slowStartSeconds = Number(valueAfter('--slow-start') ?? DEFAULT_SLOW_START_SECONDS);
   if (!Number.isFinite(slowStartSeconds) || slowStartSeconds < 0) throw new Error('--slow-start must be 0 or more seconds');
+  const replyDelaySeconds = Number(valueAfter('--reply-delay') ?? 0);
+  if (!Number.isFinite(replyDelaySeconds) || replyDelaySeconds < 0) throw new Error('--reply-delay must be 0 or more seconds');
   return {
     speed,
     add: args.includes('--add'),
     api: valueAfter('--api') ?? DEFAULT_API,
     lan: args.includes('--lan'),
     slowStartSeconds,
+    replyDelaySeconds,
   };
 }

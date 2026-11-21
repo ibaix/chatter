@@ -25,13 +25,15 @@ export interface SlowStart {
   forMs: number;
   /** How long each answer takes while it is slow */
   replyDelayMs: number;
+  /** How long each answer takes after the slow time, for a control that is always slow. None or 0: at once. */
+  replyDelayAfterMs?: number;
 }
 
 /** About 8 answers in the first poll of a Brother, so its first poll takes about 6 seconds */
 const SLOW_REPLY_MS = 700;
 
-export function slowStartOf(seconds: number): SlowStart {
-  return { forMs: seconds * 1000, replyDelayMs: SLOW_REPLY_MS };
+export function slowStartOf(seconds: number, replyDelaySeconds = 0): SlowStart {
+  return { forMs: seconds * 1000, replyDelayMs: SLOW_REPLY_MS, replyDelayAfterMs: replyDelaySeconds * 1000 };
 }
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -52,7 +54,7 @@ export function startRequestReplyServer(
     // Each reply waits for the one before it, so the replies keep their order
     let replyQueue = Promise.resolve();
     const answer = (message: string) => {
-      const delayMs = Date.now() < slowUntil ? slowStart.replyDelayMs : 0;
+      const delayMs = Date.now() < slowUntil ? slowStart.replyDelayMs : slowStart.replyDelayAfterMs ?? 0;
       replyQueue = replyQueue
         .then(() => wait(delayMs))
         // The reply is made at the time it is sent, so it has the newest machine state

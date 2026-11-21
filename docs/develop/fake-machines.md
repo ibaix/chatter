@@ -38,6 +38,7 @@ Options:
 - `--api http://host:3001` points `--add` at a different Chatter server.
 - `--lan` lets other devices on your local network reach the machines (see [On the local network](#on-the-local-network)).
 - `--slow-start 20` makes the Brother and Haas machines answer slowly for 20 seconds after Chatter connects (default 10). Each answer then takes 0.7 seconds, like a real control. The first poll has about 8 answers, so Chatter shows **Connecting** for about 6 seconds. `--slow-start 0` makes them answer at once. The MTConnect machines and the Haas data stream are never slow.
+- `--reply-delay 1.5` makes the Brother and Haas machines take 1.5 seconds for each answer after the slow start, like a busy control (default 0). Use it to see how Chatter polls a slow machine.
 
 ## On the local network
 

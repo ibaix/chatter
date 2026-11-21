@@ -57,6 +57,17 @@ describe('startRequestReplyServer with a slow start', () => {
     expect(reply.atMs).toBeLessThan(800);
   });
 
+  it('answers each message after the reply delay when the slow time is over, like a busy control', async () => {
+    const port = await startServer({ forMs: 0, replyDelayMs: 1000, replyDelayAfterMs: 100 });
+
+    const replies = await talk(port, [{ text: 'mem', afterMs: 0 }, { text: 'panel', afterMs: 0 }]);
+
+    expect(replies.map(reply => reply.text)).toEqual(['MEM', 'PANEL']);
+    expect(replies[0].atMs).toBeGreaterThanOrEqual(90);
+    expect(replies[0].atMs).toBeLessThan(600);
+    expect(replies[1].atMs).toBeGreaterThanOrEqual(190);
+  });
+
   it('answers at once with no slow start', async () => {
     const port = await startServer({ forMs: 0, replyDelayMs: 1000 });
 
