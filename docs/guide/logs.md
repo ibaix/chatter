@@ -13,8 +13,10 @@ docker logs --since 1h chatterbox    # the last hour
 docker logs -f chatterbox            # follow it: new lines come as they are written
 ```
 
+With no command line, an Admin can download the log and see it live in **Settings > Diagnostics** (see [Diagnostics](./diagnostics.md#server-log)).
+
 On the Pi card, first run `cd /opt/chatter`, and put `sudo` before `docker` (see [Chatter on the Pi](../install/raspberry-pi.md#chatter-on-the-pi)).
-The update helper of the Pi writes its own log: `sudo journalctl -u chatter-update`.
+The update helper of the Pi writes its own log: `sudo journalctl -u chatter-update`. With a new card image, it also writes `/opt/chatter/update/helper.log`, which **Settings > Diagnostics** shows.
 
 When you run Chatter from source (`npm run dev`), the log is in the terminal.
 

@@ -25,7 +25,7 @@ These limits are known. They are not bugs, but you must know them:
 - **A login lasts 1 year.** Log out stops the login of that browser, also a copy of its cookie. To stop your other logins, use **Log out all other browsers** in **Settings > Your account**, or change your password. To log out a different user, an Admin sets a new password for that user.
 - **Give each person their own account, with the smallest role that they need.** A Viewer can only look, and change their own password. An Operator can also send and delete files. An Admin can do everything.
 - **The first visit sets up the first Admin.** Until an Admin exists, the first person who opens Chatter can make the Admin account. So set it up at once after you install.
-- **Anyone on the network can see the Chatter version** at `/api/health`, with no login. The update helper needs it.
+- **Anyone on the network can see the Chatter version** at `/api/health`, with no login. The update helper needs it. It also gives a random name of the server process, which changes at each start. The network scan uses it to tell this Chatter from another one.
 - **Chatter asks GitHub once a day for the newest version.** It sends no machine data. To stop this, turn off **Check for updates on GitHub** in **Settings > Updates**.
 - **Chatter runs the FANUC FOCAS2 library as program code.** In **Settings > FANUC library**, upload only the files that you got from FANUC.
 - **Notifications send alert text out of the shop network.** A message has the machine name, the alert, and the value, and can have the Chatter address. It goes to Twilio, to the web address of a webhook channel, to Discord, to Telegram, to an ntfy server, or to your Apprise server, which sends it on to your services. Only an Admin can add a channel. See [Notifications](./guide/notifications.md).
@@ -36,6 +36,19 @@ Chatter itself cannot install an update. It only puts the update file and a requ
 
 - The helper installs only a file that is signed with the Chatter release key, and only a newer version. So a bad download or a bad upload cannot install.
 - The helper does not trust anything that Chatter says or puts in the folder. So an attacker who breaks into Chatter cannot use the helper to take control of the Pi.
+- A newer helper also accepts the request `reboot`, and restarts the Pi at most once in 15 minutes. So an attacker who breaks into Chatter can restart the Pi, but cannot keep it down.
+- A newer helper writes `network.json` (the addresses of the Pi, the gateway, and if SSH is on) and `helper.log` for **Settings > Diagnostics**. It writes each value only when the value has the expected shape.
+
+## Diagnostics
+
+Only an Admin can use **Settings > Diagnostics** and the routes behind it: `/api/logs`, `/api/logs/stream`, `/api/logs/debug`, `/api/support-bundle`, `/api/system/facts`, `/api/system/restart-chatter`, and `/api/system/restart-pi`.
+
+- **The log hides secrets.** Before Chatter writes a line, it hides each value with a name such as password, token, secret, authorization, API key, or cookie, the user and password in an address, secret values in the query of an address, and the tokens in Telegram, Discord and Slack addresses. The log in memory, the log file, the log download, the live log, and the support bundle get only the hidden lines.
+- **The support bundle has no secrets.** The machine settings lose each password field: they tell only if a password is saved. The notification channels have their type, name, and routing only: no address, topic, token, or phone number. The messages have their status and error, not their text.
+- **The connection test uses only the saved address and ports of the machine.** The request has no address, so nobody can use it to reach another computer. Chatter allows one test of a machine at a time, and one in each 10 seconds. The texts are fixed: no text from the machine is shown. The test does not use ping.
+- **The restarts are logged with the user name.** Restart Chatter ends the process, and Docker starts it again. Restart the Pi only writes the request `reboot` into the update inbox. The helper checks it as strictly as an update request (see below), restarts the Pi only when it does not check or install, and at most once in 15 minutes.
+- **The live log has limits**, so a forgotten browser tab cannot fill the memory of the Pi: at most 3 live logs, and 200 waiting lines for each. A slow browser loses lines, and Chatter tells how many.
+- **The log file** is in the data volume, next to `chatter.db` (`logs/chatter.log`, at most 2 files of 1 MB).
 
 ## Keep `chatter.db` private
 

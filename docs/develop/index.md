@@ -40,6 +40,12 @@ If you start `docker-compose.dev.yml` yourself, run `mkdir -p apps/server/data/a
 On Linux, set `ALERT_HOST=0.0.0.0` in `apps/server/.env`, because Docker cannot reach `127.0.0.1` of the computer. Then use a firewall rule, so that other computers cannot reach port 3002 (it has no login).
 
 To test without real machines, run the fake machines in another terminal: `npm run fake-machines` (see [Fake machines](./fake-machines.md)).
+
+::: warning A dev server takes the connection of a real machine
+A Brother control serves only one connection. If your dev server polls a real machine of the shop, it takes that connection, and the Chatter of the shop shows the machine as offline.
+Use the fake machines, or a copy of the database with no real machines. Stop the dev server when you are done.
+**Find machines** in the Chatter of the shop shows each other Chatter on the network (see [Diagnostics](../guide/diagnostics.md#another-chatter-on-the-network)).
+:::
 To test Chatter on a Pi with the fake machines, use `npm run fake-machines -- --lan`. Then the Pi can find them on your local network. Their FTP servers take any password, so read [On the local network](./fake-machines.md#on-the-local-network) first.
 
 For FANUC machines, see [FANUC machines](../guide/fanuc.md).
@@ -67,6 +73,7 @@ To keep them, copy `apps/server/.env.example` to `apps/server/.env`.
 | `ALERT_RULES_DIR` | `data/alert-rules` (next to the database) | The folder where the server writes the vmalert rules file. vmalert must read the same folder. |
 | `VMALERT_URL` | `http://localhost:8880` | Where the server tells vmalert to read the rules again |
 | `TRUST_PROXY` | not set | The reverse proxy addresses to trust (see [HTTPS and proxy](../guide/https.md)) |
+| `LOG_FILE` | on | `off` keeps the log only in memory and in the console, not in `logs/chatter.log` next to the database (see [Diagnostics](../guide/diagnostics.md#server-log)) |
 | `TWILIO_API_URL` | `https://api.twilio.com` | For development only: the address of a fake Twilio (see [Fake notifications](./fake-machines.md#fake-notifications)). Chatter sends the auth token there, so it takes only `https://`, or `http://` on this computer (`127.0.0.1`, `localhost`) |
 
 The Docker image sets `CHATTER_VERSION`, the version that the app shows.
