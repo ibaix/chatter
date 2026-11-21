@@ -117,6 +117,15 @@ export const uploadListQuery = z.object({
   limit: wholeNumberText('limit').optional(),
 });
 
+/** A row id in the address, as in /uploads/42/events */
+const rowId = (name: string) => z.string().regex(/^[1-9]\d{0,15}$/, `The ${name} must be a whole number`).transform(Number);
+
+/** The machine, and one uploaded file of it */
+export const uploadFileParams = z.object({ id: z.string(), fileId: rowId('file id') });
+
+/** The machine, and one upload to it */
+export const uploadEventParams = z.object({ id: z.string(), eventId: rowId('upload id') });
+
 /** The machine, and the value whose history to read */
 export const historyParams = z.object({
   id: z.string(),
@@ -244,9 +253,7 @@ export const changeRoleSchema = z.object({ role: roleSchema }, NOT_AN_OBJECT);
 export const setPasswordSchema = z.object({ password: passwordSchema }, NOT_AN_OBJECT);
 
 /** The user in the address, as in /settings/users/12 */
-export const userIdParam = z.object({
-  id: z.string().regex(/^[1-9]\d{0,15}$/, 'The user id must be a whole number').transform(Number),
-});
+export const userIdParam = z.object({ id: rowId('user id') });
 
 /** The switches in Settings > Updates */
 export const updateSettingsSchema = z.object({

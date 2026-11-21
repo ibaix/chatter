@@ -930,7 +930,14 @@ describe('API Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual(mockEvents);
-      expect(getUploadEvents).toHaveBeenCalledWith('42');
+      expect(getUploadEvents).toHaveBeenCalledWith('machine1', 42);
+    });
+
+    it('returns 400 when the file id is not a whole number', async () => {
+      const res = await call('GET', '/api/machine/machine1/uploads/abc/events');
+
+      expect(res.status).toBe(400);
+      expect(getUploadEvents).not.toHaveBeenCalled();
     });
   });
 
@@ -947,6 +954,14 @@ describe('API Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual(mockEvent);
+      expect(getUploadEventById).toHaveBeenCalledWith('machine1', 1);
+    });
+
+    it('returns 400 when the event id is not a whole number', async () => {
+      const res = await call('GET', '/api/machine/machine1/uploads/events/1;DROP');
+
+      expect(res.status).toBe(400);
+      expect(getUploadEventById).not.toHaveBeenCalled();
     });
 
     it('returns 404 when event not found', async () => {

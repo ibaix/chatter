@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { getUploadEventById, getUploadEvents, getUploadFiles } from '../storage/database.js';
-import { checkedQuery } from './checks.js';
+import { checkedParam, checkedQuery } from './checks.js';
 import { notFound } from './responses.js';
-import { uploadListQuery } from './schemas.js';
+import { uploadEventParams, uploadFileParams, uploadListQuery } from './schemas.js';
 
 const DEFAULT_FILE_LIMIT = 50;
 
@@ -16,13 +16,15 @@ export function uploadHistoryRoutes() {
     })
 
     // Each time one file was sent
-    .get('/machine/:id/uploads/:fileId/events', async c => {
-      return c.json(await getUploadEvents(c.req.param('fileId')));
+    .get('/machine/:id/uploads/:fileId/events', checkedParam(uploadFileParams), async c => {
+      const { id, fileId } = c.req.valid('param');
+      return c.json(await getUploadEvents(id, fileId));
     })
 
     // One send, with the file content
-    .get('/machine/:id/uploads/events/:eventId', async c => {
-      const event = await getUploadEventById(c.req.param('eventId'));
+    .get('/machine/:id/uploads/events/:eventId', checkedParam(uploadEventParams), async c => {
+      const { id, eventId } = c.req.valid('param');
+      const event = await getUploadEventById(id, eventId);
       return event ? c.json(event) : notFound(c, 'Upload event');
     });
 }
