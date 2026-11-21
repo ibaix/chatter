@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import type { MachineAlert } from '../../api/alerts';
 import { Panel } from '../../components/ui/Panel';
 import { ShowMoreFooter } from '../../components/ui/ShowMoreFooter';
@@ -6,12 +7,13 @@ import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table
 import { useShownItems } from '../../hooks/useShownItems';
 import { formatDateTime } from '../../utils/formatters';
 import { alertText, alertTone, splitFiring } from './alertList';
+import { SETTINGS_SECTION_IDS } from './SettingsTab';
 import { useMachineAlerts } from './useMachineAlerts';
 
 /** The list shows this many past alerts at first, and this many more for each click. The firing alerts always show. */
 export const PAST_ALERTS_PAGE_SIZE = 10;
 
-/** The alerts of the machine's alert rules (the Alert rules tab), in the last week */
+/** The alerts of the machine's alert rules (Settings › Alert rules), in the last week */
 export function AlertsPanel({ machineId }: { machineId: string }) {
   const { alerts, loaded, failed } = useMachineAlerts(machineId);
   const { firing, past } = splitFiring(alerts);
@@ -25,7 +27,10 @@ export function AlertsPanel({ machineId }: { machineId: string }) {
     >
       {failed && <p className="m-0 px-5 py-4 text-alarm-soft">Could not load the alerts. Chatter tries again in 30 seconds.</p>}
       {loaded && !failed && alerts.length === 0 && (
-        <p className="m-0 px-5 py-4 text-zinc-300">No alerts in the last 7 days. Set the rules in the Alert rules tab below.</p>
+        <p className="m-0 px-5 py-4 text-zinc-300">
+          No alerts in the last 7 days. Set the rules in{' '}
+          <Link to={`?tab=settings#${SETTINGS_SECTION_IDS.alertRules}`} className="font-semibold text-primary-text">Settings › Alert rules</Link>.
+        </p>
       )}
       {alerts.length > 0 && (
         <>

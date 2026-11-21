@@ -1,8 +1,8 @@
-import type { Role } from '@local-chatter/shared';
+import type { AlertRule, Role } from '@local-chatter/shared';
 import { Dialog } from '@toolpath/ui';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchMachineAlerts } from '../../api/alerts';
 import { fetchAlertRules } from '../../api/alertRules';
 import { fetchFileTree, fetchUploadFiles } from '../../api/machineFiles';
@@ -56,6 +56,10 @@ const SENT_FILES = [
   { id: 1, file_name: 'O1000.nc', created_at: '2026-11-19T09:00:00.000Z', updated_at: '2026-11-19T09:00:00.000Z', event_count: 1, last_path: '/' },
   { id: 2, file_name: 'O2000.nc', created_at: '2026-11-19T10:00:00.000Z', updated_at: '2026-11-19T10:00:00.000Z', event_count: 2, last_path: '/' },
 ];
+
+const OFFLINE_RULE: AlertRule = {
+  id: 'r1', kind: 'simple', enabled: true, subject: 'not-connected', check: 'above', limit: 0, forMinutes: 10, severity: 'warning',
+};
 
 const tabNames = () => screen.getAllByRole('tab').map(tab => tab.textContent);
 const openPanel = () => screen.getByRole('tabpanel');
@@ -176,6 +180,70 @@ describe('MachineDetailPage', () => {
 
       expect(viewSwitch()).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Send files' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('the Settings tab', () => {
+    const toolMachine = () => testMachine({}, { toolTable: { 1: { toolNum: 1 }, 2: { toolNum: 2 } } });
+
+    it('is the last tab, after the tool table, for each role', () => {
+      for (const role of ['admin', 'operator', 'viewer'] as const) {
+        renderPage({ role, machine: toolMachine() });
+        expect(tabNames()).toEqual(['Dashboard', 'Report', 'Files', 'Tool table2', 'Settings']);
+        cleanup();
+      }
+    });
+
+    it('shows an admin the machine settings and the alert rules, with a menu to jump to each', async () => {
+      vi.mocked(fetchAlertRules).mockResolvedValue([OFFLINE_RULE]);
+      renderPage();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+
+      const machineSection = screen.getByRole('region', { name: 'Machine' });
+      expect(within(machineSection).getByRole('button', { name: 'Save changes' })).toBeInTheDocument();
+      const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
+      expect(await within(rulesSection).findByText(/Click a word in a rule to change it/)).toBeInTheDocument();
+      const menu = screen.getByRole('navigation', { name: 'Settings sections' });
+      expect(within(menu).getByRole('link', { name: 'Machine' })).toHaveAttribute('href', `#${machineSection.id}`);
+      expect(within(menu).getByRole('link', { name: 'Alert rules 1' })).toHaveAttribute('href', `#${rulesSection.id}`);
+    });
+
+    it('shows a viewer only the alert rules, and they cannot change them', async () => {
+      renderPage({ role: 'viewer' });
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+
+      const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
+      expect(await within(rulesSection).findByText(/Only an admin can change them/)).toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: 'Machine' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('navigation', { name: 'Settings sections' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('the link from the alerts to the rules', () => {
+    const scrolledTo: Element[] = [];
+    beforeEach(() => {
+      scrolledTo.length = 0;
+      // jsdom does not scroll
+      Element.prototype.scrollIntoView = function scrollIntoView(this: Element) {
+        scrolledTo.push(this);
+      };
+    });
+    afterEach(() => {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    });
+
+    it('opens Settings at the alert rules', async () => {
+      renderPage();
+
+      fireEvent.click(await screen.findByRole('link', { name: 'Settings › Alert rules' }));
+
+      expect(screen.getByRole('tab', { name: 'Settings' })).toHaveAttribute('aria-selected', 'true');
+      const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
+      expect(shownAddress).toBe(`/machine/m1?tab=settings#${rulesSection.id}`);
+      await waitFor(() => expect(scrolledTo).toContain(rulesSection));
     });
   });
 });

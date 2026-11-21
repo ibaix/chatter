@@ -1,26 +1,24 @@
 import type { ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useCan } from '../../components/CurrentUser';
 import { tabPanelProps } from '../../components/ui/tabPanel';
 import { UnderlineTabs, type TabItem } from '../../components/ui/UnderlineTabs';
 import type { Machine, MachineUpdate, ToolTable } from '../../types';
-import { AlertRulesTab } from './AlertRulesTab';
 import { FilesSection } from './FilesSection';
-import { MachineSettingsTab } from './MachineSettingsTab';
 import { ReportPanel } from './ReportPanel';
+import { SettingsTab } from './SettingsTab';
 import { ToolTableTab } from './ToolTableTab';
 import { useAlertRules } from './useAlertRules';
 import { useMachineFiles } from './useMachineFiles';
 import { useUploadHistory } from './useUploadHistory';
 import { useUploadMessages } from './useUploadMessages';
 
-type SectionId = 'dashboard' | 'report' | 'files' | 'tools' | 'alerts' | 'settings';
+type SectionId = 'dashboard' | 'report' | 'files' | 'tools' | 'settings';
 
 const ID_PREFIX = 'machine-sections';
 /** The address keeps the open tab (for example /machine/m1?tab=report), so a reload or a link opens the same tab */
 const TAB_PARAM = 'tab';
 /** The tabs that hold a list or a form. They share one card. Dashboard and Report hold cards of their own. */
-const CARD_TABS: readonly SectionId[] = ['files', 'tools', 'alerts', 'settings'];
+const CARD_TABS: readonly SectionId[] = ['files', 'tools', 'settings'];
 
 /** Brother and Haas machines send their tool table. Only Brother tells which pocket holds each tool. */
 function toolTableOf(machine: Machine): { toolTable: ToolTable | undefined; hasPocketInfo: boolean } {
@@ -41,11 +39,10 @@ interface MachineSectionsProps {
   dashboard: ReactNode;
 }
 
-/** The tabs under the machine name: the dashboard, the report, files, tool table, alert rules and settings */
+/** The tabs under the machine name: the dashboard, the report, files, tool table and settings */
 export function MachineSections({ machine, machines, now, onUpdate, onRemove, dashboard }: MachineSectionsProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const openTab = searchParams.get(TAB_PARAM);
-  const canManageMachines = useCan('manage-machines');
   const files = useMachineFiles(machine.id);
   const history = useUploadHistory(machine.id);
   const messages = useUploadMessages();
@@ -58,8 +55,7 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
     { id: 'report', label: 'Report' },
     { id: 'files', label: 'Files' },
     ...(toolCount > 0 ? [{ id: 'tools' as const, label: 'Tool table', count: toolCount }] : []),
-    { id: 'alerts', label: 'Alert rules', count: alertRules.saved?.length },
-    ...(canManageMachines ? [{ id: 'settings' as const, label: 'Machine settings' }] : []),
+    { id: 'settings', label: 'Settings' },
   ];
   // An unknown tab, or a tab that is not there (the tool table goes away when the machine stops sending it), opens the dashboard
   const shownTab = tabs.find(tab => tab.id === openTab)?.id ?? 'dashboard';
@@ -92,15 +88,8 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
             {shownTab === 'tools' && toolTable && (
               <ToolTableTab toolTable={toolTable} hasPocketInfo={hasPocketInfo} spindleTool={machine.data.toolNumber} />
             )}
-            {shownTab === 'alerts' && (
-              <AlertRulesTab
-                machineId={machine.id}
-                otherMachines={machines.filter(other => other.id !== machine.id)}
-                rules={alertRules}
-              />
-            )}
             {shownTab === 'settings' && (
-              <MachineSettingsTab machine={machine} onUpdate={onUpdate} onRemove={onRemove} />
+              <SettingsTab machine={machine} machines={machines} rules={alertRules} onUpdate={onUpdate} onRemove={onRemove} />
             )}
           </div>
         )}

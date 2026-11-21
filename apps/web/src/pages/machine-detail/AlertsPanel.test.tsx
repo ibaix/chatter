@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchMachineAlerts, type MachineAlert } from '../../api/alerts';
 import { AlertsPanel } from './AlertsPanel';
@@ -21,7 +22,8 @@ const firingAlerts = (count: number) =>
 
 async function renderPanel(alerts: MachineAlert[]) {
   vi.mocked(fetchMachineAlerts).mockResolvedValue(alerts);
-  render(<AlertsPanel machineId="haas-vf2" />);
+  // The empty list links to the alert rules in Settings
+  render(<AlertsPanel machineId="haas-vf2" />, { wrapper: MemoryRouter });
   await waitFor(() => expect(fetchMachineAlerts).toHaveBeenCalled());
   if (alerts.length > 0) await screen.findByText(alerts[0].name);
 }
