@@ -56,7 +56,7 @@ A **program ended** rule reads: "When this machine reports **program ended**, ra
 The alert fires one time when the machine stops at the end of a program.
 
 The alert fires only when all of these are true:
-- The control says that the program ended. A FANUC control shows **RESET**. The other controls show **READY**, **STOPPED** or **PROGRAM_COMPLETED**.
+- The control says that the program ended. A FANUC control shows **RESET**. The other controls show **READY** or **PROGRAM_COMPLETED**. **STOPPED** does not fire the alert: a Haas shows it for an alarm, and an MTConnect control for a stop by the operator.
 - The program ran in the last minute.
 - The machine had no alarm and no emergency stop in the last minute.
 
@@ -68,6 +68,9 @@ The **Alerts** panel shows the alert as a past alert.
 Some limits:
 - When an operator pushes **RESET** while a program runs, Chatter cannot tell this from a program end. The alert fires.
 - A machine that does not tell if a program runs never fires this alert. For example, a Haas needs its query port (Setting 143).
+- vmalert checks the rules every 15 seconds. When the next program starts less than 15 seconds after the end, the alert can miss that end.
+- Some controls show **READY** for a short time while a program runs. If a check sees this, the alert fires, and it can fire again for the same program.
+- A **program ended** rule cannot change to a custom query. A custom query does not have the event label, so Chatter would send an "OK" message after each program end.
 
 ## Add a rule
 
@@ -80,7 +83,7 @@ Some limits:
 ![The + Add rule menu: Simple rule and Custom query](../images/chatter-alert-add-rule.png)
 
 To see the query that a simple rule uses, click **Expert: show the query** under the rule.
-To change that query, click **Change to a custom query**. The rule then becomes a custom query that does the same check.
+To change that query, click **Change to a custom query**. The rule then becomes a custom query that does the same check. A **program ended** rule does not have this button. See [Program ended](#program-ended).
 
 ## Copy rules to other machines
 
