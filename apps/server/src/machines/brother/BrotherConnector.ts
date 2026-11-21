@@ -118,6 +118,10 @@ class NoReplyError extends Error {
   }
 }
 
+/** A command or a connect waits no more when its socket closes, for example when the poll ran out of time */
+const CLOSED_BEFORE_REPLY_ERROR = 'The connection closed before the machine answered';
+const CLOSED_BEFORE_OPEN_ERROR = 'The connection closed before it opened';
+
 /** A Brother request: "%CLOD    <command>  ", then a checksum, between % signs */
 export function brotherCommand(command: string): string {
   const cmdBody = 'CLOD'.padEnd(8) + command.padEnd(8) + '  \r\n';
@@ -221,7 +225,11 @@ export class BrotherConnector extends BaseMachineConnector {
         reject(err);
       });
 
-      socket.on('close', () => { if (this.socket === socket) this.connected = false; });
+      // A destroyed socket gives only 'close'. Without this, a disconnect during the connect leaves it waiting forever.
+      socket.on('close', () => {
+        if (this.socket === socket) this.connected = false;
+        reject(new Error(CLOSED_BEFORE_OPEN_ERROR));
+      });
 
       socket.connect(this.dataPort, this.host, () => {
         socket.removeListener('timeout', onConnectTimeout);
@@ -243,10 +251,11 @@ export class BrotherConnector extends BaseMachineConnector {
   /**
    * Send a command and wait for the reply between % signs.
    * With no reply in time, it disconnects: a late reply would come as the reply of the next command.
+   * It also ends when the socket closes, because a destroyed socket gives no 'data', 'error' or 'timeout' after it.
    */
   async sendCommand(command: string): Promise<ParsedResponse> {
     const socket = this.socket;
-    if (!socket || !this.connected) throw new Error('Not connected');
+    if (!socket || !this.connected || socket.destroyed || !socket.writable) throw new Error('Not connected');
 
     return new Promise((resolve, reject) => {
       let reply = '';
@@ -261,6 +270,7 @@ export class BrotherConnector extends BaseMachineConnector {
       };
 
       const onError = (err: Error) => { cleanup(); reject(err); };
+      const onClose = () => { cleanup(); reject(new Error(CLOSED_BEFORE_REPLY_ERROR)); };
       const onTimeout = () => {
         cleanup();
         this.disconnect();
@@ -271,11 +281,13 @@ export class BrotherConnector extends BaseMachineConnector {
         socket.removeListener('data', onData);
         socket.removeListener('error', onError);
         socket.removeListener('timeout', onTimeout);
+        socket.removeListener('close', onClose);
       };
 
       socket.on('data', onData);
       socket.on('error', onError);
       socket.on('timeout', onTimeout);
+      socket.on('close', onClose);
       socket.write(brotherCommand(command), 'ascii');
     });
   }
@@ -304,8 +316,8 @@ export class BrotherConnector extends BaseMachineConnector {
           return;
         }
       } catch (err) {
-        // A control that does not know this command; try the next one. With no reply, the connection is gone.
-        if (err instanceof NoReplyError) throw err;
+        // A control that does not know this command; try the next one. With no reply or no connection, stop.
+        if (err instanceof NoReplyError || !this.connected) throw err;
       }
     }
   }

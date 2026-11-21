@@ -580,3 +580,66 @@ describe('Brother connection problems, with a real TCP connection', () => {
     expect(answering.connected).toBe(true);
   });
 });
+
+describe('Brother command when the connection closes', () => {
+  let server: net.Server | null = null;
+  let connector: BrotherConnector;
+
+  afterEach(async () => {
+    connector?.disconnect();
+    if (server) await closeServer(server);
+    server = null;
+  });
+
+  /** Connected to a server that never answers, with a timeout that the test never reaches */
+  async function connectedToSilentServer(): Promise<BrotherConnector> {
+    server = await startServer(() => {});
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: portOf(server), timeout: 60_000 });
+    await connector.connect();
+    return connector;
+  }
+
+  it('ends a waiting command with an error when Chatter disconnects, so the poll does not wait forever', async () => {
+    const silent = await connectedToSilentServer();
+    const command = silent.sendCommand('PANEL');
+
+    silent.disconnect();
+
+    await expect(command).rejects.toThrow('The connection closed before the machine answered');
+  });
+
+  it('ends a waiting command with an error when the machine closes the connection', async () => {
+    let machineSide: net.Socket | undefined;
+    server = await startServer(socket => { machineSide = socket; });
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: portOf(server), timeout: 60_000 });
+    await connector.connect();
+    await vi.waitFor(() => expect(machineSide).toBeDefined());
+    const command = connector.sendCommand('PANEL');
+
+    machineSide!.end();
+
+    await expect(command).rejects.toThrow('The connection closed before the machine answered');
+  });
+
+  it('ends a connect with an error when Chatter disconnects before the connection opens', async () => {
+    vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) { return this; });
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', timeout: 60_000 });
+    const connecting = connector.connect();
+
+    connector.disconnect();
+
+    await expect(connecting).rejects.toThrow('The connection closed before it opened');
+  });
+
+  it('ends a poll with a reason when Chatter disconnects during a command', async () => {
+    const silent = await connectedToSilentServer();
+    const poll = silent.poll();
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    silent.disconnect();
+    const status = await poll;
+
+    expect(status.connected).toBe(false);
+    expect(status.errors.join('; ')).toContain('The connection closed before the machine answered');
+  });
+});
