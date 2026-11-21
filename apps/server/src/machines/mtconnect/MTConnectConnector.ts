@@ -182,7 +182,7 @@ async function getText(url: string, timeoutMs: number): Promise<string> {
     return await response.text();
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error(`Request timeout after ${timeoutMs}ms`);
+      throw new Error(`Request timeout after ${timeoutMs}ms`, { cause: err });
     }
     throw err;
   } finally {

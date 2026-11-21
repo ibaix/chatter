@@ -19,6 +19,7 @@
     "build": "npm run build -w @local-chatter/shared && npm run build -w apps/web && npm run build -w apps/server",
     "build:shared": "npm run build -w @local-chatter/shared",
     "typecheck": "npm run typecheck -w @local-chatter/shared && npm run typecheck -w apps/web && npm run typecheck -w apps/server && tsc -p tools/fake-machines && tsc -p tools/fake-notify && tsc -p tools/quality && tsc -p tools/guardrails",
+    "lint": "eslint .",
     "test": "npm run test:run -w @local-chatter/shared && npm run test:run -w apps/web && npm run test:run -w apps/server && npm run test:tools",
     "test:tools": "vitest run --root tools/fake-machines && vitest run --root tools/fake-notify && vitest run --root tools/quality && vitest run --root tools/guardrails",
     "test:client": "npm run test:run -w apps/web",
@@ -33,8 +34,13 @@
     "coverage:changed": "tsx tools/quality/index.ts changed"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@vitest/coverage-v8": "^5.1.1",
     "concurrently": "^8.2.2",
+    "eslint": "^10.15.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
+    "typescript-eslint": "^8.73.0",
     "yaml": "^2.9.1"
   }
 }

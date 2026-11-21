@@ -83,7 +83,16 @@ npm run test:client     # web app tests only
 npm run test:server     # server tests only
 npm run test:tools      # tests of the tools folder only
 npm run typecheck       # check the TypeScript types in all parts
+npm run lint            # check the code with ESLint
 ```
+
+### Lint
+
+`npm run lint` checks all the code with ESLint. The config is `eslint.config.mjs`.
+
+- An error fails the CI. Errors are likely bugs, or rules of this project. For example, the server logs with `createLogger`, not `console`, and web text uses `text-primary-text`, not `text-primary`.
+- A warning does not fail the CI. Warnings are signals, such as a function that is too complex. Look at them when you change that code.
+- To turn off a rule for one line, add `// eslint-disable-next-line <rule>` with a comment that tells why.
 
 ### Coverage
 

@@ -16,6 +16,7 @@ Thank you for your help. Bug reports, fixes, and docs changes are welcome.
    ```bash
    npm run build:shared
    npm run typecheck
+   npm run lint
    npm test
    ```
    For a docs change, also run `npm run docs:build`.

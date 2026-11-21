@@ -12,7 +12,7 @@ export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 export type LogLevel = typeof LOG_LEVELS[number];
 export type LogFormat = 'text' | 'json';
 
-/** The details of one event, for example { machine: 'm1' }. An Error value is written with its message. */
+/** The details of one event, for example { machine: 'm1' }. An Error value is written with its message and the messages of its causes. */
 export type LogContext = Record<string, unknown>;
 
 export interface Logger {
@@ -104,12 +104,37 @@ export function jsonLine({ time, level, component, message, context }: LogLine):
 
 /** Words with spaces get quotes, so each pair stays one token */
 function textValue(value: unknown): string {
-  const text = value instanceof Error ? value.message : typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
+  const text = value instanceof Error ? errorText(value) : typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
   return /[\s"=]/.test(text) || text === '' ? JSON.stringify(text) : text;
 }
 
 function jsonValue(value: unknown): unknown {
-  return value instanceof Error ? { message: value.message, stack: value.stack } : value;
+  return value instanceof Error ? errorJson(value, new Set()) : value;
+}
+
+/** The error, then each error that caused it. It stops at a cause that repeats, and after 5 causes. */
+function causeChain(error: Error): unknown[] {
+  const chain: unknown[] = [error];
+  let cause = error.cause;
+  while (cause !== undefined && !chain.includes(cause) && chain.length <= 5) {
+    chain.push(cause);
+    cause = cause instanceof Error ? cause.cause : undefined;
+  }
+  return chain;
+}
+
+/** `FTP connection error; cause: Login failed; cause: Connection refused` */
+function errorText(error: Error): string {
+  return causeChain(error)
+    .map(item => (item instanceof Error ? item.message : String(item)))
+    .join('; cause: ');
+}
+
+function errorJson(error: Error, seen: Set<Error>): unknown {
+  seen.add(error);
+  const { cause } = error;
+  const causeJson = cause instanceof Error ? (seen.has(cause) || seen.size > 5 ? undefined : errorJson(cause, seen)) : cause;
+  return { message: error.message, stack: error.stack, ...(causeJson === undefined ? {} : { cause: causeJson }) };
 }
 
 /**
@@ -119,5 +144,10 @@ function jsonValue(value: unknown): unknown {
 function errorStack(level: LogLevel, context: LogContext): string | undefined {
   if (level !== 'error' && settings.level !== 'debug') return undefined;
   const error = Object.values(context).find((value): value is Error => value instanceof Error);
-  return error?.stack?.split('\n').slice(1).join('\n');
+  if (!error) return undefined;
+  const causes = causeChain(error)
+    .slice(1)
+    .filter((cause): cause is Error => cause instanceof Error)
+    .map(cause => `Caused by: ${cause.stack ?? cause.message}`);
+  return [error.stack?.split('\n').slice(1).join('\n'), ...causes].filter(Boolean).join('\n') || undefined;
 }

@@ -37,6 +37,7 @@ function createMockDb() {
 interface Reply {
   status: number;
   // Each test reads the fields it needs
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   body: any;
 }
 

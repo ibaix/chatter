@@ -77,6 +77,40 @@ describe('createLogger', () => {
     expect(written[0].text.split('\n').length).toBeGreaterThan(1);
   });
 
+  it('writes the message of each cause of an error after its own message', () => {
+    use('info');
+    const refused = new Error('Connection refused');
+    const error = new Error('FTP connection error', { cause: new Error('Login failed', { cause: refused }) });
+    createLogger('x').warn('Could not list', { error });
+    expect(written[0].text).toMatch(/error="FTP connection error; cause: Login failed; cause: Connection refused"$/);
+  });
+
+  it('writes a cause that is not an error as text, and stops at a cause that repeats', () => {
+    use('info');
+    const loop = new Error('a');
+    loop.cause = loop;
+    createLogger('x').warn('One', { error: new Error('outer', { cause: 'ETIMEDOUT' }) });
+    createLogger('x').warn('Two', { error: loop });
+    expect(written[0].text).toMatch(/error="outer; cause: ETIMEDOUT"$/);
+    expect(written[1].text).toMatch(/error=a$/);
+  });
+
+  it('writes the stack of each cause on an error line', () => {
+    use('info');
+    createLogger('x').error('Could not save', { error: new Error('outer', { cause: new Error('inner') }) });
+    const lines = written[0].text.split('\n');
+    expect(lines).toContain('Caused by: Error: inner');
+    expect(lines[lines.indexOf('Caused by: Error: inner') + 1]).toMatch(/^\s+at /);
+  });
+
+  it('writes the cause of an error in the JSON format', () => {
+    use('info', 'json');
+    createLogger('x').error('Could not load', { error: new Error('outer', { cause: new Error('inner') }) });
+    const line = JSON.parse(written[0].text);
+    expect(line.error.cause.message).toBe('inner');
+    expect(line.error.cause.stack).toContain('inner');
+  });
+
   it('writes one JSON object for each line in the JSON format', () => {
     use('info', 'json');
     createLogger('poller').error('Could not load', { machine: 'm1', error: new Error('bad row') });
