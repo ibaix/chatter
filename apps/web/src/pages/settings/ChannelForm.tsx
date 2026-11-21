@@ -78,7 +78,7 @@ export function ChannelForm({ types, machines, messages = [], channel, error, is
           </Field>
           {type && <ChannelFields type={type} form={form} hasSecret={channel?.hasSecret ?? {}} onChange={setForm} />}
           {type?.note && <Notice tone="info" title={`About ${type.name}`}>{type.note}</Notice>}
-          <AlertChoiceFields form={form} machines={machines} messages={messages} onChange={setForm} />
+          <AlertChoiceFields form={form} machines={machines} messages={messages} channelId={channel?.id} onChange={setForm} />
         </div>
         <div className="flex flex-col gap-3 border-t border-zinc-800 px-5 py-4">
           {error && <Notice tone="error" title={error} />}

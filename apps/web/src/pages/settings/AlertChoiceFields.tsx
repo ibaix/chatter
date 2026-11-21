@@ -11,11 +11,13 @@ interface AlertChoiceFieldsProps {
   machines: MachineName[];
   /** The messages of the last 30 days, for the preview of each ignore pattern */
   messages: NotificationMessage[];
+  /** The saved channel that the admin edits. Without it, the form adds a channel. */
+  channelId?: string;
   onChange: (form: ChannelFormState) => void;
 }
 
 /** Which alerts the channel gets: the level, all machines or only some, and the messages to ignore */
-export function AlertChoiceFields({ form, machines, messages, onChange }: AlertChoiceFieldsProps) {
+export function AlertChoiceFields({ form, machines, messages, channelId, onChange }: AlertChoiceFieldsProps) {
   const isPicking = form.machineIds !== null;
   const picked = form.machineIds ?? [];
   const choices = choicesOf(machines, picked);
@@ -55,7 +57,7 @@ export function AlertChoiceFields({ form, machines, messages, onChange }: AlertC
           </div>
         )}
       </div>
-      <IgnorePatterns patterns={form.ignorePatterns} messages={messages} onChange={ignorePatterns => onChange({ ...form, ignorePatterns })} />
+      <IgnorePatterns patterns={form.ignorePatterns} texts={previewTexts(messages, channelId)} onChange={ignorePatterns => onChange({ ...form, ignorePatterns })} />
     </fieldset>
   );
 }
@@ -63,15 +65,31 @@ export function AlertChoiceFields({ form, machines, messages, onChange }: AlertC
 /** Only an alert message can be ignored. A test and an "And N more" message always go. */
 const CAN_BE_IGNORED = new Set<NotificationMessage['kind']>(['started', 'ended', 'combined']);
 
+/**
+ * The texts that the preview checks. For a saved channel, only its own messages.
+ * For a new channel, each alert message one time: each channel gets a copy of the same message.
+ */
+function previewTexts(messages: NotificationMessage[], channelId: string | undefined): string[] {
+  const alertMessages = messages.filter(message => CAN_BE_IGNORED.has(message.kind));
+  if (channelId !== undefined) return alertMessages.filter(message => message.channelId === channelId).map(message => message.text);
+  const seen = new Set<string>();
+  return alertMessages.filter(message => {
+    const key = `${message.alertId}:${message.kind}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map(message => message.text);
+}
+
 interface IgnorePatternsProps {
   patterns: string[];
-  messages: NotificationMessage[];
+  /** The texts of the last alert messages, for the preview */
+  texts: string[];
   onChange: (patterns: string[]) => void;
 }
 
 /** The ignore patterns, each with a line that tells how many of the last messages it matches */
-function IgnorePatterns({ patterns, messages, onChange }: IgnorePatternsProps) {
-  const texts = messages.filter(message => CAN_BE_IGNORED.has(message.kind)).map(message => message.text);
+function IgnorePatterns({ patterns, texts, onChange }: IgnorePatternsProps) {
   const preview = (pattern: string) => {
     if (pattern.trim() === '') return null;
     const problem = patternProblem(pattern);

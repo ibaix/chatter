@@ -270,9 +270,11 @@ describe('ChannelForm', () => {
   });
 
   describe('ignore patterns', () => {
-    function sent(text: string, kind: NotificationMessage['kind'] = 'started'): NotificationMessage {
+    function sent(
+      text: string, kind: NotificationMessage['kind'] = 'started', { alertId = 7, channelId = 'phones' } = {},
+    ): NotificationMessage {
       return {
-        id: 1, channelId: 'phones', alertId: 7, kind, machineId: 'haas-vf2', severity: 'critical', text, status: 'sent',
+        id: 1, channelId, alertId, kind, machineId: 'haas-vf2', severity: 'critical', text, status: 'sent',
         attempts: 1, lastError: null, detail: null, createdAt: '2026-11-13T09:00:00.000Z', sentAt: '2026-11-13T09:00:00.000Z',
       };
     }
@@ -306,7 +308,7 @@ describe('ChannelForm', () => {
         messages: [
           sent('CRITICAL - Haas VF-2: Door open. Started 9:02 AM.'),
           sent('OK - Haas VF-2: Door open ended at 9:04 AM.', 'ended'),
-          sent('WARNING - Okuma LB3000: Idle for 20 minutes. Started 9:10 AM.'),
+          sent('WARNING - Okuma LB3000: Idle for 20 minutes. Started 9:10 AM.', 'started', { alertId: 8 }),
           // A test is never ignored, so the preview does not count it
           sent('Test from Chatter. Door open.', 'test'),
         ],
@@ -317,6 +319,37 @@ describe('ChannelForm', () => {
 
       type('Ignore pattern 1', 'Haas*Started');
       expect(screen.getByText('Matches 1 of the last 3 messages.')).toBeInTheDocument();
+    });
+
+    it('counts each alert message of a new channel one time, also when several channels got it', () => {
+      const doorOpen = 'CRITICAL - Haas VF-2: Door open. Started 9:02 AM.';
+      renderForm({
+        messages: [
+          sent(doorOpen, 'started', { channelId: 'phones' }),
+          sent(doorOpen, 'started', { channelId: 'slack' }),
+          sent('WARNING - Okuma LB3000: Idle for 20 minutes. Started 9:10 AM.', 'started', { alertId: 8, channelId: 'slack' }),
+        ],
+      });
+
+      type('Ignore pattern 1', 'Door open');
+
+      expect(screen.getByText('Matches 1 of the last 2 messages.')).toBeInTheDocument();
+    });
+
+    it('counts only the messages of the saved channel that the admin edits', () => {
+      renderForm({
+        channel: slack,
+        messages: [
+          sent('CRITICAL - Haas VF-2: Door open. Started 9:02 AM.', 'started', { channelId: 'phones' }),
+          sent('CRITICAL - Haas VF-2: Door open. Started 9:02 AM.', 'started', { channelId: 'slack' }),
+          sent('OK - Haas VF-2: Door open ended at 9:04 AM.', 'ended', { channelId: 'slack' }),
+          sent('WARNING - Okuma LB3000: Idle for 20 minutes. Started 9:10 AM.', 'started', { alertId: 8, channelId: 'phones' }),
+        ],
+      });
+
+      type('Ignore pattern 1', 'Door open');
+
+      expect(screen.getByText('Matches 2 of the last 2 messages.')).toBeInTheDocument();
     });
 
     it('tells why a pattern cannot be saved, in place of the count', () => {
