@@ -53,9 +53,33 @@ CHATTER_VERSION=1.0.0 CHATTER_IMAGE_URL=https://github.com/toolpath/chatter/rele
 
 ### The card of a release
 
-You do not build the card of a release by hand. For a release tag, `.github/workflows/docker.yml` adds the update file to the GitHub Release, and then runs `.github/workflows/card.yml`. That workflow builds the card and adds `chatter.img.xz` and `chatter-imager.json` to the release. A pre-release tag, such as `v1.2.0-rc1`, gets no card. To make the card again, or for an older release, run it by hand: **Actions > Pi card > Run workflow**, with the tag (for example `v1.0.0`).
+You do not build the card of a release by hand. For a release tag, `.github/workflows/docker.yml` adds the update file to the GitHub Release, and then runs `.github/workflows/card.yml`. That workflow builds the card and adds `chatter.img.xz` and `chatter-imager.json` to the release. A tag with a `-`, such as `v1.2.0-rc1`, gets no card and no update file. To make the card again, or for an older release, run it by hand: **Actions > Pi card > Run workflow**, with the tag (for example `v1.0.0`).
 
 The workflow sets `CHATTER_VERSION` from the tag, and `CHATTER_IMAGE_URL` to the download link of `chatter.img.xz` in the release of its own repo. It also sets `CHATTER_USE_RELEASE_IMAGE=1`. Then `build.sh` builds no Chatter container: it downloads the published `ghcr.io/toolpath/chatter:<CHATTER_VERSION>` for `linux/arm/v7`. So the card has the same Chatter as the update file of the release.
+
+### Test a release before it is public
+
+To test a release on a real Pi with the normal update steps, make it a GitHub pre-release first. Make the pre-release before the tag, so that the workflows see it:
+
+```bash
+gh release create v1.7.0 --target main --prerelease --title "v1.7.0 (test)" --notes "A test build. Do not install it on a machine in production."
+```
+
+This also makes the tag. The workflows then do the same work as for a release: the signed update file, the Docker packages and the card. But the image on ghcr.io gets only the tag `1.7.0`, not `1.7` or `latest`. So the users who pull `latest` do not get the test build.
+
+A Pi does not offer a pre-release in **Settings > Updates**, because Chatter reads only the latest public release. To test, download `chatter-update-1.7.0-armv7.tar` from the pre-release, and upload it in **Settings > Updates** on the test Pi. The Pi checks its signature and its version, as for every update.
+
+- **When the test is good:** make the same release public. `.github/workflows/release-tags.yml` then gives the tested image the tags `1.7` and `latest`. It builds nothing.
+
+  ```bash
+  gh release edit v1.7.0 --prerelease=false --latest
+  ```
+
+- **When the test finds a problem:** fix it on `main`, and make `v1.7.1` as a new pre-release. A Pi with 1.7.0 accepts 1.7.1, because it is newer. Make public only the release that passed.
+
+Do not use a tag with a `-` for a test, such as `v1.7.0-rc1`. It gets no signed update file, and the update helper accepts only a version such as `1.7.0`.
+
+A signed test update is a real update: each Chatter Pi accepts it. Give the file only to the test devices.
 
 ### The version and the update key
 
