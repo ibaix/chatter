@@ -60,5 +60,19 @@ export interface MachineData {
   alarmText?: string;
   /** What the program does, in MTConnect execution words: ACTIVE (runs), READY, FEED_HOLD, INTERRUPTED, STOPPED */
   execution?: string;
-  [key: string]: string | number | boolean | ToolTable | MachinePath[] | null | undefined;
+  [key: string]: string | number | boolean | ToolTable | ToolSyncState | MachinePath[] | null | undefined;
+}
+
+/**
+ * The reads of the tool table and the tool data. Chatter reads them when the machine runs no program and the last
+ * read is more than 10 minutes old, or when a user presses Sync. Times are ISO text, null when there was none.
+ */
+export interface ToolSyncState {
+  /** The end of the last good read. Null: not synced yet. */
+  lastSyncAt: string | null;
+  /** The end of the last read, good or not */
+  lastAttemptAt: string | null;
+  /** Why the last read failed. Null when it was good, or when there was none. */
+  error: string | null;
+  running: boolean;
 }

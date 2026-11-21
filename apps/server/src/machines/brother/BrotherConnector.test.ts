@@ -344,36 +344,41 @@ describe('Brother control type detection (C00 vs D00)', () => {
   });
 
   it('is a C00 control when ATCTL gives ATC pots', async () => {
-    const status = await connectorWithReplies(MOCK_RESPONSES).poll();
+    const connector = connectorWithReplies(MOCK_RESPONSES);
 
-    expect(status.data.controlType).toBe('C00');
+    await connector.requestToolSync();
+
+    expect(connector.getStatus().data.controlType).toBe('C00');
   });
 
   it('is a D00 control when ATCTL fails and ATCTLD gives ATC pots', async () => {
     const { ATCTL, ...replies } = MOCK_RESPONSES;
     const connector = connectorWithReplies({ ...replies, ATCTLD: ATCTL.replace('ATCTL ', 'ATCTLD') });
 
-    const status = await connector.poll();
+    await connector.requestToolSync();
 
-    expect(status.data.controlType).toBe('D00');
+    expect(connector.getStatus().data.controlType).toBe('D00');
   });
 
   it('has no control type when neither command gives ATC pots', async () => {
     const connector = connectorWithReplies({ ...MOCK_RESPONSES, ATCTL: 'RLOD    ATCTL   00\r\nOTHER,data\r\n\r\n00%' });
 
-    const status = await connector.poll();
+    await connector.requestToolSync();
 
-    expect(status.data.controlType).toBeNull();
-    expect(status.data.hasPocketInfo).toBe(false);
+    expect(connector.getStatus().data.controlType).toBeNull();
+    expect(connector.getStatus().data.hasPocketInfo).toBe(false);
   });
 });
 
-describe('Brother tool table from a poll', () => {
+describe('Brother tool table from a tool sync', () => {
   it('puts the tool of each ATC pot in the table, with the offsets and name from the tool data', async () => {
-    const status = await connectorWithReplies(MOCK_RESPONSES).poll();
+    const connector = connectorWithReplies(MOCK_RESPONSES);
 
-    expect(status.data.hasPocketInfo).toBe(true);
-    expect(status.data.toolTable).toEqual({
+    await connector.requestToolSync();
+
+    const { data } = connector.getStatus();
+    expect(data.hasPocketInfo).toBe(true);
+    expect(data.toolTable).toEqual({
       1: { toolNum: 1, length: 1.5, lengthWear: 0, diameter: 0.25, diameterWear: 0, name: 'ENDMILL' },
       2: { toolNum: 2 },
     });
@@ -385,15 +390,15 @@ describe('Brother tool table from a poll', () => {
       TOLNI1: "RLOD    TOLNI1  00\r\nT001, 1.5000, 0.0001, 0.2500, 0.0000, 0, 0, 0, 0, 'ENDMILL '\r\n\r\n00%",
     });
 
-    const status = await connector.poll();
+    await connector.requestToolSync();
 
-    expect(status.data.toolTable?.[1]).toMatchObject({ length: 1.5, lengthWear: 0.0001, name: 'ENDMILL' });
+    expect(connector.getStatus().data.toolTable?.[1]).toMatchObject({ length: 1.5, lengthWear: 0.0001, name: 'ENDMILL' });
   });
 
   it('asks for metric tool data when the unit is mm', async () => {
     const connector = connectorWithReplies({ ...MOCK_RESPONSES, TOLNM1: MOCK_RESPONSES.TOLNI1 }, { defaultUnit: 'mm' });
 
-    await connector.poll();
+    await connector.requestToolSync();
 
     expect(connector.sendCommand).toHaveBeenCalledWith('TOLNM1');
     expect(connector.sendCommand).not.toHaveBeenCalledWith('TOLNI1');
@@ -413,7 +418,7 @@ describe('Brother poll times in the status', () => {
 
     expect(status.pollTimings?.limitMs).toBe(8000);
     expect(Object.keys(status.pollTimings?.lastPoll.commands ?? {}).sort())
-      .toEqual(['ALARM', 'ATCTL', 'MEM', 'PANEL', 'PDSP', 'TOLNI1', 'WKCNTR']);
+      .toEqual(['ALARM', 'MEM', 'PANEL', 'PDSP', 'WKCNTR']);
     expect(status.pollTimings?.commands.PANEL.samples).toBe(1);
     expect(status.pollTimings?.poll.samples).toBe(1);
     expect(status.pollTimings?.lastPoll.skipped).toEqual([]);
@@ -705,18 +710,24 @@ const STATE_COMMANDS = ['PANEL', 'MEM', 'ALARM', 'WKCNTR', 'PDSP', 'MCRNI1'];
 /** The tool table and the tool data */
 const TOOL_COMMANDS = ['ATCTL', 'TOLNI1'];
 
+const MEM_RUNNING = "RLOD    MEM     00\r\nA01,'/       ',1001,1,0,0,0,0\r\n\r\n00%";
+const MEM_NO_RUN_STATE = "RLOD    MEM     00\r\nA01,'/       ',1001\r\n\r\n00%";
+
 /**
  * A connected connector on a fake clock. Each reply takes `speed.msPerCommand` on that clock, and the test can change it.
- * `sent` lists the commands of the last poll, and `replies` can change between polls.
+ * `sent` lists the commands since the last poll started, and `replies` can change between polls.
+ * `held` holds back the reply to a command until the test calls the function it puts there.
  */
 function machineThatTakes(msPerCommand: number) {
   const speed = { msPerCommand };
   const replies: Record<string, string> = { ...MOCK_RESPONSES, MCRNI1: MACRO_REPLY };
   const sent: string[] = [];
+  const held: { command?: string; release?: () => void } = {};
   const connector = newConnector({ id: 'b1', host: '127.0.0.1', macros: [{ location: 100, name: 'Count' }] });
   Object.assign(connector, { socket: { destroy: () => {} }, connected: true });
   vi.spyOn(connector, 'sendCommand').mockImplementation(async command => {
     sent.push(command);
+    if (held.command === command) await new Promise<void>(resolve => { held.release = resolve; });
     vi.setSystemTime(Date.now() + speed.msPerCommand);
     if (!replies[command]) throw new Error(`No reply for ${command}`);
     return connector.parseResponse(replies[command]);
@@ -725,10 +736,16 @@ function machineThatTakes(msPerCommand: number) {
     sent.length = 0;
     return connector.poll();
   };
-  return { connector, speed, replies, sent, poll };
+  /** A poll, then the end of the tool sync that it can start */
+  const pollAndSync = async () => {
+    const status = await poll();
+    await connector.toolSyncEnded();
+    return status;
+  };
+  return { connector, speed, replies, sent, held, poll, pollAndSync };
 }
 
-describe('Brother tool table and tool data, read less often than the machine state', () => {
+describe('Brother tool sync: the tool table and the tool data, read apart from the state polls', () => {
   beforeEach(() => {
     // Only the clock is fake: the replies come at once, but each one moves the clock
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -739,81 +756,189 @@ describe('Brother tool table and tool data, read less often than the machine sta
     vi.useRealTimers();
   });
 
-  it('reads the machine state and the tool table in the first poll', async () => {
+  it('reads only the machine state in a poll, with the macros', async () => {
     const machine = machineThatTakes(100);
+    machine.replies.MEM = MEM_RUNNING;
 
-    await machine.poll();
+    await machine.pollAndSync();
 
-    expect([...machine.sent].sort()).toEqual([...STATE_COMMANDS, ...TOOL_COMMANDS].sort());
+    expect([...machine.sent].sort()).toEqual([...STATE_COMMANDS].sort());
   });
 
-  it('reads the machine state, with the macros, in each later poll, but not the tool table', async () => {
+  it('does not read the tools while a program runs, also after 10 minutes and more', async () => {
     const machine = machineThatTakes(100);
-    await machine.poll();
+    machine.replies.MEM = MEM_RUNNING;
+    await machine.pollAndSync();
 
-    for (let i = 0; i < 3; i++) {
-      await machine.poll();
-      expect([...machine.sent].sort()).toEqual([...STATE_COMMANDS].sort());
-    }
+    vi.setSystemTime(Date.now() + 15 * 60_000);
+    await machine.pollAndSync();
+
+    expect(machine.sent).not.toEqual(expect.arrayContaining(['ATCTL']));
+    expect(machine.sent).not.toContain('TOLNI1');
+    expect(machine.connector.getStatus().data.toolSync?.lastSyncAt).toBeNull();
   });
 
-  it('keeps the tool table between two reads, so it stays on the screen and in the history', async () => {
+  it('does not find the control type before the first tool read', async () => {
     const machine = machineThatTakes(100);
-    await machine.poll();
+    machine.replies.MEM = MEM_RUNNING;
 
-    const status = await machine.poll();
+    const status = await machine.pollAndSync();
+
+    expect(status.data.controlType).toBeNull();
+    expect(machine.sent).not.toContain('ATCTL');
+  });
+
+  it('reads the tools after a poll that finds the machine idle, the first time at once', async () => {
+    const machine = machineThatTakes(100);
+
+    await machine.pollAndSync();
+
+    expect(machine.sent.slice(-2)).toEqual(TOOL_COMMANDS);
+    const { data } = machine.connector.getStatus();
+    expect(data.toolTable?.[1]).toMatchObject({ toolNum: 1, length: 1.5, name: 'ENDMILL' });
+    expect(data.controlType).toBe('C00');
+    expect(data.toolSync).toEqual({ lastSyncAt: new Date(Date.now()).toISOString(), lastAttemptAt: new Date(Date.now()).toISOString(), error: null, running: false });
+  });
+
+  it('does not read the tools again while idle when the last read is 10 minutes old or less', async () => {
+    const machine = machineThatTakes(100);
+    await machine.pollAndSync();
+
+    vi.setSystemTime(Date.now() + 10 * 60_000 - 1000);
+    await machine.pollAndSync();
+
+    expect(machine.sent).not.toContain('ATCTL');
+  });
+
+  it('reads the tools again while idle when the last read is more than 10 minutes old', async () => {
+    const machine = machineThatTakes(100);
+    await machine.pollAndSync();
+
+    vi.setSystemTime(Date.now() + 10 * 60_000 + 1000);
+    await machine.pollAndSync();
+
+    expect(machine.sent).toEqual(expect.arrayContaining(TOOL_COMMANDS));
+  });
+
+  it('with no run state from the control, reads the tools only when the spindle stands still', async () => {
+    const machine = machineThatTakes(100);
+    machine.replies.MEM = MEM_NO_RUN_STATE;
+    machine.replies.PDSP = 'RLOD    PDSP    00\r\nX01,    0.000 ,  1200,0,10,10,10,0,0,0,0,4,100,100, 0,0, 0\r\n\r\n03%';
+    await machine.pollAndSync();
+    expect(machine.sent).not.toContain('ATCTL');
+
+    machine.replies.PDSP = MOCK_RESPONSES.PDSP;
+    await machine.pollAndSync();
+
+    expect(machine.sent).toEqual(expect.arrayContaining(TOOL_COMMANDS));
+  });
+
+  it('keeps the tool table between reads, so it stays on the screen and in the history', async () => {
+    const machine = machineThatTakes(100);
+    await machine.pollAndSync();
+
+    const status = await machine.pollAndSync();
 
     expect(status.data.toolTable?.[1]).toMatchObject({ toolNum: 1, length: 1.5, name: 'ENDMILL' });
-    expect(status.data.hasPocketInfo).toBe(true);
     expect(machine.connector.getDataSnapshot().custom).toMatchObject({ toolTable: { 1: { toolNum: 1, length: 1.5 } } });
   });
 
-  it('reads the tool table again after 60 seconds', async () => {
+  it('reads the tools at once when a user asks, also while a program runs', async () => {
     const machine = machineThatTakes(100);
-    await machine.poll();
-    vi.setSystemTime(Date.now() + 59_000);
-    await machine.poll();
-    expect(machine.sent).not.toContain('ATCTL');
+    machine.replies.MEM = MEM_RUNNING;
+    await machine.pollAndSync();
 
-    vi.setSystemTime(Date.now() + 1_000);
-    await machine.poll();
+    const result = await machine.connector.requestToolSync();
 
+    expect(result).toEqual({ outcome: 'synced', toolSync: expect.objectContaining({ error: null, running: false }) });
     expect(machine.sent).toEqual(expect.arrayContaining(TOOL_COMMANDS));
   });
 
-  it('reads the tool table again at the next poll when the tool in the spindle changes', async () => {
+  it('refuses a second request within 30 seconds, and a request while a read runs', async () => {
     const machine = machineThatTakes(100);
-    await machine.poll();
-    machine.replies.PDSP = pdspWithTool(7);
-    await machine.poll();
+    machine.replies.MEM = MEM_RUNNING;
+    await machine.connector.requestToolSync();
 
-    await machine.poll();
+    expect(await machine.connector.requestToolSync()).toEqual({ outcome: 'too-soon', retryAfterSeconds: 30 });
 
-    expect(machine.sent).toEqual(expect.arrayContaining(TOOL_COMMANDS));
+    vi.setSystemTime(Date.now() + 30_000);
+    machine.held.command = 'TOLNI1';
+    const running = machine.connector.requestToolSync();
+    await vi.waitFor(() => expect(machine.held.release).toBeDefined());
+    expect(await machine.connector.requestToolSync()).toEqual({ outcome: 'busy' });
+    machine.held.release!();
+    expect((await running).outcome).toBe('synced');
   });
 
-  it('reads the tool table again after the machine connects again', async () => {
+  it('refuses a request when the machine is not connected', async () => {
     const machine = machineThatTakes(100);
-    await machine.poll();
-    vi.spyOn(machine.connector, 'connect').mockImplementation(async () => {
-      Object.assign(machine.connector, { socket: { destroy: () => {} }, connected: true });
-    });
     machine.connector.disconnect();
 
-    await machine.poll();
-
-    expect(machine.sent).toEqual(expect.arrayContaining(TOOL_COMMANDS));
+    expect(await machine.connector.requestToolSync()).toEqual({ outcome: 'not-connected' });
   });
 
-  it('finds the control type only once', async () => {
+  it('gives the error of a failed read, and keeps the last tool table', async () => {
     const machine = machineThatTakes(100);
-    await machine.poll();
+    await machine.pollAndSync();
     vi.setSystemTime(Date.now() + 60_000);
+    delete machine.replies.TOLNI1;
 
-    await machine.poll();
+    const result = await machine.connector.requestToolSync();
 
-    expect(machine.sent.filter(command => command === 'ATCTL')).toHaveLength(1);
-    expect(machine.sent).not.toContain('ATCTLD');
+    expect(result).toEqual({ outcome: 'failed', toolSync: expect.objectContaining({ error: 'No reply for TOLNI1' }) });
+    expect(machine.connector.getStatus().data.toolTable?.[1]).toMatchObject({ length: 1.5 });
+    expect(machine.connector.getStatus().errors).toEqual([]);
+  });
+
+  it('does not use the connection in a state poll while a tool read runs, and the poll is still good', async () => {
+    const machine = machineThatTakes(100);
+    machine.held.command = 'TOLNI1';
+    const sync = machine.connector.requestToolSync();
+    await vi.waitFor(() => expect(machine.held.release).toBeDefined());
+
+    const status = await machine.poll();
+
+    expect(machine.sent).toEqual([]);
+    expect(status.connected).toBe(true);
+    expect(status.errors).toEqual([]);
+    expect(status.data.toolSync?.running).toBe(true);
+    machine.held.release!();
+    await sync;
+  });
+
+  it('waits for a state poll that runs before it starts a tool read', async () => {
+    const machine = machineThatTakes(100);
+    machine.replies.MEM = MEM_RUNNING;
+    machine.held.command = 'PDSP';
+    const poll = machine.poll();
+    await vi.waitFor(() => expect(machine.held.release).toBeDefined());
+
+    const sync = machine.connector.requestToolSync();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(machine.sent).not.toContain('ATCTL');
+
+    machine.held.release!();
+    await poll;
+    await sync;
+    expect(machine.sent.indexOf('ATCTL')).toBeGreaterThan(machine.sent.indexOf('MCRNI1'));
+  });
+});
+
+describe('Brother tool sync that does not end', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('ends with an error after 20 seconds and disconnects, so the next poll connects again', async () => {
+    vi.useFakeTimers();
+    const connector = connectorWithReplies(MOCK_RESPONSES);
+    vi.mocked(connector.sendCommand).mockImplementation(() => new Promise(() => {}));
+
+    const sync = connector.requestToolSync();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(await sync).toEqual({ outcome: 'failed', toolSync: expect.objectContaining({ error: expect.stringContaining('20 seconds') }) });
+    expect(connector.connected).toBe(false);
   });
 });
 
@@ -845,8 +970,9 @@ describe('Brother time budget in a poll', () => {
   });
 
   it('skips the optional commands that do not fit in the poll limit, and the poll is still good', async () => {
-    // 1.5 s for each answer: the 8 commands of the first poll take 12 s, more than the 10 s limit
+    // 1.5 s for each answer: the 6 commands of a poll take 9 s, more than 8 s, the limit less the margin
     const machine = machineThatTakes(1500);
+    machine.replies.MEM = MEM_RUNNING;
 
     const status = await machine.poll();
 
@@ -854,20 +980,22 @@ describe('Brother time budget in a poll', () => {
     expect(status.connected).toBe(true);
     expect(status.data.mode).toBe('MANUAL');
     expect(status.pollTimings!.lastPoll.totalMs).toBeLessThanOrEqual(8000);
-    expect(status.pollTimings!.lastPoll.skipped).toEqual(['MCRNI1', 'ATCTL', 'TOLNI1']);
+    expect(status.pollTimings!.lastPoll.skipped).toEqual(['MCRNI1']);
   });
 
   it('starts the next poll with the commands that the last poll skipped, so no command is left out for long', async () => {
     const machine = machineThatTakes(1500);
+    machine.replies.MEM = MEM_RUNNING;
     await machine.poll();
 
     await machine.poll();
 
-    expect(machine.sent).toEqual(['PANEL', 'MEM', 'ALARM', 'MCRNI1', 'ATCTL']);
+    expect(machine.sent).toEqual(['PANEL', 'MEM', 'ALARM', 'MCRNI1', 'WKCNTR']);
   });
 
   it('reads each command within a few polls when the machine is slow', async () => {
     const machine = machineThatTakes(1500);
+    machine.replies.MEM = MEM_RUNNING;
     const read = new Set<string>();
 
     for (let i = 0; i < 3; i++) {
@@ -876,12 +1004,12 @@ describe('Brother time budget in a poll', () => {
       expect(status.errors).toEqual([]);
     }
 
-    expect([...read].sort()).toEqual([...STATE_COMMANDS, ...TOOL_COMMANDS].sort());
+    expect([...read].sort()).toEqual([...STATE_COMMANDS].sort());
   });
 
   it('keeps the values of the skipped commands, so they stay on the screen', async () => {
     const machine = machineThatTakes(100);
-    await machine.poll();
+    await machine.pollAndSync();
     machine.speed.msPerCommand = 3000;
 
     const status = await machine.poll();
@@ -893,24 +1021,12 @@ describe('Brother time budget in a poll', () => {
     expect(status.data.toolTable?.[1]).toMatchObject({ toolNum: 1, length: 1.5, name: 'ENDMILL' });
   });
 
-  it('keeps the tool offsets when a poll reads the tool table but skips the tool data', async () => {
-    const machine = machineThatTakes(100);
-    await machine.poll();
-    vi.setSystemTime(Date.now() + 60_000);
-    machine.speed.msPerCommand = 1500;
-    await machine.poll();
-
-    const status = await machine.poll();
-
-    expect(machine.sent).toContain('ATCTL');
-    expect(machine.sent).not.toContain('TOLNI1');
-    expect(status.data.toolTable?.[1]).toMatchObject({ toolNum: 1, length: 1.5, name: 'ENDMILL' });
-  });
-
   it('writes the skipped commands in the debug log, not as a machine error', async () => {
     const log = captureLog();
     try {
-      const status = await machineThatTakes(3000).poll();
+      const machine = machineThatTakes(3000);
+      machine.replies.MEM = MEM_RUNNING;
+      const status = await machine.poll();
 
       expect(status.errors).toEqual([]);
       expect(log.text('debug')).toMatch(/Poll times.*skipped=/);
@@ -921,6 +1037,7 @@ describe('Brother time budget in a poll', () => {
 
   it('uses the poll limit that the scheduler gives', async () => {
     const machine = machineThatTakes(1500);
+    machine.replies.MEM = MEM_RUNNING;
     machine.connector.pollTimeLimitMs = 20000;
 
     const status = await machine.poll();
@@ -941,6 +1058,8 @@ describe('Brother planned reconnect every 60 seconds, with a real TCP connection
   let spindleTool: number;
   /** Called with each command before the machine answers it */
   let onCommand: (command: string) => void;
+  /** A promise that holds back the reply to a command, or null to answer at once */
+  let holdReply: (command: string) => Promise<void> | null;
 
   /** A fake Brother that tells what it sees */
   async function startRecordingBrother(): Promise<void> {
@@ -954,7 +1073,10 @@ describe('Brother planned reconnect every 60 seconds, with a real TCP connection
         commands.push(command);
         onCommand(command);
         const reply = command === 'PDSP' ? pdspWithTool(spindleTool) : MOCK_RESPONSES[command];
-        socket.write('%' + (reply ?? `RLOD    ${command.padEnd(8)}01\r\n\r\n00%`));
+        const answer = () => socket.write('%' + (reply ?? `RLOD    ${command.padEnd(8)}01\r\n\r\n00%`));
+        const held = holdReply(command);
+        if (held) void held.then(answer);
+        else answer();
       });
     });
     connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: portOf(server), timeout: 1000 });
@@ -962,8 +1084,15 @@ describe('Brother planned reconnect every 60 seconds, with a real TCP connection
 
   /** A poll, and then what the connection log of the poller writes for it */
   async function pollAndLog(connectionLog: ConnectionLog) {
-    const status = await connector.poll();
+    const status = await pollAndSync();
     connectionLog.record(connector);
+    return status;
+  }
+
+  /** A poll, then the end of the tool sync that it can start */
+  async function pollAndSync() {
+    const status = await connector.poll();
+    await connector.toolSyncEnded();
     return status;
   }
 
@@ -976,6 +1105,7 @@ describe('Brother planned reconnect every 60 seconds, with a real TCP connection
     commands = [];
     spindleTool = 10;
     onCommand = () => {};
+    holdReply = () => null;
   });
 
   afterEach(async () => {
@@ -988,13 +1118,13 @@ describe('Brother planned reconnect every 60 seconds, with a real TCP connection
 
   it('closes the connection in order and opens a new one at the first poll after 60 seconds', async () => {
     await startRecordingBrother();
-    await connector.poll();
+    await pollAndSync();
     vi.setSystemTime(Date.now() + 59_000);
-    await connector.poll();
+    await pollAndSync();
     expect(events).toEqual(['connect 1']);
 
     vi.setSystemTime(Date.now() + 1_000);
-    const status = await connector.poll();
+    const status = await pollAndSync();
 
     await vi.waitFor(() => expect(events).toEqual(['connect 1', 'end 1', 'connect 2']));
     expect(status.connected).toBe(true);
@@ -1020,44 +1150,43 @@ describe('Brother planned reconnect every 60 seconds, with a real TCP connection
 
   it('counts the planned reconnects in the poll times', async () => {
     await startRecordingBrother();
-    await connector.poll();
+    await pollAndSync();
 
     vi.setSystemTime(Date.now() + BROTHER_RECONNECT_MS);
-    const status = await connector.poll();
+    const status = await pollAndSync();
 
     expect(status.pollTimings?.plannedReconnects).toEqual({ count: 1, lastAt: new Date(Date.now()).toISOString() });
   });
 
-  it('does not read the tool table again because of a planned reconnect', async () => {
+  it('does not reconnect while a tool read runs', async () => {
     await startRecordingBrother();
-    await connector.poll();
-    vi.setSystemTime(Date.now() + 40_000);
-    spindleTool = 7;
-    await connector.poll();
-    // The tool change: this poll reads the tool table
-    await connector.poll();
-    commands = [];
+    await pollAndSync();
+    vi.setSystemTime(Date.now() + BROTHER_RECONNECT_MS);
+    let releaseToolData: (() => void) | undefined;
+    holdReply = command => command === 'TOLNI1' ? new Promise<void>(resolve => { releaseToolData = resolve; }) : null;
+    const sync = connector.requestToolSync();
+    await vi.waitFor(() => expect(releaseToolData).toBeDefined());
 
-    vi.setSystemTime(Date.now() + 20_000);
-    await connector.poll();
+    const status = await connector.poll();
 
-    await vi.waitFor(() => expect(events).toContain('connect 2'));
-    expect(commands).not.toContain('ATCTL');
-    expect(commands).not.toContain('TOLNI1');
+    expect(status.connected).toBe(true);
+    expect(events).toEqual(['connect 1']);
+    releaseToolData!();
+    expect((await sync).outcome).toBe('synced');
   });
 
   it('does not stop a poll that runs at the 60 s mark, and reconnects at the next poll', async () => {
     await startRecordingBrother();
-    await connector.poll();
+    await pollAndSync();
     vi.setSystemTime(Date.now() + 59_000);
     onCommand = command => { if (command === 'MEM') vi.setSystemTime(Date.now() + 2_000); };
 
-    const status = await connector.poll();
+    const status = await pollAndSync();
 
     expect(status.errors).toEqual([]);
     expect(events).toEqual(['connect 1']);
     onCommand = () => {};
-    await connector.poll();
+    await pollAndSync();
     await vi.waitFor(() => expect(events).toEqual(['connect 1', 'end 1', 'connect 2']));
   });
 });

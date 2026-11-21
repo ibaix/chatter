@@ -3,6 +3,7 @@ import { BaseMachineConnector } from '../BaseMachineConnector.js';
 import { PollTimingRecorder } from '../pollTimings.js';
 import { tuneMachineSocket } from '../machineSocket.js';
 import { createLogger } from '../../logging/logger.js';
+import { TOOL_SYNC_TIMEOUT_MS, ToolSyncTracker, isIdle, type ToolSyncRefusal } from './toolSync.js';
 import type {
   BrotherMachineConfig,
   BrotherMachineStatus,
@@ -15,6 +16,7 @@ import type {
   MachineType,
   MacroConfig,
   MachineDataSnapshot,
+  ToolSyncState,
 } from '../../types/index.js';
 
 const log = createLogger('brother');
@@ -163,14 +165,6 @@ const MAX_TOOL_NUMBER = 99;
 /** The position of each value in a row of the tool data reply */
 const TOOL_DATA_COLUMN = { length: 0, lengthWear: 1, diameter: 2, diameterWear: 3, name: 8 } as const;
 
-/**
- * The tool table (ATC) and the tool data (TOLN) change only when an operator loads or measures a tool.
- * So a poll reads them only at the first poll after a connect, when the tool in the spindle changes, and else
- * every 60 seconds. At the 2 s poll interval, that takes 2 of the 8 commands out of 29 polls in 30. A tool that
- * is loaded or measured shows within 60 seconds, or at once when it goes into the spindle.
- */
-export const TOOL_REFRESH_MS = 60_000;
-
 /** The mode, the program and run state, and the alarm. Each poll sends these first, and never skips them. */
 const CORE_COMMANDS = ['PANEL', 'MEM', 'ALARM'];
 
@@ -181,10 +175,11 @@ const CORE_COMMANDS = ['PANEL', 'MEM', 'ALARM'];
  */
 const BUDGET_MARGIN_SHARE = 0.2;
 
-/** True when the tool command was never read, or was read TOOL_REFRESH_MS ago or more */
-function isDue(readAt: number | null): boolean {
-  return readAt === null || Date.now() - readAt >= TOOL_REFRESH_MS;
-}
+/** What a Sync request gives */
+export type ToolSyncResult =
+  | { outcome: 'synced' | 'failed'; toolSync: ToolSyncState }
+  | ToolSyncRefusal
+  | { outcome: 'not-connected' };
 
 /** A valid ATC reply has M## keys */
 function isValidAtcResponse(response: ParsedResponse): boolean {
@@ -218,9 +213,11 @@ export class BrotherConnector extends BaseMachineConnector {
   private macroCommand: string;
   private dataItems: DataItem[];
   private readonly timings: PollTimingRecorder;
-  /** When a poll read the tool table and the tool data. Null: read it at the next poll. */
-  private atcReadAt: number | null = null;
-  private toolDataReadAt: number | null = null;
+  private readonly toolSync = new ToolSyncTracker();
+  /** The state poll that runs now, so a tool read waits for it. One operation at a time uses the connection. */
+  private runningPoll: Promise<void> | null = null;
+  /** The tool read that runs now. A state poll does not use the connection while it runs. */
+  private runningToolSync: Promise<ToolSyncResult> | null = null;
   /** The optional commands that the last poll skipped. The next poll sends them first. */
   private skippedLastPoll: string[] = [];
 
@@ -445,15 +442,80 @@ export class BrotherConnector extends BaseMachineConnector {
     this.hasPocketInfo = Object.keys(this.toolTable).length > 0;
   }
 
+  /**
+   * Read the machine state. While a tool read runs, the poll does not use the connection: it gives the last values,
+   * and is a good poll. After a good poll that finds the machine idle, it can start a tool read (see ToolSyncTracker).
+   */
   async poll(): Promise<BrotherMachineStatus> {
+    if (this.runningToolSync) return this.getStatus();
     this.clearErrors();
     this.timings.startPoll();
+    const run = this.pollMachine();
+    this.runningPoll = run;
     try {
-      await this.pollMachine();
+      await run;
     } finally {
+      this.runningPoll = null;
       this.timings.endPoll(this.pollTimeLimitMs);
     }
+    if (this.connected && this.lastPollTime && isIdle(this.data) && this.toolSync.autoSyncDue(Date.now())) {
+      // Not awaited: the tool read runs between the state polls, with its own time limit
+      void this.startToolSync('auto');
+    }
     return this.getStatus();
+  }
+
+  /** A user pressed Sync: read the tools now, also while a program runs */
+  async requestToolSync(): Promise<ToolSyncResult> {
+    const refusal = this.toolSync.manualRefusal(Date.now());
+    if (refusal) return refusal;
+    if (!this.connected) return { outcome: 'not-connected' };
+    return this.startToolSync('manual');
+  }
+
+  /** Resolves when no tool read runs */
+  async toolSyncEnded(): Promise<void> {
+    await this.runningToolSync;
+  }
+
+  private startToolSync(trigger: 'auto' | 'manual'): Promise<ToolSyncResult> {
+    this.toolSync.started(Date.now(), trigger);
+    const run = this.syncTools(trigger).finally(() => { this.runningToolSync = null; });
+    this.runningToolSync = run;
+    return run;
+  }
+
+  /** Read the tools after the state poll that runs now, in TOOL_SYNC_TIMEOUT_MS at most */
+  private async syncTools(trigger: 'auto' | 'manual'): Promise<ToolSyncResult> {
+    await this.runningPoll?.catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        // Ends the command that waits, and the next poll connects again
+        this.disconnect();
+        reject(new Error(`The tool read did not end in ${TOOL_SYNC_TIMEOUT_MS / 1000} seconds`));
+      }, TOOL_SYNC_TIMEOUT_MS);
+    });
+    let error: string | null = null;
+    try {
+      await Promise.race([this.readTools(), timeout]);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      clearTimeout(timer);
+    }
+    this.toolSync.ended(Date.now(), error);
+    log.debug('Tool read', { machine: this.id, trigger, error: error ?? undefined });
+    return { outcome: error === null ? 'synced' : 'failed', toolSync: this.toolSync.state() };
+  }
+
+  /** Read the tool table and the tool data. The first time, find the control type: its reply is also the tool table. */
+  private async readTools(): Promise<void> {
+    const atcResponse = this.atcCommand ? await this.send(this.atcCommand) : await this.detectControlType();
+    if (atcResponse && this.atcCommand) this.updatePotTools(atcResponse);
+    const toolDataResponse = await this.send(this.toolDataCommand);
+    this.updateToolOffsets(toolDataResponse);
+    this.updateToolTable();
   }
 
   /** Connect when needed, read the machine, and keep the values */
@@ -466,11 +528,6 @@ export class BrotherConnector extends BaseMachineConnector {
     if (!responses) return;
 
     this.saveDataItems(responses);
-    if (this.prevData.toolNumber !== undefined && this.data.toolNumber !== this.prevData.toolNumber) {
-      // A tool change: show the offsets of the new tool at the next poll
-      this.readToolsAtNextPoll();
-    }
-    this.saveTools(responses);
 
     this.updatePollTime();
     this.emitDataChanges(this.prevData, this.data);
@@ -489,20 +546,8 @@ export class BrotherConnector extends BaseMachineConnector {
     if (planned) {
       this.timings.recordPlannedReconnect();
       log.debug('Planned reconnect', { machine: this.id });
-    } else {
-      // The tools can have changed while the machine was not connected
-      this.readToolsAtNextPoll();
     }
     return true;
-  }
-
-  /** Keep the tool table and the tool data that this poll read */
-  private saveTools(responses: Record<string, ParsedResponse>): void {
-    const atcResponse = this.atcCommand ? responses[this.atcCommand] : undefined;
-    const toolDataResponse = responses[this.toolDataCommand];
-    if (atcResponse) this.updatePotTools(atcResponse);
-    if (toolDataResponse) this.updateToolOffsets(toolDataResponse);
-    if (atcResponse || toolDataResponse) this.updateToolTable();
   }
 
   /** Send a command, and record how long the machine took to answer */
@@ -531,7 +576,7 @@ export class BrotherConnector extends BaseMachineConnector {
   }
 
   /**
-   * Send the other commands of the machine state, and the tool commands when they are due.
+   * Send the other commands of the machine state.
    * A machine that answers slowly can run out of poll time. Then the poll skips the commands that do not fit,
    * keeps their last values, and the next poll sends them first. The poll is still a good poll.
    */
@@ -544,20 +589,15 @@ export class BrotherConnector extends BaseMachineConnector {
         this.timings.skip(command);
         continue;
       }
-      await this.sendOptional(command, responses);
+      responses[command] = await this.send(command);
     }
     this.skippedLastPoll = skipped;
   }
 
   /** The optional commands of this poll, the ones that the last poll skipped first */
   private optionalCommands(): string[] {
-    const stateCommands = [...new Set(this.dataItems.map(([, command]) => command))]
+    const commands = [...new Set(this.dataItems.map(([, command]) => command))]
       .filter(command => !CORE_COMMANDS.includes(command));
-    const toolCommands = [
-      ...(isDue(this.atcReadAt) ? [this.atcCommandName()] : []),
-      ...(isDue(this.toolDataReadAt) ? [this.toolDataCommand] : []),
-    ];
-    const commands = [...stateCommands, ...toolCommands];
     const first = this.skippedLastPoll.filter(command => commands.includes(command));
     return [...first, ...commands.filter(command => !first.includes(command))];
   }
@@ -566,28 +606,6 @@ export class BrotherConnector extends BaseMachineConnector {
   private fitsInTime(command: string, budgetMs: number): boolean {
     const estimateMs = Math.max(this.timings.estimateMs(command) ?? 0, this.timings.slowestInPollMs());
     return this.timings.elapsedMs() + estimateMs <= budgetMs;
-  }
-
-  /** The ATC command of this control, or the first one to try when the control type is not known yet */
-  private atcCommandName(): string {
-    return this.atcCommand ?? ATC_COMMANDS[0].command;
-  }
-
-  private async sendOptional(command: string, responses: Record<string, ParsedResponse>): Promise<void> {
-    if (command === this.atcCommandName()) {
-      // The first time, find the control type. Its reply is also the first tool table.
-      const atcResponse = this.atcCommand ? await this.send(this.atcCommand) : await this.detectControlType();
-      if (this.atcCommand && atcResponse) responses[this.atcCommand] = atcResponse;
-      this.atcReadAt = Date.now();
-      return;
-    }
-    responses[command] = await this.send(command);
-    if (command === this.toolDataCommand) this.toolDataReadAt = Date.now();
-  }
-
-  private readToolsAtNextPoll(): void {
-    this.atcReadAt = null;
-    this.toolDataReadAt = null;
   }
 
   private saveDataItems(responses: Record<string, ParsedResponse>): void {
@@ -613,7 +631,13 @@ export class BrotherConnector extends BaseMachineConnector {
       connected: this.connected,
       lastPollTime: this.lastPollTime,
       errors: this.errors,
-      data: { ...this.data, toolTable: this.toolTable, hasPocketInfo: this.hasPocketInfo, controlType: this.controlType },
+      data: {
+        ...this.data,
+        toolTable: this.toolTable,
+        hasPocketInfo: this.hasPocketInfo,
+        controlType: this.controlType,
+        toolSync: this.toolSync.state(),
+      },
       macros: this.macros,
       // Only after the first poll, so the status has the same fields as the status of the other connectors until then
       ...(pollTimings ? { pollTimings } : {}),

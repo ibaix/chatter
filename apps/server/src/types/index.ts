@@ -35,6 +35,7 @@ export type {
   OpcUaSecurity,
   SiemensMachineData,
   SiemensMachineUpdate,
+  ToolSyncState,
   ToolTable,
 } from '@local-chatter/shared';
 
