@@ -70,8 +70,9 @@ describe('isProgramEnded', () => {
   // Brother (operation status), Haas (Q500), Siemens (channel status) and MTConnect all give execution words
   it.each([
     ['READY', true],
-    ['STOPPED', true],
     ['PROGRAM_COMPLETED', true],
+    // A Haas gives STOPPED for ALARM ON, and an MTConnect control for a stop by the operator
+    ['STOPPED', false],
     ['ACTIVE', false],
     ['FEED_HOLD', false],
     ['INTERRUPTED', false],
@@ -86,7 +87,7 @@ describe('isProgramEnded', () => {
   it('does not count a stop for an alarm or an emergency stop', () => {
     expect(isProgramEnded({ runState: 'RESET', alarm: true })).toBe(false);
     expect(isProgramEnded({ runState: 'RESET', emergency: true })).toBe(false);
-    expect(isProgramEnded({ execution: 'STOPPED', alarm: true })).toBe(false);
+    expect(isProgramEnded({ execution: 'PROGRAM_COMPLETED', alarm: true })).toBe(false);
     expect(isProgramEnded({ execution: 'READY', emergency: true })).toBe(false);
     expect(isProgramEnded({ execution: 'READY', alarm: false, emergency: false })).toBe(true);
   });

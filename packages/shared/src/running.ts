@@ -41,8 +41,9 @@ export const PROGRAM_END_RUN_STATES: readonly string[] = ['RESET'];
 /**
  * The execution words after a program ends. Brother, Haas and Siemens give the same words (READY when idle).
  * FEED_HOLD, INTERRUPTED, OPTIONAL_STOP, PROGRAM_STOPPED and WAIT are a pause, not an end.
+ * STOPPED is not an end: a Haas gives it for ALARM ON, and an MTConnect control for a stop by the operator.
  */
-export const PROGRAM_END_EXECUTIONS: readonly string[] = ['READY', 'STOPPED', 'PROGRAM_COMPLETED'];
+export const PROGRAM_END_EXECUTIONS: readonly string[] = ['READY', 'PROGRAM_COMPLETED'];
 
 /** The values that tell whether a program ended */
 export interface ProgramEndValues extends RunningValues {

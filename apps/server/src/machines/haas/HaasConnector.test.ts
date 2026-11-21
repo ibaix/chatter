@@ -300,6 +300,18 @@ describe('Haas live values when the control stops giving them', () => {
     });
   });
 
+  it('shows an alarm when Q500 says ALARM ON, also with no alarm value from the data stream', async () => {
+    const replies: Record<string, string> = { '?Q500': 'PROGRAM, O01234, ALARM ON, PARTS, 380' };
+    await withConnector(replies, async connector => {
+      await connector.poll();
+      expect(connector.getDataSnapshot()).toMatchObject({ alarm: true, execution: 'STOPPED' });
+
+      replies['?Q500'] = 'PROGRAM, O01234, IDLE, PARTS, 380';
+      await connector.poll();
+      expect(connector.getDataSnapshot().alarm).toBeUndefined();
+    });
+  });
+
   it('forgets the old spindle load when the control gives no load', async () => {
     const replies: Record<string, string> = { '?Q600 1098': 'MACRO, 55.000000' };
     await withConnector(replies, async connector => {
