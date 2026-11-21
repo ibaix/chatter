@@ -440,6 +440,26 @@ describe('Outbox', () => {
       expect(kept).toHaveLength(MAX_KEPT_MESSAGES);
       expect(kept[0].id).toBe(newest);
     });
+
+    it(`keeps the start of an alert that is still on, also over ${MAX_KEPT_MESSAGES}, so the alert still gets its end message`, () => {
+      const finished = (alertId: number, kind: 'started' | 'ended', now: number) => {
+        outbox.keepIgnored({ channelId: 'phones', alertId, message: alertMessage(kind) }, 'Ignored', now);
+      };
+      finished(1, 'started', NOW);
+      finished(2, 'started', NOW);
+      finished(2, 'ended', NOW);
+      outbox.queue({ channelId: 'phones', alertId: 3, message: alertMessage('started'), event: true }, NOW);
+      const [event] = outbox.takeDue(NOW);
+      outbox.markSent(event.id, 'Sent', NOW);
+      sendMessages('slack', MAX_KEPT_MESSAGES, NOW + MINUTE, SEND_LIMIT_WINDOW_MS);
+
+      outbox.cleanUp(NOW + MINUTE);
+
+      expect(outbox.startStatus('phones', 1)).toBe('ignored');
+      expect(outbox.startStatus('phones', 2)).toBeNull();
+      expect(outbox.startStatus('phones', 3)).toBeNull();
+      expect(outbox.list({})).toHaveLength(MAX_KEPT_MESSAGES + 1);
+    });
   });
 
   it('deletes the waiting messages of a removed channel, and keeps its finished messages', () => {

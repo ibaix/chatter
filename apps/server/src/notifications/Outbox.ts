@@ -139,8 +139,8 @@ export class Outbox implements MachineRemovalListener {
   /**
    * The status of the start message of the alert on the channel, or null when the channel did not get it.
    * A channel without it gets no end message, for example a channel that the admin added while the alert was on.
-   * The clean-up can delete the start message of an alert that is still on (after 30 days, or over MAX_KEPT_MESSAGES),
-   * so that alert gets no end message.
+   * The clean-up keeps the start message of an alert that is still on, but only for 30 days.
+   * So an alert that is on for longer gets no end message.
    */
   startStatus(channelId: string, alertId: number): MessageStatus | null {
     const row = this.db.prepare(`
@@ -190,13 +190,22 @@ export class Outbox implements MachineRemovalListener {
     `).run(error, id);
   }
 
-  /** Deletes the finished messages that are older than 30 days, and then the oldest over MAX_KEPT_MESSAGES */
+  /**
+   * Deletes the finished messages that are older than 30 days, and then the oldest over MAX_KEPT_MESSAGES.
+   * The second step keeps the start message of an alert that is still on (no end message on the channel yet),
+   * because AlertNotifier needs it to send the end. An event alert has no end, so its start is not kept.
+   */
   cleanUp(now: number): void {
     this.db.transaction(() => {
       this.db.prepare("DELETE FROM notification_messages WHERE status != 'waiting' AND created_at < ?").run(now - KEEP_MS);
       this.db.prepare(`
-        DELETE FROM notification_messages WHERE id IN (
+        DELETE FROM notification_messages AS message WHERE id IN (
           SELECT id FROM notification_messages WHERE status != 'waiting' ORDER BY id DESC LIMIT -1 OFFSET ?
+        ) AND NOT (
+          message.kind = 'started' AND message.alert_id IS NOT NULL AND message.is_event = 0 AND NOT EXISTS (
+            SELECT 1 FROM notification_messages AS ended
+            WHERE ended.channel_id = message.channel_id AND ended.alert_id = message.alert_id AND ended.kind = 'ended'
+          )
         )
       `).run(MAX_KEPT_MESSAGES);
     })();
