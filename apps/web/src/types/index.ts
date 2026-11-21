@@ -15,6 +15,7 @@ export type {
   UploadEvent,
   AddMachineRequest,
   FoundMachine,
+  FoundChatter,
   SupportedMachineType,
   MachineRemovedEvent,
   OpcUaSecurity,
