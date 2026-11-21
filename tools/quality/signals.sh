@@ -16,7 +16,9 @@ ALL=0
 COVERAGE=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --base) BASE="$2"; shift 2 ;;
+    --base)
+      if [ $# -lt 2 ] || [ "${2#--}" != "$2" ]; then echo "Give a git ref after --base, for example: --base main" >&2; exit 2; fi
+      BASE="$2"; shift 2 ;;
     --all) ALL=1; shift ;;
     --coverage) COVERAGE=1; shift ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
