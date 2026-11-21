@@ -122,6 +122,16 @@ describe('HardwarePoller', () => {
       expect(listener.removeMachine).toHaveBeenCalledWith(machine.id);
     });
 
+    it('forgets the machine before the listeners run, so the alert receiver drops a later send of vmalert for it', async () => {
+      const machine = await addSpeedio();
+      const knownWhenTold: boolean[] = [];
+      poller.addRemovalListener({ removeMachine: id => knownWhenTold.push(poller.getMachine(id) !== null) });
+
+      await poller.removeMachine(machine.id);
+
+      expect(knownWhenTold).toEqual([false]);
+    });
+
     it('gives each poll and each removed machine to every recorder', async () => {
       vi.spyOn(BrotherConnector.prototype, 'poll').mockResolvedValue({} as never);
       const recorders = [1, 2].map(() => ({ record: vi.fn(), removeMachine: vi.fn() }));
