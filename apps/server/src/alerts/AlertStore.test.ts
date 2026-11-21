@@ -1,4 +1,4 @@
-import { ALERT_END_GRACE_MS } from '@local-chatter/shared';
+import { ALERT_END_GRACE_MS, EVENT_LABEL } from '@local-chatter/shared';
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type Alert, AlertStore, KEEP_ALERTS_MS } from './AlertStore.js';
@@ -38,7 +38,35 @@ describe('AlertStore', () => {
   });
 
   it('keeps a new start of the same alert as a second alert', () => {
-    store.save([anAlert({ startsAt: NOW - 10 * MINUTE_MS, endsAt: NOW - 5 * MINUTE_MS })], NOW);
+    store.save([anAlert({ startsAt: NOW - 10 * MINUTE_MS, endsAt: NOW - 5 * MINUTE_MS, resolved: true })], NOW);
+    store.save([anAlert()], NOW);
+
+    expect(store.read(allAlertsQuery)).toHaveLength(2);
+  });
+
+  it('keeps a firing alert as one alert when vmalert sends it with a new start time, for example after vmalert restarted', () => {
+    // vmalert keeps no start time over a restart for a rule that fires at the first check
+    store.save([anAlert({ startsAt: NOW - 10 * MINUTE_MS, endsAt: NOW - MINUTE_MS })], NOW);
+    store.save([anAlert({ startsAt: NOW - 30_000, endsAt: NOW + MINUTE_MS })], NOW);
+    store.save([anAlert({ startsAt: NOW - 30_000, endsAt: NOW + 2 * MINUTE_MS })], NOW + MINUTE_MS);
+
+    expect(store.read(allAlertsQuery)).toMatchObject([{ startsAt: NOW - 10 * MINUTE_MS, endsAt: NOW + 2 * MINUTE_MS }]);
+
+    store.save([anAlert({ startsAt: NOW - 30_000, endsAt: NOW + 90_000, resolved: true })], NOW + 2 * MINUTE_MS);
+
+    expect(store.read(allAlertsQuery)).toMatchObject([{ startsAt: NOW - 10 * MINUTE_MS, endsAt: NOW + 90_000, resolved: true }]);
+  });
+
+  it('keeps each start of an event, such as "program ended", as a new alert', () => {
+    const labels = { alertname: 'Program ended', machine: 'm1', [EVENT_LABEL]: 'true' };
+    store.save([anAlert({ labels, startsAt: NOW - 2 * MINUTE_MS, endsAt: NOW + MINUTE_MS })], NOW);
+    store.save([anAlert({ labels, startsAt: NOW - 30_000, endsAt: NOW + MINUTE_MS })], NOW);
+
+    expect(store.read(allAlertsQuery)).toHaveLength(2);
+  });
+
+  it('keeps a new start as a second alert when the first alert ended more than the grace time ago', () => {
+    store.save([anAlert({ startsAt: NOW - 10 * MINUTE_MS, endsAt: NOW - ALERT_END_GRACE_MS })], NOW);
     store.save([anAlert()], NOW);
 
     expect(store.read(allAlertsQuery)).toHaveLength(2);

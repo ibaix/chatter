@@ -1,4 +1,4 @@
-import { ALERT_END_GRACE_MS } from '@local-chatter/shared';
+import { ALERT_END_GRACE_MS, EVENT_LABEL } from '@local-chatter/shared';
 import Database from 'better-sqlite3';
 
 /** Alerts are kept this long after they end, like the machine history */
@@ -90,7 +90,12 @@ export class AlertStore {
     return new AlertStore(new Database(':memory:'));
   }
 
-  /** Add new alerts, and update the end time and the text of known ones. Also removes alerts older than a year. */
+  /**
+   * Add new alerts, and update the end time and the text of known ones. Also removes alerts older than a year.
+   * A start time that is new for an alert that still fires (with the same labels) updates that alert: after a restart,
+   * vmalert gives a firing alert a new start time when its rule fires at the first check. It is not a new alert.
+   * An event, such as "program ended", is different: each start is a new event.
+   */
   save(alerts: Alert[], now: number): void {
     const upsert = this.db.prepare(`
       INSERT INTO alerts (name, machine_id, labels, annotations, starts_at, ends_at, resolved)
@@ -98,9 +103,21 @@ export class AlertStore {
       ON CONFLICT (labels, starts_at) DO UPDATE SET
         annotations = excluded.annotations, ends_at = excluded.ends_at, resolved = excluded.resolved
     `);
+    const firingWithEarlierStart = this.db.prepare(`
+      SELECT id FROM alerts
+      WHERE labels = @labels AND starts_at < @startsAt AND ${FIRING_UNTIL_SQL} > @now
+      ORDER BY starts_at DESC LIMIT 1
+    `).pluck();
+    const update = this.db.prepare(`
+      UPDATE alerts SET annotations = @annotations, ends_at = @endsAt, resolved = @resolved WHERE id = @id
+    `);
     this.db.transaction(() => {
       for (const alert of alerts) {
-        upsert.run(toSqlParameters(alert));
+        const parameters = toSqlParameters(alert);
+        const isEvent = alert.labels[EVENT_LABEL] === 'true';
+        const id = isEvent ? undefined : firingWithEarlierStart.get({ ...parameters, now }) as number | undefined;
+        if (id === undefined) upsert.run(parameters);
+        else update.run({ ...parameters, id });
       }
       this.removeEndedBefore(now - KEEP_ALERTS_MS);
     })();
