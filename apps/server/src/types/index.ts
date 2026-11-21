@@ -7,6 +7,7 @@ import type {
   MacroConfig,
   MTConnectMachineData,
   OpcUaSecurity,
+  PollTimings,
   SiemensMachineData,
 } from '@local-chatter/shared';
 
@@ -122,6 +123,8 @@ export interface BaseMachineStatus {
   /** Only whether a password is saved. The password itself never leaves the server. */
   hasFtpPassword: boolean;
   macros?: MacroConfig[];
+  /** How long the polls take. Only connectors that measure their polls send it. */
+  pollTimings?: PollTimings;
 }
 
 export interface BrotherMachineStatus extends BaseMachineStatus {

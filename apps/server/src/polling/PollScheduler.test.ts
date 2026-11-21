@@ -140,6 +140,21 @@ describe('PollScheduler', () => {
     expect(machine.disconnects).toBe(0);
   });
 
+  it('tells the machine its poll time limit before the first poll, so the machine can plan its poll', async () => {
+    const shortLimit = new PollScheduler({ afterPoll, connectingEnded }, { pollTimeoutMs: 4000 });
+    const limits: number[] = [];
+    vi.spyOn(machine, 'poll').mockImplementation(() => {
+      limits.push((machine as unknown as { pollTimeLimitMs: number }).pollTimeLimitMs);
+      return Promise.resolve();
+    });
+
+    shortLimit.start(machine.asConnector());
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(limits).toEqual([4000]);
+    shortLimit.stopAll();
+  });
+
   describe('a poll that runs out of time', () => {
     beforeEach(async () => {
       machine.pollsWaitForTest = true;

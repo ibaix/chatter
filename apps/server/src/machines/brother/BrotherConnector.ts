@@ -1,5 +1,6 @@
 import net from 'net';
 import { BaseMachineConnector } from '../BaseMachineConnector.js';
+import { PollTimingRecorder } from '../pollTimings.js';
 import type {
   BrotherMachineConfig,
   BrotherMachineStatus,
@@ -171,6 +172,7 @@ export class BrotherConnector extends BaseMachineConnector {
   private toolDataCommand: string;
   private macroCommand: string;
   private dataItems: DataItem[];
+  private readonly timings: PollTimingRecorder;
 
   constructor(config: BrotherMachineConfig) {
     super(config);
@@ -187,6 +189,7 @@ export class BrotherConnector extends BaseMachineConnector {
     this.macroCommand = `MCRN${unitLetter}1`;
 
     this.dataItems = this.buildDataItems();
+    this.timings = new PollTimingRecorder(this.id);
   }
 
   /** The standard data items, then one item for each configured macro */
@@ -310,7 +313,7 @@ export class BrotherConnector extends BaseMachineConnector {
 
     for (const { command, controlType } of ATC_COMMANDS) {
       try {
-        if (isValidAtcResponse(await this.sendCommand(command))) {
+        if (isValidAtcResponse(await this.send(command))) {
           this.atcCommand = command;
           this.controlType = controlType;
           return;
@@ -357,19 +360,25 @@ export class BrotherConnector extends BaseMachineConnector {
 
   async poll(): Promise<BrotherMachineStatus> {
     this.clearErrors();
+    this.timings.startPoll();
+    try {
+      await this.pollMachine();
+    } finally {
+      this.timings.endPoll(this.pollTimeLimitMs);
+    }
+    return this.getStatus();
+  }
 
+  /** Connect when needed, read the machine, and keep the values */
+  private async pollMachine(): Promise<void> {
     if (!this.socket || !this.connected) {
-      if (!(await this.ensureConnected())) {
-        return this.getStatus();
-      }
+      if (!(await this.ensureConnected())) return;
     }
 
     this.prevData = { ...this.data };
 
     const responses = await this.readMachine();
-    if (!responses) {
-      return this.getStatus();
-    }
+    if (!responses) return;
 
     this.saveDataItems(responses);
     if (this.atcCommand && responses[this.atcCommand]) {
@@ -381,8 +390,11 @@ export class BrotherConnector extends BaseMachineConnector {
 
     this.updatePollTime();
     this.emitDataChanges(this.prevData, this.data);
+  }
 
-    return this.getStatus();
+  /** Send a command, and record how long the machine took to answer */
+  private send(command: string): Promise<ParsedResponse> {
+    return this.timings.time(command, () => this.sendCommand(command));
   }
 
   /** Find the control type the first time, then send the poll commands. Gives null when a command fails. */
@@ -412,7 +424,7 @@ export class BrotherConnector extends BaseMachineConnector {
 
     const responses: Record<string, ParsedResponse> = {};
     for (const command of commands) {
-      responses[command] = await this.sendCommand(command);
+      responses[command] = await this.send(command);
     }
     return responses;
   }
@@ -427,6 +439,7 @@ export class BrotherConnector extends BaseMachineConnector {
   }
 
   getStatus(): BrotherMachineStatus {
+    const pollTimings = this.timings.snapshot();
     return {
       id: this.id,
       name: this.name,
@@ -440,7 +453,9 @@ export class BrotherConnector extends BaseMachineConnector {
       lastPollTime: this.lastPollTime,
       errors: this.errors,
       data: { ...this.data, toolTable: this.toolTable, hasPocketInfo: this.hasPocketInfo, controlType: this.controlType },
-      macros: this.macros
+      macros: this.macros,
+      // Only after the first poll, so the status has the same fields as the status of the other connectors until then
+      ...(pollTimings ? { pollTimings } : {}),
     };
   }
 

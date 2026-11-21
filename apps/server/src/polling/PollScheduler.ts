@@ -88,6 +88,7 @@ export class PollScheduler {
     if (this.activeIds.has(connector.id)) return;
     this.activeIds.add(connector.id);
     this.failureCounts.set(connector.id, 0);
+    connector.pollTimeLimitMs = this.pollTimeoutMs;
     this.startConnecting(connector);
     // Do not wait: pollNow sets the next timer when it ends
     void this.pollNow(connector);

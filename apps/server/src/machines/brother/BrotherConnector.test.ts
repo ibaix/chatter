@@ -26,7 +26,8 @@ function connectorWithReplies(
   config: Partial<BrotherMachineConfig> = {},
 ): BrotherConnector {
   const connector = newConnector({ id: 'b1', name: 'Speedio', host: '127.0.0.1', ...config });
-  Object.assign(connector, { socket: {}, connected: true });
+  // A poll that fails destroys the socket
+  Object.assign(connector, { socket: { destroy: () => {} }, connected: true });
   vi.spyOn(connector, 'sendCommand').mockImplementation(async command => {
     if (!replies[command]) throw new Error(`No reply for ${command}`);
     return connector.parseResponse(replies[command]);
@@ -394,6 +395,36 @@ describe('Brother tool table from a poll', () => {
 
     expect(connector.sendCommand).toHaveBeenCalledWith('TOLNM1');
     expect(connector.sendCommand).not.toHaveBeenCalledWith('TOLNI1');
+  });
+});
+
+describe('Brother poll times in the status', () => {
+  it('has no poll times before the first poll', () => {
+    expect(newConnector().getStatus().pollTimings).toBeUndefined();
+  });
+
+  it('gives the time of each command and of the poll, and the poll limit', async () => {
+    const connector = connectorWithReplies(MOCK_RESPONSES);
+    connector.pollTimeLimitMs = 8000;
+
+    const status = await connector.poll();
+
+    expect(status.pollTimings?.limitMs).toBe(8000);
+    expect(Object.keys(status.pollTimings?.lastPoll.commands ?? {}).sort())
+      .toEqual(['ALARM', 'ATCTL', 'MEM', 'PANEL', 'PDSP', 'TOLNI1', 'WKCNTR']);
+    expect(status.pollTimings?.commands.PANEL.samples).toBe(1);
+    expect(status.pollTimings?.poll.samples).toBe(1);
+    expect(status.pollTimings?.lastPoll.skipped).toEqual([]);
+  });
+
+  it('records a poll that fails, so a slow machine shows its times', async () => {
+    const { MEM: _mem, ...replies } = MOCK_RESPONSES;
+    const connector = connectorWithReplies(replies);
+
+    const status = await connector.poll();
+
+    expect(status.errors.join(';')).toContain('No reply for MEM');
+    expect(status.pollTimings?.lastPoll.commands).toHaveProperty('MEM');
   });
 });
 

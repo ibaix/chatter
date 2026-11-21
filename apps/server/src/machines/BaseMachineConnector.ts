@@ -16,6 +16,8 @@ export const DEFAULT_FTP_USER = 'anonymous';
 
 const DEFAULT_FTP_PORT = 21;
 const DEFAULT_TIMEOUT_MS = 5000;
+/** The same as POLL_TIMEOUT_MS of the PollScheduler, which sets the real value */
+const DEFAULT_POLL_TIME_LIMIT_MS = 10000;
 
 /** The text of an error, for a message to the user */
 export function errorMessage(error: unknown, fallback = 'Unknown error'): string {
@@ -38,6 +40,8 @@ export abstract class BaseMachineConnector extends EventEmitter {
   public ftpUser: string;
   public ftpPassword: string;
   public connected: boolean;
+  /** The time limit of one poll. The PollScheduler sets it, so a connector can plan its poll in that time. */
+  public pollTimeLimitMs = DEFAULT_POLL_TIME_LIMIT_MS;
 
   protected timeout: number;
   protected ftpClient: FTPClient;
