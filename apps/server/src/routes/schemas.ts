@@ -56,7 +56,7 @@ const machineSettings = {
 
 export const addMachineSchema = z.object({
   type: z.string({ error: MACHINE_FIELDS_REQUIRED }).trim().min(1, MACHINE_FIELDS_REQUIRED)
-    .pipe(z.enum(SUPPORTED_MACHINE_TYPES, { error: 'Type must be "brother", "haas", "mtconnect", "fanuc", or "siemens"' })),
+    .pipe(z.enum(SUPPORTED_MACHINE_TYPES, { error: `Type must be one of: ${SUPPORTED_MACHINE_TYPES.map(type => `"${type}"`).join(', ')}` })),
   name: z.string({ error: MACHINE_FIELDS_REQUIRED }).trim().min(1, MACHINE_FIELDS_REQUIRED),
   host: z.string({ error: MACHINE_FIELDS_REQUIRED }).trim().min(1, MACHINE_FIELDS_REQUIRED).pipe(ipv4),
   ...machineSettings,
@@ -116,6 +116,15 @@ export const batchUploadForm = z.object({
 export const uploadListQuery = z.object({
   limit: wholeNumberText('limit').optional(),
 });
+
+/** A row id in the address, as in /uploads/42/events */
+const rowId = (name: string) => z.string().regex(/^[1-9]\d{0,15}$/, `The ${name} must be a whole number`).transform(Number);
+
+/** The machine, and one uploaded file of it */
+export const uploadFileParams = z.object({ id: z.string(), fileId: rowId('file id') });
+
+/** The machine, and one upload to it */
+export const uploadEventParams = z.object({ id: z.string(), eventId: rowId('upload id') });
 
 /** The machine, and the value whose history to read */
 export const historyParams = z.object({
@@ -244,9 +253,7 @@ export const changeRoleSchema = z.object({ role: roleSchema }, NOT_AN_OBJECT);
 export const setPasswordSchema = z.object({ password: passwordSchema }, NOT_AN_OBJECT);
 
 /** The user in the address, as in /settings/users/12 */
-export const userIdParam = z.object({
-  id: z.string().regex(/^[1-9]\d{0,15}$/, 'The user id must be a whole number').transform(Number),
-});
+export const userIdParam = z.object({ id: rowId('user id') });
 
 /** The switches in Settings > Updates */
 export const updateSettingsSchema = z.object({

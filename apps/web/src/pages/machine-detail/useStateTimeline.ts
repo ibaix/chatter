@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchStateTimeline } from '../../api/stateTimeline';
 import { useNow } from '../../hooks/useNow';
-import { CHART_CLOCK_TICK_MS, loadSpan, MOVE_LOAD_DELAY_MS, type ChartRange, type HistoryStatus } from './historyChart';
+import { CHART_CLOCK_TICK_MS, compareLoad, loadSpan, type ChartLoad, type ChartRange, type HistoryStatus } from './historyChart';
 import { clipSegments, withLiveState, type LiveState, type StateSegment } from './stateTimeline';
 
 interface SharedLoad {
@@ -80,11 +80,8 @@ export function useStateTimeline(
   const key = `${machineId} ${range.query} ${end ?? 'now'}`;
   /** The machine that `segments` belong to. Until the effect starts a new machine, the old segments must not show. */
   const [segmentsMachine, setSegmentsMachine] = useState(machineId);
-  /** The machine of the last load, or null before the first load */
-  const loadedMachine = useRef<string | null>(null);
-  /** The range and the end of the last load */
-  const loadedRange = useRef<ChartRange | null>(null);
-  const loadedEnd = useRef<number | null>(null);
+  /** The machine, the range and the end of the last load, or null before the first load */
+  const lastLoad = useRef<ChartLoad | null>(null);
   /** True while a load runs. The old segments stay until it ends, so a live state does not stretch them. */
   const loadRuns = useRef(false);
   const ownNow = useNow(CHART_CLOCK_TICK_MS);
@@ -96,23 +93,21 @@ export function useStateTimeline(
 
   useEffect(() => {
     let stopped = false;
-    // Only the end changed: the user moved in time. (StrictMode runs the effect again with the same end.)
-    const moved = loadedMachine.current === machineId && loadedRange.current === range && loadedEnd.current !== end;
+    const thisLoad = { key: machineId, range, end };
+    const { isNewKey, delayMs } = compareLoad(lastLoad.current, thisLoad);
+    lastLoad.current = thisLoad;
     // Another time of the same machine keeps the old segments until the new ones come
-    if (loadedMachine.current !== machineId) {
+    if (isNewKey) {
       const startLive = latestLive.current;
       setSegments(startLive ? withLiveState([], startLive) : []);
       lastKnownAt.current = undefined;
     }
-    loadedMachine.current = machineId;
-    loadedRange.current = range;
-    loadedEnd.current = end;
     setSegmentsMachine(machineId);
     setStatus('loading');
     loadRuns.current = true;
-    // A move waits, so a quick series of moves loads once. The other loads start after the effect, so StrictMode,
+    // A move waits (compareLoad). The other loads start after the effect, so StrictMode,
     // which runs each effect twice, sends one request.
-    const { request, leave } = joinTimeline(key, moved ? MOVE_LOAD_DELAY_MS : 0, () => {
+    const { request, leave } = joinTimeline(key, delayMs, () => {
       const span = loadSpan(range, end, Date.now());
       return fetchStateTimeline(machineId, span.query, span.end ?? undefined);
     });

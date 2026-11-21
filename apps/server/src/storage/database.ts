@@ -102,24 +102,25 @@ export async function getUploadFiles(machineId: string, limit = DEFAULT_UPLOAD_F
   `).all(machineId, limit) as UploadFileRow[];
 }
 
-/** The uploads of one file, newest first, without their content. */
-export async function getUploadEvents(fileId: string | number): Promise<UploadEventRow[]> {
+/** The uploads of one file of a machine, newest first, without their content. A file of another machine gives none. */
+export async function getUploadEvents(machineId: string, fileId: number): Promise<UploadEventRow[]> {
   return getDb().prepare(`
-    SELECT id, target_name, remote_path, uploaded_at
-    FROM upload_events
-    WHERE file_id = ?
-    ORDER BY uploaded_at DESC
-  `).all(fileId) as UploadEventRow[];
+    SELECT ue.id, ue.target_name, ue.remote_path, ue.uploaded_at
+    FROM upload_events ue
+    JOIN upload_files uf ON uf.id = ue.file_id
+    WHERE ue.file_id = ? AND uf.machine_id = ?
+    ORDER BY ue.uploaded_at DESC
+  `).all(fileId, machineId) as UploadEventRow[];
 }
 
-/** One upload with its decompressed content, or null when there is no upload with this ID. */
-export async function getUploadEventById(eventId: string | number): Promise<UploadEventRow | null> {
+/** One upload to a machine with its decompressed content, or null when the machine has no upload with this ID. */
+export async function getUploadEventById(machineId: string, eventId: number): Promise<UploadEventRow | null> {
   const event = getDb().prepare(`
     SELECT ue.*, uf.file_name, uf.machine_id
     FROM upload_events ue
     JOIN upload_files uf ON uf.id = ue.file_id
-    WHERE ue.id = ?
-  `).get(eventId) as UploadEventRow | undefined;
+    WHERE ue.id = ? AND uf.machine_id = ?
+  `).get(eventId, machineId) as UploadEventRow | undefined;
   if (!event) return null;
 
   if (event.file_content && Buffer.isBuffer(event.file_content)) {

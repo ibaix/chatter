@@ -8,6 +8,7 @@ import { loggedInAuth } from './auth/testSupport.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
+import { PROGRAM_UPLOAD_LIMIT_BYTES, SUPPORTED_MACHINE_TYPES } from '@local-chatter/shared';
 
 // Mock the db module
 vi.mock('./storage/database.js', () => ({
@@ -193,6 +194,8 @@ describe('API Routes', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('brother');
+      // The message names each type that Chatter supports, from the shared list
+      for (const type of SUPPORTED_MACHINE_TYPES) expect(res.body.error).toContain(`"${type}"`);
     });
 
     it.each([
@@ -854,6 +857,26 @@ describe('API Routes', () => {
     });
   });
 
+  describe('the size limit of program uploads', () => {
+    // A Pi has only 512 MB, and the server holds each file in memory while it sends it
+    it.each(['upload', 'upload-batch'])('refuses a %s body that is larger than the limit, before it reads it', async route => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const uploadFile = vi.spyOn(poller.getConnector(machine.id)!, 'uploadFile');
+      const uploadFiles = vi.spyOn(poller.getConnector(machine.id)!, 'uploadFiles');
+
+      const res = await send(`/api/machine/${machine.id}/files/${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'multipart/form-data; boundary=x', 'Content-Length': String(PROGRAM_UPLOAD_LIMIT_BYTES + 1) },
+        body: '--x--',
+      });
+
+      expect(res.status).toBe(413);
+      expect(((await res.json()) as { error: string }).error).toBe('The files are too large. Send at most 32 MB at one time.');
+      expect(uploadFile).not.toHaveBeenCalled();
+      expect(uploadFiles).not.toHaveBeenCalled();
+    });
+  });
+
   describe('DELETE /api/machine/:id/files', () => {
     it('returns 400 when path is missing', async () => {
       const machine = await poller.addBrotherMachine({
@@ -909,7 +932,14 @@ describe('API Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual(mockEvents);
-      expect(getUploadEvents).toHaveBeenCalledWith('42');
+      expect(getUploadEvents).toHaveBeenCalledWith('machine1', 42);
+    });
+
+    it('returns 400 when the file id is not a whole number', async () => {
+      const res = await call('GET', '/api/machine/machine1/uploads/abc/events');
+
+      expect(res.status).toBe(400);
+      expect(getUploadEvents).not.toHaveBeenCalled();
     });
   });
 
@@ -926,6 +956,14 @@ describe('API Routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual(mockEvent);
+      expect(getUploadEventById).toHaveBeenCalledWith('machine1', 1);
+    });
+
+    it('returns 400 when the event id is not a whole number', async () => {
+      const res = await call('GET', '/api/machine/machine1/uploads/events/1;DROP');
+
+      expect(res.status).toBe(400);
+      expect(getUploadEventById).not.toHaveBeenCalled();
     });
 
     it('returns 404 when event not found', async () => {

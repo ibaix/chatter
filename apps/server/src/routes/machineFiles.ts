@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
+import { PROGRAM_UPLOAD_LIMIT_BYTES } from '@local-chatter/shared';
 import type { HardwarePoller } from '../polling/poller.js';
 import { recordUpload } from '../storage/database.js';
 import { attachmentHeader, downloadAsStream } from './fileDownload.js';
@@ -27,6 +29,15 @@ interface UploadPlan {
   fileAt: Record<string, ReceivedFile>;
   targetNameAt: Record<string, string>;
 }
+
+/**
+ * The server holds the files of an upload in memory, and a Pi has only 512 MB.
+ * bodyLimit refuses a body that says it is too large before it reads it, and stops reading at the limit.
+ */
+const programSizeLimit = bodyLimit({
+  maxSize: PROGRAM_UPLOAD_LIMIT_BYTES,
+  onError: c => c.json({ error: `The files are too large. Send at most ${PROGRAM_UPLOAD_LIMIT_BYTES / 1024 / 1024} MB at one time.` }, 413),
+});
 
 /** The form sends booleans as the text "true" or "false" */
 const isTrueText = (value: string | undefined) => value === 'true';
@@ -108,7 +119,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
       });
     })
 
-    .post('/machine/:id/files/upload', canSendFiles, checkedForm(uploadForm), async c => {
+    .post('/machine/:id/files/upload', canSendFiles, programSizeLimit, checkedForm(uploadForm), async c => {
       const machineId = c.req.param('id');
       const { file, path: remotePath, overwrite, targetName } = c.req.valid('form');
       const connector = poller.getConnector(machineId);
@@ -134,7 +145,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
     })
 
     // Send several files. Each file passes or fails on its own.
-    .post('/machine/:id/files/upload-batch', canSendFiles, checkedForm(batchUploadForm), async c => {
+    .post('/machine/:id/files/upload-batch', canSendFiles, programSizeLimit, checkedForm(batchUploadForm), async c => {
       const machineId = c.req.param('id');
       const { files, basePath, overwrite, targetNames } = c.req.valid('form');
       const connector = poller.getConnector(machineId);

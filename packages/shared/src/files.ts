@@ -14,6 +14,12 @@ export interface FTPTreeNode extends FTPFileInfo {
   children?: FTPTreeNode[];
 }
 
+/**
+ * The largest body of one program upload, for all its files: 32 MiB.
+ * The server holds the files in memory while it sends them, and a Pi has only 512 MB.
+ */
+export const PROGRAM_UPLOAD_LIMIT_BYTES = 32 * 1024 * 1024;
+
 // ============================================
 // Upload History Types
 // ============================================

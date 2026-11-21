@@ -101,18 +101,17 @@ describe('database', () => {
       await recordUpload('machine1', 'part.nc', 'O0100.NC', '/TEST/O0100.NC', 'v1');
       await recordUpload('machine1', 'part.nc', 'O0100.NC', '/PROD/O0100.NC', 'v2');
 
-      const result = await getUploadEvents(uploadFileId('part.nc'));
+      const result = await getUploadEvents('machine1', uploadFileId('part.nc'));
 
       expect(result).toHaveLength(2);
       expect(result.map(e => e.remote_path)).toContain('/TEST/O0100.NC');
       expect(result.map(e => e.remote_path)).toContain('/PROD/O0100.NC');
     });
 
-    it('accepts the file ID as a string', async () => {
-      await recordUpload('machine1', 'part.nc', 'O0100.NC', '/test', 'content');
+    it('returns nothing for a file of another machine', async () => {
+      await recordUpload('machine1', 'part.nc', 'O0100.NC', '/O0100.NC', 'content');
 
-      const result = await getUploadEvents(String(uploadFileId('part.nc')));
-      expect(result).toHaveLength(1);
+      expect(await getUploadEvents('machine2', uploadFileId('part.nc'))).toEqual([]);
     });
   });
 
@@ -121,15 +120,20 @@ describe('database', () => {
       const originalContent = 'G00 X0 Y0\nM30';
       await recordUpload('machine1', 'test.nc', 'O0100.NC', '/O0100.NC', originalContent);
 
-      const result = await getUploadEventById(1);
+      const result = await getUploadEventById('machine1', 1);
 
       expect(result).not.toBeNull();
       expect(result!.file_content).toBe(originalContent);
     });
 
     it('returns null when there is no upload with that ID', async () => {
-      const result = await getUploadEventById(999);
-      expect(result).toBeNull();
+      expect(await getUploadEventById('machine1', 999)).toBeNull();
+    });
+
+    it('returns null for an upload to another machine', async () => {
+      await recordUpload('machine1', 'test.nc', 'O0100.NC', '/O0100.NC', 'content');
+
+      expect(await getUploadEventById('machine2', 1)).toBeNull();
     });
   });
 
