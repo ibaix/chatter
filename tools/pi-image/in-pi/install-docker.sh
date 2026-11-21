@@ -2,7 +2,8 @@
 # Runs inside the Pi's files (with chroot), while customize.sh makes the card image.
 # Installs Docker from Docker's Debian armhf packages (https://docs.docker.com/engine/install/debian/),
 # and turns on chatter.service, so Chatter starts each time the Pi starts,
-# and chatter-update.path, so the update helper runs when Chatter asks for it.
+# chatter-update.path, so the update helper runs when Chatter asks for it, and chatter-facts.timer,
+# so the helper writes the network facts of the Pi for Settings > Diagnostics.
 # Docker's Raspbian packages stop at Docker 28. The Debian armhf packages keep getting new versions,
 # and they run on the ARMv7 chips of the Pi 2, Pi 3, and Pi Zero 2 W (not on the Pi 1 or Pi Zero W).
 set -euo pipefail
@@ -29,4 +30,4 @@ apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 # The downloaded package files are not needed on the card.
 apt-get clean
 
-systemctl enable docker.service chatter.service chatter-update.path
+systemctl enable docker.service chatter.service chatter-update.path chatter-facts.timer

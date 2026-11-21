@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 # The update helper of the Chatter card. It runs on the Pi as root, outside Docker.
 # Chatter (in its container, as the node user) can only write into /opt/chatter/update/inbox/:
-# the update file (chatter-update.tar) and a request (request.json, the text "check" or "install").
+# the update file (chatter-update.tar) and a request (request.json, the text "check", "install" or "reboot").
 # systemd starts this script when a request comes (chatter-update.path and chatter-update.service).
 #
 #   update-chatter.sh request   reads the request from the inbox, and does it
 #   update-chatter.sh check     checks the update file in the inbox
 #   update-chatter.sh install   installs the checked update file, or rolls back to the old version
-#   update-chatter.sh recover   undoes an install that stopped, and writes helper.json. It never reads the inbox.
-#                               systemd runs it at each start of the Pi (chatter.service, before Chatter starts)
-#                               and after each run of the helper (ExecStopPost=, also after a hard kill).
+#   update-chatter.sh recover   undoes an install that stopped, and writes helper.json and network.json.
+#                               It never reads the inbox. systemd runs it at each start of the Pi
+#                               (chatter.service, before Chatter starts) and after each run of the helper
+#                               (ExecStopPost=, also after a hard kill).
+#   update-chatter.sh facts     writes network.json again (chatter-facts.timer runs it each 10 minutes)
 #
 # It writes the result to /opt/chatter/update/status.json, which Chatter reads.
+# It also writes its log lines to /opt/chatter/update/helper.log (at most 2 files of 256 KB), so an Admin can
+# read them in Chatter, with no SSH.
 # It trusts only its own root-only files and the public keys in /etc/chatter/update-keys/.
 # It trusts nothing in the inbox, and a file of an update file only after its signature and checksum passed.
 # The steps are in "Work item 8" of the plan. Each step writes a line to the log: journalctl -u chatter-update
@@ -40,6 +44,10 @@ FILES="$STATE_DIR/files"
 BOOT_ID_FILE="$UPDATE_ROOT/proc/sys/kernel/random/boot_id"
 BACKUPS="$CHATTER_DIR/backups"
 HEALTH_URL="http://127.0.0.1:3001/api/health"
+HELPER_LOG="$UPDATE_DIR/helper.log"
+HOSTNAME_FILE="$UPDATE_ROOT/etc/hostname"
+# The time of the last restart of the Pi that Chatter asked for
+LAST_REBOOT_FILE="$STATE_DIR/last-reboot"
 
 # The same limit as in Chatter (UPDATE_FILE_LIMIT_BYTES in packages/shared/src/updates.ts): 600 MiB.
 FILE_LIMIT_BYTES=629145600
@@ -55,6 +63,14 @@ LOADED_IMAGE_FACTOR=3
 # An Admin installs a checked file within a day, or checks it again
 READY_MAX_AGE_SECONDS=86400
 BACKUPS_TO_KEEP=2
+# helper.log becomes helper.log.1 at this size, so the 2 files take at most 512 KB on the card.
+HELPER_LOG_LIMIT_BYTES=$((256 * 1024))
+# At most one restart of the Pi that Chatter asks for in this time, so a broken-into Chatter cannot restart it again and again.
+REBOOT_INTERVAL_SECONDS="${UPDATE_REBOOT_INTERVAL:-900}"
+# What this helper can do. Chatter shows a button only for what the helper says in helper.json.
+CAPABILITIES='["reboot","network","log"]'
+# The most addresses in network.json
+ADDRESSES_LIMIT=8
 
 QUICK_TIMEOUT="1m"
 DOCKER_TIMEOUT="${UPDATE_DOCKER_TIMEOUT:-5m}"
@@ -100,6 +116,9 @@ R_RESTORED_LATER="The new version did not start. The old data was put back from 
 R_RESTARTED="The Pi restarted after the check. Upload or download the update file again."
 R_STOPPED="The update helper stopped before it ended. See the log: journalctl -u chatter-update"
 
+# The command of this run, for the lines in helper.log
+run_command=""
+
 # What this run knows. The values from the manifest are set only after the signature check.
 result_written="no"
 heartbeat_pid=""
@@ -125,12 +144,14 @@ main() {
   trap 'exit 143' TERM
   trap 'exit 130' INT
   trap 'exit 129' HUP
+  run_command="${1:-}"
   case "${1:-}" in
     request) prepare_folders; run_request ;;
     check) prepare_folders; run_when_free run_check ;;
     install) prepare_folders; run_when_free run_install ;;
     recover) run_recover ;;
-    *) echo "Usage: update-chatter.sh request|check|install|recover" >&2; exit 2 ;;
+    facts) prepare_folders; write_network_info ;;
+    *) echo "Usage: update-chatter.sh request|check|install|recover|facts" >&2; exit 2 ;;
   esac
 }
 
@@ -141,6 +162,19 @@ main() {
 # its output to /dev/null, and the log lines of the trap must not go there too.
 log() {
   echo "$*" >&3
+  append_to_helper_log "$*"
+}
+
+# Adds a line with the time to helper.log, which Chatter can read. A full file becomes helper.log.1.
+# A failure here never stops the helper: the line is still in the journal.
+append_to_helper_log() {
+  local size
+  [ -d "$UPDATE_DIR" ] || return 0
+  size="$(stat --format %s -- "$HELPER_LOG" 2> /dev/null)" || size=0
+  if [ "$size" -ge "$HELPER_LOG_LIMIT_BYTES" ]; then
+    mv --force --no-target-directory -- "$HELPER_LOG" "$HELPER_LOG.1" 2> /dev/null || true
+  fi
+  { printf '%s [%s] %s\n' "$(utc_now)" "${run_command:-helper}" "$1" >> "$HELPER_LOG" && chmod 644 "$HELPER_LOG"; } 2> /dev/null || true
 }
 
 utc_now() {
@@ -421,11 +455,12 @@ run_request() {
   case "$request" in
     check) run_check ;;
     install) run_install ;;
-    *) log "The request is not \"check\" or \"install\". Nothing to do." ;;
+    reboot) run_reboot ;;
+    *) log "The request is not \"check\", \"install\" or \"reboot\". Nothing to do." ;;
   esac
 }
 
-# Prints the request: "check" or "install". The moved entry must be a plain file of at most 64 bytes,
+# Prints the request: "check", "install" or "reboot". The moved entry must be a plain file of at most 64 bytes,
 # and the whole text must match, so a newline or any other byte makes it unknown.
 read_request() {
   local size text
@@ -438,9 +473,33 @@ read_request() {
   # Bash drops a NUL byte, so the length shows it.
   [ "${#text}" -eq "$size" ] || return 1
   case "$text" in
-    check | install) echo "$text" ;;
+    check | install | reboot) echo "$text" ;;
     *) return 1 ;;
   esac
+}
+
+# ---------- reboot ----------
+
+# Restarts the Pi, as an Admin asked in Chatter. The request run holds the lock, so no check or install runs now.
+# At most one restart in REBOOT_INTERVAL_SECONDS, so a broken-into Chatter cannot keep the Pi down.
+# An install that is not complete stops the restart too: the Admin must see its status first.
+run_reboot() {
+  local last now
+  now="$(date +%s)"
+  last="$(head --bytes 32 -- "$LAST_REBOOT_FILE" 2> /dev/null)" || last=""
+  if [[ $last =~ ^[0-9]{1,20}$ ]] && [ $((now - last)) -ge 0 ] && [ $((now - last)) -lt "$REBOOT_INTERVAL_SECONDS" ]; then
+    log "Refused to restart the Pi: the last restart was less than $((REBOOT_INTERVAL_SECONDS / 60)) minutes ago."
+    return 0
+  fi
+  case "$(state_value phase)" in
+    backing-up | loading | swapped | restore-failed)
+      log "Refused to restart the Pi: an install is not complete."
+      return 0
+      ;;
+  esac
+  echo "$now" | atomic_write "$LAST_REBOOT_FILE" 600
+  log "Restarting the Pi, as Chatter asked."
+  systemctl --no-block reboot || log "The restart of the Pi did not start."
 }
 
 # ---------- check ----------
@@ -1181,6 +1240,7 @@ run_recover() {
   trap 'exit 0' EXIT
   prepare_folders
   write_helper_info
+  write_network_info || log "Could not write network.json."
   if ! wait_for_lock; then
     log "Another run of the helper holds the lock for too long. Nothing to recover."
     return 0
@@ -1215,7 +1275,61 @@ write_helper_info() {
     log "Unknown processor type, so there is no helper.json."
     return 0
   fi
-  echo "{\"arch\":\"$arch\"}" | atomic_write "$UPDATE_DIR/helper.json" 644
+  echo "{\"arch\":\"$arch\",\"capabilities\":$CAPABILITIES}" | atomic_write "$UPDATE_DIR/helper.json" 644
+}
+
+# ---------- network.json ----------
+
+# network.json tells the Admin in Chatter how to reach the Pi: its name, its addresses, the gateway, and if SSH is on.
+# Each value must have its pattern, or it is not written. So the file is always JSON that Chatter can read.
+#   {"hostname":"chatter","localName":"chatter.local","addresses":[{"interface":"eth0","address":"192.168.1.20/24"}],
+#    "gateway":"192.168.1.1","ssh":true,"updatedAt":"2026-11-21T10:00:00Z"}
+write_network_info() {
+  local name json gateway ssh=false
+  name="$(head --lines 1 -- "$HOSTNAME_FILE" 2> /dev/null | tr -d '[:space:]')" || name=""
+  json="{"
+  if [[ $name =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then
+    json+="\"hostname\":\"$name\",\"localName\":\"$name.local\","
+  fi
+  json+="\"addresses\":[$(address_list_json)]"
+  gateway="$(ip -4 route show default 2> /dev/null | awk '$1 == "default" && $2 == "via" { print $3; exit }')" || gateway=""
+  if is_ipv4 "$gateway"; then json+=",\"gateway\":\"$gateway\""; fi
+  if [ "$(systemctl is-active ssh 2> /dev/null)" = active ]; then ssh=true; fi
+  json+=",\"ssh\":$ssh,\"updatedAt\":\"$(utc_now)\"}"
+  printf '%s\n' "$json" | atomic_write "$UPDATE_DIR/network.json" 644
+}
+
+# The global addresses of the Pi, as JSON objects: {"interface":"eth0","address":"192.168.1.20/24"},...
+# "ip -o" writes one line for each address: "2: eth0    inet 192.168.1.20/24 brd ... scope global ..."
+address_list_json() {
+  local interface address count=0 items=() IFS
+  while read -r interface address; do
+    [ "$count" -lt "$ADDRESSES_LIMIT" ] || break
+    [[ $interface =~ ^[A-Za-z0-9._-]{1,15}$ ]] || continue
+    is_address_with_prefix "$address" || continue
+    items+=("{\"interface\":\"$interface\",\"address\":\"$address\"}")
+    count=$((count + 1))
+  done < <({ ip -o -4 addr show scope global; ip -o -6 addr show scope global; } 2> /dev/null | awk '{ print $2, $4 }')
+  IFS=,
+  printf '%s' "${items[*]}"
+}
+
+is_ipv4() {
+  local part
+  [[ $1 =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  for part in "${BASH_REMATCH[@]:1}"; do
+    [ "$((10#$part))" -le 255 ] || return 1
+  done
+}
+
+is_address_with_prefix() {
+  local address="${1%/*}" prefix="${1##*/}"
+  [[ $1 == */* && $prefix =~ ^[0-9]{1,3}$ ]] || return 1
+  if is_ipv4 "$address"; then
+    [ "$((10#$prefix))" -le 32 ]
+  else
+    [[ $address =~ ^[0-9a-fA-F:]{2,39}$ ]] && [ "$((10#$prefix))" -le 128 ]
+  fi
 }
 
 # Waits for a run that holds the lock. Each step of a run has a time limit, so 30 minutes is enough.

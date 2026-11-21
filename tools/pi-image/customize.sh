@@ -112,7 +112,8 @@ copy_update_helper() {
   local chatter_dir="$ROOT/opt/chatter" state_dir="$ROOT/var/lib/chatter-update"
   install -m 755 "$IN_PI/update-chatter.sh" "$chatter_dir/"
   install -m 644 "$IN_PI/docker-compose.override.yml" "$chatter_dir/"
-  install -m 644 "$IN_PI/chatter-update.path" "$IN_PI/chatter-update.service" "$ROOT/etc/systemd/system/"
+  install -m 644 "$IN_PI/chatter-update.path" "$IN_PI/chatter-update.service" \
+    "$IN_PI/chatter-facts.service" "$IN_PI/chatter-facts.timer" "$ROOT/etc/systemd/system/"
   install -d -m 755 "$chatter_dir/update"
   install -d -o "$CHATTER_UID" -g "$CHATTER_UID" "$chatter_dir/update/inbox"
   install -d -m 700 "$chatter_dir/backups" "$state_dir"
