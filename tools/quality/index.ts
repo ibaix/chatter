@@ -42,6 +42,10 @@ if (command === 'summary') {
 } else if (command === 'changed') {
   const baseFlag = rest.indexOf('--base');
   const base = baseFlag >= 0 ? rest[baseFlag + 1] : 'origin/main';
+  if (!base) {
+    console.error('Give a git ref after --base, for example: --base main');
+    process.exit(1);
+  }
   const mergeBase = git('merge-base', base, 'HEAD').trim();
   // Compare with the working tree, so that changes that are not committed also count
   const changed = changedLinesFromDiff(git('diff', '--unified=0', '--no-color', '--no-renames', mergeBase));
