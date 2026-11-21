@@ -32,14 +32,13 @@ const HAAS_SERIAL_PATTERN = /SERIAL NUMBER,\s*(\S+)/;
 const MTCONNECT_PROBE_TAG = 'MTConnectDevices';
 
 /** Brother: the "MEM" request gives the program in memory, between % signs */
-export async function askBrother(host: string): Promise<FoundMachine | null> {
-  const port = MACHINE_PORTS.brother;
+export async function askBrother(host: string, port: number = MACHINE_PORTS.brother, timeoutMs = ANSWER_TIMEOUT_MS): Promise<FoundMachine | null> {
   const reply = await askOverTcp({
     host,
     port,
     request: brotherCommand('MEM'),
     isComplete: text => BROTHER_PROGRAM_PATTERN.test(text),
-    timeoutMs: ANSWER_TIMEOUT_MS,
+    timeoutMs,
   });
   if (!reply) return null;
   return {
@@ -55,19 +54,19 @@ export function haasSerialOf(reply: string): string | null {
 }
 
 /** Haas: Q100 on the query port gives the serial number */
-export async function askHaas(host: string): Promise<FoundMachine | null> {
+export async function askHaas(host: string, port: number = MACHINE_PORTS.haasQuery, timeoutMs = ANSWER_TIMEOUT_MS): Promise<FoundMachine | null> {
   const request = buildCommandString({ queryStart: 'Q100', label: 'Serial number' });
   const reply = await askOverTcp({
     host,
-    port: MACHINE_PORTS.haasQuery,
+    port,
     request,
     isComplete: text => text.includes('\n'),
-    timeoutMs: ANSWER_TIMEOUT_MS,
+    timeoutMs,
   });
   const serial = reply && haasSerialOf(reply);
   if (!serial) return null;
   return {
-    machine: { type: 'haas', name: `Haas ${serial}`, host, dataPort: MACHINE_PORTS.haasData, queryPort: MACHINE_PORTS.haasQuery },
+    machine: { type: 'haas', name: `Haas ${serial}`, host, dataPort: MACHINE_PORTS.haasData, queryPort: port },
     isConfirmed: true,
     detail: `Serial number ${serial}`,
   };
@@ -150,10 +149,10 @@ export function foundMTConnectMachine(host: string, port: number, devices: Probe
 }
 
 /** MTConnect: the agent's /probe page lists its machines */
-export async function askMTConnect(host: string, port: number): Promise<FoundMachine | null> {
+export async function askMTConnect(host: string, port: number, timeoutMs = ANSWER_TIMEOUT_MS): Promise<FoundMachine | null> {
   try {
     // No redirects: the scan must never follow a device to an address outside the shop network
-    const response = await fetch(`http://${host}:${port}/probe`, { signal: AbortSignal.timeout(ANSWER_TIMEOUT_MS), redirect: 'error' });
+    const response = await fetch(`http://${host}:${port}/probe`, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
     if (!response.ok) return null;
     const xml = await response.text();
     if (!xml.includes(MTCONNECT_PROBE_TAG)) return null;

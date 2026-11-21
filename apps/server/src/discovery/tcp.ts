@@ -14,6 +14,23 @@ export function isPortOpen(host: string, port: number, timeoutMs: number): Promi
   });
 }
 
+/** What a connection try found: open, refused (nothing listens), no answer in time, or no route to the address */
+export type PortState = 'open' | 'refused' | 'timeout' | 'unreachable';
+
+/** Like isPortOpen, but tells why a port is not open */
+export function tryConnect(host: string, port: number, timeoutMs: number): Promise<PortState> {
+  return new Promise(resolve => {
+    const socket = net.connect({ host, port });
+    const finish = (state: PortState) => {
+      socket.destroy();
+      resolve(state);
+    };
+    socket.setTimeout(timeoutMs, () => finish('timeout'));
+    socket.once('connect', () => finish('open'));
+    socket.once('error', (error: NodeJS.ErrnoException) => finish(error.code === 'ECONNREFUSED' ? 'refused' : 'unreachable'));
+  });
+}
+
 /** A machine answer is short. A longer reply is not one of the machines Chatter knows. */
 const MAX_REPLY_LENGTH = 4096;
 

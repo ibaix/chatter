@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import type { MachineHealth } from '@local-chatter/shared';
+import type { ConnectionTestReport, MachineHealth } from '@local-chatter/shared';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SESSION_COOKIE } from '../auth/authRoutes.js';
 import { loggedInAuth } from '../auth/testSupport.js';
@@ -68,6 +68,32 @@ describe('machine health routes', () => {
 
     it('gives 404 for an unknown machine', async () => {
       expect((await request('/api/machine/nope/health')).status).toBe(404);
+    });
+  });
+
+  describe('POST /machine/:id/test', () => {
+    it('tests the saved host and ports, and starts the polls again', async () => {
+      poller.start();
+      const res = await request(`/api/machine/${machineId}/test`, 'POST');
+      expect(res.status).toBe(200);
+      const report = await res.json() as ConnectionTestReport;
+      expect(report.host).toBe('127.0.0.1');
+      expect(report.steps[1]).toMatchObject({ name: `Port ${CLOSED_PORT} (data)`, result: 'failed' });
+      expect(poller.pollClock(machineId)).not.toBeNull();
+    });
+
+    it('refuses a second test in 10 seconds', async () => {
+      const server = app();
+      const test = () => server.request(`/api/machine/${machineId}/test`, { method: 'POST', headers: { Cookie: cookie } });
+      await test();
+      const res = await test();
+      expect(res.status).toBe(429);
+      expect(await errorOf(res)).toMatch(/^Wait \d+ s before the next test of this machine\.$/);
+    });
+
+    it('needs the manage-machines role, and knows only saved machines', async () => {
+      expect((await request(`/api/machine/${machineId}/test`, 'POST', viewerCookie)).status).toBe(403);
+      expect((await request('/api/machine/nope/test', 'POST')).status).toBe(404);
     });
   });
 
