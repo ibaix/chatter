@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   areaOf,
   areaTable,
+  baseFrom,
   changeTable,
   changedLineCoverage,
   changedLinesFromDiff,
@@ -173,5 +174,19 @@ describe('the Markdown tables', () => {
 
   it('says so when no changed line can be measured', () => {
     expect(changeTable([])).toBe('No changed line in the coverage report.');
+  });
+});
+
+describe('baseFrom', () => {
+  it('uses origin/main when no base is given', () => {
+    expect(baseFrom([])).toBe('origin/main');
+  });
+
+  it('reads the ref after --base', () => {
+    expect(baseFrom(['--base', 'chore/eslint'])).toBe('chore/eslint');
+  });
+
+  it.each([[['--base']], [['--base', '--all']]])('says that %j has no ref after --base', args => {
+    expect(() => baseFrom(args)).toThrow('Give a git ref after --base, for example: --base main');
   });
 });
