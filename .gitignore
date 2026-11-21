@@ -28,3 +28,6 @@ docs/.vitepress/dist/
 # Probe dumps and logs from real shop machines. They hold the shop's addresses and control details.
 apps/server/*-probe-*.json
 apps/server/*.log
+
+# Coverage reports (npm run coverage)
+coverage/

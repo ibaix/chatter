@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import indexHtml from '../../index.html?raw';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyTheme, PAGE_COLORS, readThemeChoice, saveThemeChoice, THEME_STORAGE_KEY, themeOf } from './theme';
@@ -105,8 +106,9 @@ describe('index.html', () => {
 
 describe('app.css', () => {
   it('has the same page colors as the browser bar', () => {
-    // Vite turns a CSS import into styles, so the test reads the file. The tests run in apps/web.
-    const appCss = readFileSync(join(process.cwd(), 'src/styles/app.css'), 'utf8');
+    // Vite turns a CSS import into styles, so the test reads the file.
+    // The path starts at this test file, because a run from the repo root has a different working folder.
+    const appCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../styles/app.css'), 'utf8');
     const lightTheme = appCss.slice(appCss.indexOf(":root[data-theme='light']"));
     expect(lightTheme).toContain(`--color-zinc-950: ${PAGE_COLORS.light};`);
   });

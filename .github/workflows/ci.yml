@@ -17,6 +17,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # The changed-line coverage compares this branch with the main branch
+          fetch-depth: 0
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
@@ -35,6 +38,30 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      # Coverage is a signal, not a gate (no thresholds). These steps only report.
+      - name: Measure coverage
+        run: npm run coverage
+
+      - name: Show coverage in the job summary
+        run: |
+          echo '## Coverage' >> "$GITHUB_STEP_SUMMARY"
+          npm run -s coverage:summary >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show changed-line coverage in the job summary
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          echo '## Changed lines with no test' >> "$GITHUB_STEP_SUMMARY"
+          npm run -s coverage:changed -- --base "origin/$BASE_REF" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14
 
   # Fails on a known high or critical vulnerability in a dependency.
   # npm audit reads the lockfile only, so this job does not install packages.

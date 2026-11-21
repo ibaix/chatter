@@ -15,6 +15,7 @@
 | `packages/shared` | The types and rules that the server and the web app share |
 | `tools/fake-machines` | Fake CNC machines for tests (see [Fake machines](./fake-machines.md)) |
 | `tools/fake-notify` | A fake Twilio and webhook receiver for the notifications (see [Fake notifications](./fake-machines.md#fake-notifications)) |
+| `tools/quality` | Scripts that print the coverage reports as tables (see [Coverage](#coverage)) |
 | `tools/pi-image` | The Raspberry Pi card image (see [Pi card image](./pi-image.md)) |
 | `tools/release` | The scripts that make the release files |
 | `docs` | These docs |
@@ -79,9 +80,25 @@ You do not need them with `npm run dev`.
 npm test                # all tests: web app, server, and fake machines
 npm run test:client     # web app tests only
 npm run test:server     # server tests only
-npm run test:tools      # fake machine tests only
+npm run test:tools      # tests of the tools folder only
 npm run typecheck       # check the TypeScript types in all parts
 ```
+
+### Coverage
+
+```bash
+npm run coverage            # all tests in one run, with coverage
+npm run coverage:summary    # the coverage of each workspace and tool, as a table
+npm run coverage:changed    # the changed lines of your branch that no test runs
+```
+
+`npm run coverage` writes its reports to `coverage/`. Open `coverage/lcov-report/index.html` to see each line.
+`coverage:changed` compares your branch with `origin/main`. To use a different base, add `-- --base <branch>`.
+It also counts the files that you did not add to git yet.
+
+Coverage is a signal, not a gate. A low number does not fail the CI.
+Use it to find code that has no test, then write the test.
+The CI shows both tables in the summary of the test job, and keeps the reports for 14 days.
 
 The CI on GitHub also runs `npm audit` on `package-lock.json` and on `docs/package-lock.json`.
 The check fails when a package has a known high or critical vulnerability.
