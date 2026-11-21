@@ -3,8 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
+  # Each pull request, also one in a stack that targets another branch. GitHub does not start
+  # a new run when it moves a stacked pull request to main, so the checks must run from the first push.
   pull_request:
-    branches: [main]
+
+# A new push to a pull request stops the run of the push before it. Runs on main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -39,6 +45,18 @@ jobs:
       # Fails on a lint error. Warnings (such as complexity) are signals and do not fail.
       - name: Lint
         run: npm run lint
+
+      # Fails when the pull request adds code that is a copy of other code (70 tokens or more).
+      # Copies that are already on the base branch do not fail.
+      - name: Check for new copied code
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: npm run -s dup -- --baseline-from-ref "origin/$BASE_REF" --fail-on-new-clones
+
+      # Unused files, dependencies and exports. Only a report for now.
+      - name: Show unused code in the job summary
+        run: npx knip --no-progress --no-exit-code --reporter markdown >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run tests
         run: npm test

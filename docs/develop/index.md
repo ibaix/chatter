@@ -84,6 +84,8 @@ npm run test:server     # server tests only
 npm run test:tools      # tests of the tools folder only
 npm run typecheck       # check the TypeScript types in all parts
 npm run lint            # check the code with ESLint
+npm run dup:new         # find code that your branch copied
+npm run dead            # find files, exports and packages that nothing uses
 ```
 
 ### Lint
@@ -93,6 +95,21 @@ npm run lint            # check the code with ESLint
 - An error fails the CI. Errors are likely bugs, or rules of this project. For example, the server logs with `createLogger`, not `console`, and web text uses `text-primary-text`, not `text-primary`.
 - A warning does not fail the CI. Warnings are signals, such as a function that is too complex. Look at them when you change that code.
 - To turn off a rule for one line, add `// eslint-disable-next-line <rule>` with a comment that tells why.
+
+### Copied code
+
+`npm run dup` finds blocks of code (70 tokens or more) that are in two places. The config is `.jscpd.json`. It does not check the tests.
+`npm run dup:new` shows only the copies that your branch adds, compared with `origin/main`.
+
+The CI fails when a pull request adds a copy. Move the shared code into one function, and call it from both places.
+Copies that are already on `main` do not fail.
+
+### Unused code
+
+`npm run dead` runs knip. It finds files, exports and packages that nothing uses. The config is `knip.json`.
+
+The CI shows the result in the job summary, but it does not fail. Do not add new unused code.
+If you remove the last user of an export or a package, remove the export or the package too.
 
 ### Coverage
 

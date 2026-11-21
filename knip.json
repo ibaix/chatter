@@ -1,0 +1,21 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["tools/*/index.ts", "tools/*/*.test.ts"],
+      "project": ["tools/**/*.ts", "!tools/pi-image/**"]
+    },
+    "apps/server": {
+      "entry": ["src/machines/fanuc/focasWorker.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "apps/web": {
+      "project": ["src/**/*.{ts,tsx,css}"]
+    },
+    "packages/shared": {
+      "entry": ["src/**/*.test.ts"],
+      "project": ["src/**/*.ts"]
+    }
+  },
+  "ignoreBinaries": ["tsx", "tsc", "vitest"]
+}

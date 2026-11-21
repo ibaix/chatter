@@ -1,0 +1,17 @@
+{
+  "minTokens": 70,
+  "format": ["typescript", "tsx", "javascript"],
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "coverage/**",
+    "docs/**",
+    "plans/**",
+    ".claude/**",
+    "apps/server/scripts/**"
+  ],
+  "reporters": ["console"],
+  "output": ".quality/jscpd"
+}

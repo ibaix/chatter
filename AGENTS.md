@@ -18,6 +18,7 @@ npm test
 - In a workspace, run the tests once with `npm run test:run -w apps/server` (or `apps/web`). The `test` script of a workspace starts vitest in watch mode, which does not stop.
 - `npm test` also runs `test:tools`, the tests of `tools/fake-machines`, `tools/fake-notify`, `tools/quality` and `tools/guardrails`. These folders are not workspaces, so the workspace commands skip them.
 - To find code with no test, run `npm run coverage`, then `npm run coverage:changed`. Coverage is a signal, not a gate.
+- The CI fails when a pull request adds copied code. Run `npm run dup:new` to see the copies. `npm run dead` lists unused code, as a signal only.
 - `docs/` is its own npm package. Run `npm --prefix docs ci` once, then `npm run docs:build`. The build fails on a dead link.
 
 ## How we work
