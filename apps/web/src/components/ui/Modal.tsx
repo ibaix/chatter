@@ -1,11 +1,5 @@
-import { useEffect, useRef, type ReactNode } from 'react';
-import { useOutsideClick } from './useOutsideClick';
-
-/**
- * The browser puts the focus on the first button, which is often the X. The first box to type in is more useful.
- * React autoFocus does not help: it runs before the dialog opens, when nothing in it can take the focus.
- */
-const FIRST_BOX_TO_TYPE_IN = 'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])';
+import type { ReactNode } from 'react';
+import { useModalDialog } from './useModalDialog';
 
 interface ModalProps {
   /** The name of the box for screen readers, such as "Add a machine" */
@@ -22,25 +16,12 @@ interface ModalProps {
  * what sticks out of the box, such as a hover box.
  */
 export function Modal({ label, onClose, children }: ModalProps) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const closeOnOutsideClick = useOutsideClick(onClose);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    dialog?.showModal();
-    dialog?.querySelector<HTMLElement>(FIRST_BOX_TO_TYPE_IN)?.focus();
-    return () => dialog?.close();
-  }, []);
+  const dialogProps = useModalDialog(onClose);
 
   return (
     <dialog
-      ref={dialogRef}
+      {...dialogProps}
       aria-label={label}
-      onCancel={event => {
-        event.preventDefault();
-        onClose();
-      }}
-      {...closeOnOutsideClick}
       className="fixed inset-0 m-0 h-full max-h-none w-full max-w-none overflow-y-auto border-0 bg-transparent p-4 text-zinc-50 outline-none open:flex backdrop:bg-black/60 animate-fade-in backdrop:animate-fade-in motion-reduce:animate-none motion-reduce:backdrop:animate-none"
     >
       <div className="m-auto w-full max-w-3xl">{children}</div>

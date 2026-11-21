@@ -1,9 +1,6 @@
 import { cn } from '@toolpath/ui';
-import { useEffect, useRef, type ReactNode } from 'react';
-import { useOutsideClick } from './useOutsideClick';
-
-/** The browser puts the focus on the first button, which is often the X. The first box to type in is more useful. */
-const FIRST_BOX_TO_TYPE_IN = 'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])';
+import type { ReactNode } from 'react';
+import { useModalDialog } from './useModalDialog';
 
 interface SidePanelProps {
   /** The name of the panel for screen readers */
@@ -22,25 +19,12 @@ interface SidePanelProps {
  * When it opens, the focus goes to the first box to type in, if it has one.
  */
 export function SidePanel({ label, isClosing, onClose, widthClassName, children }: SidePanelProps) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const closeOnOutsideClick = useOutsideClick(onClose);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    dialog?.showModal();
-    dialog?.querySelector<HTMLElement>(FIRST_BOX_TO_TYPE_IN)?.focus();
-    return () => dialog?.close();
-  }, []);
+  const dialogProps = useModalDialog(onClose);
 
   return (
     <dialog
-      ref={dialogRef}
+      {...dialogProps}
       aria-label={label}
-      onCancel={event => {
-        event.preventDefault();
-        onClose();
-      }}
-      {...closeOnOutsideClick}
       className={cn(
         'fixed inset-y-0 right-0 left-auto m-0 h-full max-h-none max-w-none flex-col border-0 border-l border-zinc-800 bg-zinc-900 p-0 text-zinc-50 backdrop:bg-black/60 open:flex',
         widthClassName,
