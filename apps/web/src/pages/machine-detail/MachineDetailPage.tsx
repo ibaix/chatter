@@ -43,7 +43,8 @@ function MachineDetailPage({ machines, isLoaded, chatterIsLost = false, onRemove
     if (await onRemove(machine.id)) navigate('/');
   };
 
-  return <MachineView machine={machine} machines={machines} chatterIsLost={chatterIsLost} onUpdate={onUpdate} onRemove={remove} />;
+  // A new key for each machine, so nothing of the machine before stays: not the alerts, the files or the chart view
+  return <MachineView key={machine.id} machine={machine} machines={machines} chatterIsLost={chatterIsLost} onUpdate={onUpdate} onRemove={remove} />;
 }
 
 interface MachineViewProps {
@@ -70,9 +71,7 @@ function MachineView({ machine, machines, chatterIsLost, onUpdate, onRemove }: M
     <>
       <MachineHeader machine={machine} state={state} now={now} firingCount={firingCount} />
       <MachineNotice machine={machine} state={state} now={now} chatterIsLost={chatterIsLost} />
-      {/* A new key for each machine, so the files start again */}
       <MachineSections
-        key={machine.id}
         machine={machine}
         machines={machines}
         now={now}

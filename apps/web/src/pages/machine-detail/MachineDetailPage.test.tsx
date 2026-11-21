@@ -27,6 +27,17 @@ vi.mock('../../api/machineFiles', async importOriginal => ({
 }));
 // The chart has its own tests. Here it is only a mark on the page.
 vi.mock('./MachineHistoryChart', () => ({ default: () => <section aria-label="History chart" /> }));
+/** Each render of the header: the machine and its count of firing alerts */
+const headerRenders: { machineId: string; firingCount: number }[] = [];
+vi.mock('./MachineHeader', async importOriginal => {
+  const { MachineHeader } = await importOriginal<typeof import('./MachineHeader')>();
+  return {
+    MachineHeader: (props: Parameters<typeof MachineHeader>[0]) => {
+      headerRenders.push({ machineId: props.machine.id, firingCount: props.firingCount });
+      return <MachineHeader {...props} />;
+    },
+  };
+});
 
 /** The address of the page now, so a test can read the tab in it */
 let shownAddress = '';
@@ -85,6 +96,7 @@ const openPanel = () => screen.getByRole('tabpanel');
 describe('MachineDetailPage', () => {
   beforeEach(() => {
     vi.mocked(fetchMachineAlerts).mockReset().mockResolvedValue([]);
+    headerRenders.length = 0;
     vi.mocked(fetchAlertRules).mockReset().mockResolvedValue([]);
     vi.mocked(fetchMachineReport).mockReset().mockReturnValue(new Promise(() => {}));
     vi.mocked(fetchFileTree).mockReset().mockResolvedValue([]);
@@ -478,6 +490,19 @@ describe('MachineDetailPage', () => {
       go(-1);
 
       expect(screen.getByRole('tab', { name: 'Report' })).toHaveAttribute('aria-selected', 'true');
+    });
+
+    it('never shows the firing alerts of one machine on the page of the next machine', async () => {
+      vi.mocked(fetchMachineAlerts).mockImplementation(async machineId => (machineId === 'm1' ? [firingAlert('Offline')] : new Promise(() => {})));
+      renderPage({ machines: [testMachine(), testMachine({ id: 'm2', name: 'Mill 2' })] });
+      await within(header()).findByRole('link', { name: '1 alert firing' });
+
+      go('/machine/m2');
+
+      expect(screen.getByRole('heading', { level: 1, name: 'Mill 2' })).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: /firing/ })).not.toBeInTheDocument();
+      // Also not for one render: the old count would flash on the screen
+      expect(headerRenders.filter(shown => shown.machineId === 'm2').map(shown => shown.firingCount)).not.toContain(1);
     });
 
     it('shows no badge and no count when no alert fires', async () => {
