@@ -1,15 +1,16 @@
 import type { AlertRule, Role } from '@local-chatter/shared';
 import { Dialog } from '@toolpath/ui';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { act } from 'react';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate, type NavigateFunction } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchMachineAlerts, type MachineAlert } from '../../api/alerts';
 import { fetchAlertRules } from '../../api/alertRules';
-import { fetchFileTree, fetchUploadFiles } from '../../api/machineFiles';
+import { fetchFileTree, fetchUploadFiles, uploadMachineFiles } from '../../api/machineFiles';
 import { fetchMachineReport } from '../../api/reports';
 import { CurrentUserContext } from '../../components/CurrentUser';
 import { testMachine } from '../../test/testMachine';
-import type { Machine } from '../../types';
+import type { FTPTreeNode, Machine } from '../../types';
 import MachineDetailPage from './MachineDetailPage';
 
 vi.mock('../../api/alerts', () => ({ fetchMachineAlerts: vi.fn() }));
@@ -22,19 +23,29 @@ vi.mock('../../api/machineFiles', async importOriginal => ({
   ...(await importOriginal<typeof import('../../api/machineFiles')>()),
   fetchFileTree: vi.fn(),
   fetchUploadFiles: vi.fn(),
+  uploadMachineFiles: vi.fn(),
 }));
 // The chart has its own tests. Here it is only a mark on the page.
 vi.mock('./MachineHistoryChart', () => ({ default: () => <section aria-label="History chart" /> }));
 
 /** The address of the page now, so a test can read the tab in it */
 let shownAddress = '';
+/** Goes to another address, or back (-1) and forward (1) in the history, as the browser buttons do */
+let goTo: NavigateFunction = () => {};
 function AddressSpy() {
   const location = useLocation();
   shownAddress = `${location.pathname}${location.search}${location.hash}`;
+  goTo = useNavigate();
   return null;
 }
+const go = (to: string | number) => act(() => { void (typeof to === 'number' ? goTo(to) : goTo(to)); });
 
-function renderPage({ address = '/machine/m1', role = 'admin' as Role, machine = testMachine() }: { address?: string; role?: Role; machine?: Machine } = {}) {
+function renderPage({
+  address = '/machine/m1',
+  role = 'admin' as Role,
+  machine = testMachine(),
+  machines = [machine],
+}: { address?: string; role?: Role; machine?: Machine; machines?: Machine[] } = {}) {
   render(
     <CurrentUserContext.Provider value={{ username: 'sam', role }}>
       <Dialog.Provider>
@@ -42,7 +53,7 @@ function renderPage({ address = '/machine/m1', role = 'admin' as Role, machine =
           <Routes>
             <Route
               path="/machine/:id"
-              element={<MachineDetailPage machines={[machine]} isLoaded onRemove={vi.fn()} onUpdate={vi.fn()} />}
+              element={<MachineDetailPage machines={machines} isLoaded onRemove={vi.fn()} onUpdate={vi.fn()} />}
             />
           </Routes>
           <AddressSpy />
@@ -75,6 +86,7 @@ describe('MachineDetailPage', () => {
     vi.mocked(fetchMachineReport).mockReset().mockReturnValue(new Promise(() => {}));
     vi.mocked(fetchFileTree).mockReset().mockResolvedValue([]);
     vi.mocked(fetchUploadFiles).mockReset().mockResolvedValue([]);
+    vi.mocked(uploadMachineFiles).mockReset().mockResolvedValue({ ok: true, result: { success: [{ filename: 'O1000.nc' }] } });
   });
 
   describe('the tabs', () => {
@@ -185,6 +197,71 @@ describe('MachineDetailPage', () => {
       expect(viewSwitch()).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Send files' })).not.toBeInTheDocument();
     });
+
+    /** Opens Send files, picks one file, and sends it */
+    const sendOneFile = async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send files' }));
+      await sendPickedFile();
+    };
+    /** In the open Send files panel: picks one file and sends it */
+    const sendPickedFile = async () => {
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { files: [new File(['G0'], 'O1000.nc')] } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send 1 file' }));
+      await waitFor(() => expect(uploadMachineFiles).toHaveBeenCalled());
+    };
+
+    it('loads the files and the upload history again after an upload', async () => {
+      renderPage({ role: 'operator' });
+      await openFilesTab();
+      await waitFor(() => expect(fetchFileTree).toHaveBeenCalledTimes(1));
+      const historyLoads = vi.mocked(fetchUploadFiles).mock.calls.length;
+
+      await sendOneFile();
+
+      await waitFor(() => expect(fetchFileTree).toHaveBeenCalledTimes(2));
+      expect(fetchFileTree).toHaveBeenLastCalledWith('m1', '/');
+      await waitFor(() => expect(fetchUploadFiles).toHaveBeenCalledTimes(historyLoads + 1));
+    });
+
+    it('sends to the folder that was open, also from the Upload history view', async () => {
+      vi.mocked(fetchFileTree).mockImplementation(async (_id, path) =>
+        path === '/' ? [{ name: 'PROGRAMS', path: '/PROGRAMS', type: 'directory', size: 0 } as FTPTreeNode] : [],
+      );
+      renderPage({ role: 'operator' });
+      await openFilesTab();
+      fireEvent.click(await screen.findByRole('button', { name: 'PROGRAMS' }));
+      await waitFor(() => expect(fetchFileTree).toHaveBeenLastCalledWith('m1', '/PROGRAMS'));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send files' })).toBeEnabled());
+      fireEvent.click(within(viewSwitch()).getByRole('button', { name: /Upload history/ }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send files' }));
+      expect(screen.getByText('Send files to').textContent).toBe('Send files to /PROGRAMS');
+      await sendPickedFile();
+      expect(vi.mocked(uploadMachineFiles).mock.calls[0][2]).toBe('/PROGRAMS');
+    });
+
+    it('shows the result of the upload above the files, and the user can close it', async () => {
+      renderPage({ role: 'operator' });
+      await openFilesTab();
+
+      await sendOneFile();
+
+      const notice = await screen.findByRole('status');
+      expect(notice).toHaveTextContent('Sent 1 file to /');
+      fireEvent.click(within(notice).getByRole('button', { name: 'Close this notice' }));
+      expect(screen.queryByText('Sent 1 file to /')).not.toBeInTheDocument();
+    });
+
+    it('shows the error when the upload does not work', async () => {
+      vi.mocked(uploadMachineFiles).mockResolvedValue({ ok: false, result: { error: 'No space on the machine' } });
+      renderPage({ role: 'operator' });
+      await openFilesTab();
+
+      await sendOneFile();
+
+      expect(await screen.findByText('No space on the machine')).toBeInTheDocument();
+    });
   });
 
   describe('the Settings tab', () => {
@@ -222,6 +299,20 @@ describe('MachineDetailPage', () => {
       expect(await within(rulesSection).findByText(/Only an admin can change them/)).toBeInTheDocument();
       expect(screen.queryByRole('region', { name: 'Machine' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('navigation', { name: 'Settings sections' })).not.toBeInTheDocument();
+    });
+
+    it('shows an operator only the alert rules, and they cannot change them', async () => {
+      vi.mocked(fetchAlertRules).mockResolvedValue([OFFLINE_RULE]);
+      renderPage({ role: 'operator' });
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+
+      const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
+      expect(await within(rulesSection).findByText(/Only an admin can change them/)).toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: 'Machine' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Add rule/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Copy rules to other machines' })).not.toBeInTheDocument();
       expect(screen.queryByRole('navigation', { name: 'Settings sections' })).not.toBeInTheDocument();
     });
   });
@@ -301,6 +392,25 @@ describe('MachineDetailPage', () => {
       await screen.findByText('Offline');
       expect(screen.queryByRole('link', { name: /firing/ })).not.toBeInTheDocument();
       expect(screen.getByRole('tab', { name: 'Dashboard' })).toBeInTheDocument();
+    });
+
+    it('updates the badge when the alerts load again after 30 seconds', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+      try {
+        renderPage();
+        await waitFor(() => expect(fetchMachineAlerts).toHaveBeenCalledTimes(1));
+        expect(screen.queryByRole('link', { name: /firing/ })).not.toBeInTheDocument();
+        vi.mocked(fetchMachineAlerts).mockResolvedValue([firingAlert('Offline')]);
+
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(await within(header()).findByRole('link', { name: '1 alert firing' })).toBeInTheDocument();
+        expect(fetchMachineAlerts).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+      }
     });
   });
 });
