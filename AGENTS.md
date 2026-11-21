@@ -15,7 +15,7 @@ npm test
 
 - The web app and the server import `packages/shared` from its `dist` folder. A stale `dist` gives "missing export" errors in the typecheck and the tests, and `npm run build:shared` fixes them.
 - In a workspace, run the tests once with `npm run test:run -w apps/server` (or `apps/web`). The `test` script of a workspace starts vitest in watch mode, which does not stop.
-- `npm test` also runs `test:tools`, the tests of `tools/fake-machines`, `tools/fake-notify` and `tools/quality`. These folders are not workspaces, so the workspace commands skip them.
+- `npm test` also runs `test:tools`, the tests of `tools/fake-machines`, `tools/fake-notify`, `tools/quality` and `tools/guardrails`. These folders are not workspaces, so the workspace commands skip them.
 - To find code with no test, run `npm run coverage`, then `npm run coverage:changed`. Coverage is a signal, not a gate.
 - `docs/` is its own npm package. Run `npm --prefix docs ci` once, then `npm run docs:build`. The build fails on a dead link.
 
@@ -36,5 +36,7 @@ npm test
 - **User data:** Docker Compose takes the project name from the folder name `chatter` (`tools/release/make-docker-package.sh` zips that folder, and the Pi uses `/opt/chatter`). So the volumes are `chatter_chatterbox-data` and `chatter_victoriametrics-data`. Keep the folder name and the volume names in `docker-compose.yml`, or an update cannot find the user's data.
 - **Doc links in released apps:** older app versions link to `guide/update#back-up` and `guide/manage`. Keep these pages and anchors.
 - **Closed ports:** VictoriaMetrics, vmalert and the alert port 3002 have no login. Keep them unpublished in `docker-compose.yml`.
+
+The tests in `tools/guardrails` check some of these rules. If one fails, fix the change, not the test.
 
 For the full list of known security limits, read [docs/security.md](docs/security.md).

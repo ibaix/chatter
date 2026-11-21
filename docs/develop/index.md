@@ -16,6 +16,7 @@
 | `tools/fake-machines` | Fake CNC machines for tests (see [Fake machines](./fake-machines.md)) |
 | `tools/fake-notify` | A fake Twilio and webhook receiver for the notifications (see [Fake notifications](./fake-machines.md#fake-notifications)) |
 | `tools/quality` | Scripts that print the coverage reports as tables (see [Coverage](#coverage)) |
+| `tools/guardrails` | Tests that keep the rules in `AGENTS.md`: no FANUC files, the volume names, the closed ports, and the docs links of the app |
 | `tools/pi-image` | The Raspberry Pi card image (see [Pi card image](./pi-image.md)) |
 | `tools/release` | The scripts that make the release files |
 | `docs` | These docs |
