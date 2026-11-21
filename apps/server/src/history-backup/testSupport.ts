@@ -88,7 +88,7 @@ export class FakeVictoria implements HistoryStore, HistorySource {
   }
 
   /** The values of one metric of a machine in [from, to), in time order */
-  private valuesIn(name: string, machineId: string, from: number, to: number): number[] {
+  valuesIn(name: string, machineId: string, from: number, to: number): number[] {
     return [...this.series.values()]
       .filter(series => series.labels.__name__ === name && series.labels.machine === machineId)
       .flatMap(series => [...series.samples])
@@ -113,10 +113,12 @@ export function addHistory(victoria: FakeVictoria, machine: { id: string; type: 
     victoria.add(labels('chatter_spindle_speed'), time, running ? 8000 + ((time / 2000) % 7) * 10 : 0);
     victoria.add(labels('chatter_part_count'), time, parts);
   }
-  for (let minute = from + MINUTE_MS; minute <= to; minute += MINUTE_MS) {
-    const running = Math.floor((minute - MINUTE_MS - from) / (5 * MINUTE_MS)) % 2 === 0 ? 1 : 0;
-    victoria.add(labels('chatter_connected:avg1m'), minute, 1);
-    victoria.add(labels('chatter_running:avg1m'), minute, running);
+  // As vmalert saves them: at each minute, avg_over_time of the minute before it, (minute - 1m, minute]
+  for (const name of ['chatter_connected', 'chatter_running', 'chatter_spindle_speed', 'chatter_part_count']) {
+    for (let minute = from + MINUTE_MS; minute <= to; minute += MINUTE_MS) {
+      const values = victoria.valuesIn(name, machine.id, minute - MINUTE_MS + 1, minute + 1);
+      if (values.length > 0) victoria.add(labels(`${name}:avg1m`), minute, values.reduce((sum, value) => sum + value, 0) / values.length);
+    }
   }
   victoria.add(labels('chatter_running:avg1h'), to, 0.5);
 }

@@ -20,6 +20,8 @@ const target: BackupMachine = { id: 'brother_2', name: 'Speedio #1', type: 'brot
 const highLoad: NewAlertRule = {
   kind: 'simple', enabled: true, subject: 'spindle-load', check: 'above', limit: 90, forMinutes: 1, severity: 'warning',
 };
+/** 2 hours of minute averages of 4 values, and 1 hour average */
+const AVERAGES = 4 * 120 + 1;
 const ALL: BackupOptions = { from: null, to: NOW, averagesOnly: false };
 
 describe('HistoryBackup', () => {
@@ -52,7 +54,7 @@ describe('HistoryBackup', () => {
 
   async function backUp(options = ALL, machine = source): Promise<Buffer> {
     const prepared = await backups.prepareBackup(machine, options, 'admin');
-    return Buffer.from(await new Response(backups.download(prepared.id, machine.id, 'admin')).arrayBuffer());
+    return Buffer.from(await new Response(backups.download(prepared.id, machine.id, 'admin').stream).arrayBuffer());
   }
 
   function upload(archive: Buffer): ReadableStream<Uint8Array> {
@@ -89,7 +91,7 @@ describe('HistoryBackup', () => {
       }
       // 2 hours of 2-second polls, 4 values each
       expect(manifest.parts['history/raw.jsonl.gz']!.count).toBe(3600 * 4);
-      expect(manifest.parts['history/averages.jsonl.gz']!.count).toBe(120 * 2 + 1);
+      expect(manifest.parts['history/averages.jsonl.gz']!.count).toBe(AVERAGES);
       expect(manifest.parts['state-periods.jsonl.gz']!.count).toBe(2);
       expect(manifest.parts['alert-rules.json']!.count).toBe(1);
       expect(linesOf(entries.get('state-periods.jsonl.gz')!).map(line => JSON.parse(line))).toEqual([
@@ -118,7 +120,7 @@ describe('HistoryBackup', () => {
       await expect(receive(Buffer.from('x'))).rejects.toMatchObject({ status: 409 });
       expect(filesLeft()).toHaveLength(1);
 
-      await new Response(backups.download(prepared.id, source.id, 'admin')).arrayBuffer();
+      await new Response(backups.download(prepared.id, source.id, 'admin').stream).arrayBuffer();
       await new Promise(resolve => setTimeout(resolve, 20));
       expect(filesLeft()).toEqual([]);
       expect(() => backups.download(prepared.id, source.id, 'admin')).toThrow(BackupRefusedError);
@@ -127,7 +129,7 @@ describe('HistoryBackup', () => {
 
     it('deletes its files when the browser stops the download', async () => {
       const prepared = await backups.prepareBackup(source, ALL, 'admin');
-      const reader = backups.download(prepared.id, source.id, 'admin').getReader();
+      const reader = backups.download(prepared.id, source.id, 'admin').stream.getReader();
       await reader.read();
       await reader.cancel();
       await new Promise(resolve => setTimeout(resolve, 20));
@@ -170,11 +172,11 @@ describe('HistoryBackup', () => {
 
       expect(preview).toMatchObject({
         source, chatterVersion: '1.4.0', sameMachine: false, averagesOnly: false,
-        counts: { rawSamples: 14400, averageSamples: 241, periods: 2, alertRules: 1 }, tooOld: { samples: 0, periods: 0 },
+        counts: { rawSamples: 14400, averageSamples: AVERAGES, periods: 2, alertRules: 1 }, tooOld: { samples: 0, periods: 0 },
       });
       const result = await backups.restore(preview.id, target, { alertRules: true }, 'admin');
 
-      expect(result).toEqual({ samples: 14400 + 241, periodsAdded: 2, periodsKnown: 0, alertRules: 1 });
+      expect(result).toEqual({ samples: 14400 + AVERAGES, periodsAdded: 2, periodsKnown: 0, alertRules: 1 });
       const fresh = new FakeVictoria();
       addHistory(fresh, target, NOW - 3 * HOUR, NOW - HOUR);
       expect(victoria.samplesOf(target.id)).toEqual(fresh.samplesOf(target.id));
@@ -190,7 +192,7 @@ describe('HistoryBackup', () => {
         const preview = await receive(archive);
         expect(await backups.restore(preview.id, target, { alertRules: true }, 'admin')).toMatchObject(expected);
       }
-      expect(victoria.samplesOf(target.id)).toHaveLength(14400 + 241);
+      expect(victoria.samplesOf(target.id)).toHaveLength(14400 + AVERAGES);
       expect(periods.read({ machineId: target.id, from: 0, to: NOW, limit: 10 })).toHaveLength(2);
       expect(rules.rulesOf(target.id)).toHaveLength(1);
     });
@@ -200,7 +202,7 @@ describe('HistoryBackup', () => {
       const preview = await receive(archive, source);
       expect(preview.sameMachine).toBe(true);
       expect(await backups.restore(preview.id, source, { alertRules: false }, 'admin')).toMatchObject({ periodsAdded: 0, periodsKnown: 2, alertRules: null });
-      expect(victoria.samplesOf(source.id)).toHaveLength(14400 + 241);
+      expect(victoria.samplesOf(source.id)).toHaveLength(14400 + AVERAGES);
     });
 
     it('keeps the rules of the machine when the user does not choose them', async () => {

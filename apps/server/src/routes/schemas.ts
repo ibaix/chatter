@@ -389,3 +389,17 @@ export const notificationSettingsSchema = z.object({
   timeZone: z.preprocess(blankIsNull, z.string({ error: 'The time zone must be text' }).trim()
     .refine(isTimeZoneName, 'Chatter does not know this time zone. Use a name like America/Chicago.').nullable()),
 }, NOT_AN_OBJECT);
+
+const backupTime = z.number({ error: 'The time must be a number of milliseconds' }).int('The time must be a whole number').nonnegative();
+
+/** Back up the history of a machine: all of it (no from), or a time range. `to` is now when it is not given. */
+export const historyBackupSchema = z.object({
+  from: backupTime.nullable().optional(),
+  to: backupTime.optional(),
+  averagesOnly: z.boolean({ error: 'averagesOnly must be true or false' }).optional(),
+}, NOT_AN_OBJECT).refine(({ from, to }) => from === undefined || from === null || to === undefined || from < to, 'The start must be before the end');
+
+/** Write a received history file into the machine */
+export const historyRestoreSchema = z.object({
+  alertRules: z.boolean({ error: 'alertRules must be true or false' }),
+}, NOT_AN_OBJECT);

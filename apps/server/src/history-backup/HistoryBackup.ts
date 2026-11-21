@@ -62,8 +62,8 @@ export interface RestorableRules {
 }
 
 export interface HistoryBackupParts {
-  /** A folder in the data volume, only for this. Chatter deletes all of it at each start. */
-  folder: string;
+  /** A folder in the data volume, only for this. Chatter deletes all of it at each start. A function is read at the first use. */
+  folder: string | (() => string);
   history: HistoryStore;
   statePeriods: StatePeriodStore;
   alertRules: RestorableRules;
@@ -136,7 +136,7 @@ type ReceivedParts = Map<string, { file: string; bytes: number; sha256: string }
  * A restore: the upload → a file in the folder → its parts → a full check → then the user confirms → the writes.
  */
 export class HistoryBackup {
-  private readonly folder: string;
+  private readonly folderOf: () => string;
   private readonly history: HistoryStore;
   private readonly statePeriods: StatePeriodStore;
   private readonly alertRules: RestorableRules;
@@ -144,13 +144,17 @@ export class HistoryBackup {
   private readonly now: () => number;
   private readonly freeBytes: (folder: string) => Promise<number>;
 
+  private get folder(): string {
+    return this.folderOf();
+  }
+
   /** What runs now. A prepared backup holds it until its download ends. */
   private running: 'backup' | 'restore' | null = null;
   private prepared: Prepared | null = null;
   private pending: PendingRestore | null = null;
 
   constructor({ folder, history, statePeriods, alertRules, version, now = Date.now, freeBytes = freeBytesOf }: HistoryBackupParts) {
-    this.folder = folder;
+    this.folderOf = typeof folder === 'string' ? () => folder : folder;
     this.history = history;
     this.statePeriods = statePeriods;
     this.alertRules = alertRules;
@@ -192,7 +196,7 @@ export class HistoryBackup {
   }
 
   /** The prepared backup as a .tar.gz stream. Its files are deleted at the end of the download, or when it stops. */
-  download(id: string, machineId: string, user: string): ReadableStream<Uint8Array> {
+  download(id: string, machineId: string, user: string): { fileName: string; stream: ReadableStream<Uint8Array> } {
     const prepared = this.prepared;
     if (!prepared || prepared.id !== id || prepared.machineId !== machineId) {
       throw new BackupRefusedError('This backup is not ready, or it was downloaded already. Make a new backup.', 404);
@@ -214,11 +218,12 @@ export class HistoryBackup {
     source.on('data', restartIdle);
     restartIdle();
     log.info('History backup downloaded', { machine: machineId, user });
-    return webStreamOf(source, () => {
+    const stream = webStreamOf(source, () => {
       clearTimeout(idleTimer);
       void rm(prepared.folder, { recursive: true, force: true });
       this.running = null;
     });
+    return { fileName: prepared.fileName, stream };
   }
 
   /**
@@ -506,7 +511,8 @@ function gigabytes(bytes: number): string {
   return `${bytes / 1024 ** 3} GB`;
 }
 
-function tooLargeMessage(): string {
+/** The reply to a restore file that is too large */
+export function tooLargeMessage(): string {
   return `The file is larger than ${gigabytes(ARCHIVE_LIMITS.archiveBytes)}.`;
 }
 
