@@ -55,7 +55,7 @@ Go to **Settings > Users and roles**, and click **Add user**. Give each person a
 |------|--------|
 | **Viewer** | See the machines and their history. Download files. |
 | **Operator** | All that a Viewer can do. Send files to the machines, and delete files on them. |
-| **Admin** | All that an Operator can do. Add, change, and remove machines. Manage the users and the settings. Update Chatter. |
+| **Admin** | All that an Operator can do. Add, change, and delete machines. Manage the users and the settings. Update Chatter. |
 
 Give the username and the password to the person. They can change the password on **Settings > Your account**.
 
