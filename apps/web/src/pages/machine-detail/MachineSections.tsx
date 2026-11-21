@@ -48,12 +48,15 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
   const reportRange = useState(FIRST_REPORT_RANGE);
   const { toolTable, hasPocketInfo } = toolTableOf(machine);
   const toolCount = machine.connected && toolTable ? Object.keys(toolTable).length : 0;
+  // A Brother reads its tool table apart from the state polls, so its tab is there before the first read, with Sync
+  const toolSync = machine.type === 'brother' ? machine.data.toolSync : undefined;
+  const hasToolTab = toolCount > 0 || toolSync !== undefined;
 
   const tabs: TabItem<SectionId>[] = [
     { id: 'dashboard', label: <>Dashboard<FiringCount count={firingCount} /></> },
     { id: 'report', label: 'Report' },
     { id: 'files', label: 'Files' },
-    ...(toolCount > 0 ? [{ id: 'tools' as const, label: 'Tool table', count: toolCount }] : []),
+    ...(hasToolTab ? [{ id: 'tools' as const, label: 'Tool table', ...(toolCount > 0 ? { count: toolCount } : {}) }] : []),
     { id: 'settings', label: 'Settings' },
   ];
   // An unknown tab, or a tab that is not there (the tool table goes away when the machine stops sending it), opens the dashboard
@@ -92,8 +95,14 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
                 now={now}
               />
             )}
-            {shownTab === 'tools' && toolTable && (
-              <ToolTableTab toolTable={toolTable} hasPocketInfo={hasPocketInfo} spindleTool={machine.data.toolNumber} />
+            {shownTab === 'tools' && (
+              <ToolTableTab
+                machineId={machine.id}
+                toolSync={toolSync}
+                toolTable={toolTable ?? {}}
+                hasPocketInfo={hasPocketInfo}
+                spindleTool={machine.data.toolNumber}
+              />
             )}
           </div>
         )}

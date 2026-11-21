@@ -446,6 +446,20 @@ describe('MachineDetailPage', () => {
     });
   });
 
+  describe('the Tool table tab', () => {
+    const NOT_SYNCED = { lastSyncAt: null, lastAttemptAt: null, error: null, running: false };
+
+    it('is there for a Brother before the first tool read, with no count, and offers Sync', () => {
+      renderPage({ machine: testMachine({}, { toolSync: NOT_SYNCED }) });
+      expect(tabNames()).toEqual(['Dashboard', 'Report', 'Files', 'Tool table', 'Settings']);
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Tool table' }));
+
+      expect(screen.getByText('Not synced yet')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sync' })).toBeInTheDocument();
+    });
+  });
+
   describe('the Settings tab', () => {
     const toolMachine = () => testMachine({}, { toolTable: { 1: { toolNum: 1 }, 2: { toolNum: 2 } } });
 

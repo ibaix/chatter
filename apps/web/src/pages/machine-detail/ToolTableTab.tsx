@@ -1,8 +1,15 @@
 import { cn } from '@toolpath/ui';
+import { useState } from 'react';
+import { syncTools } from '../../api/toolSync';
+import { Button } from '../../components/ui/Button';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
-import type { ToolInfo, ToolTable } from '../../types';
+import type { ToolInfo, ToolSyncState, ToolTable } from '../../types';
+import { errorMessageOf } from '../../utils/errorMessage';
 
 interface ToolTableTabProps {
+  machineId: string;
+  /** The reads of the tool table. Only a machine that reads its tool table apart from the state polls (Brother) has it. */
+  toolSync?: ToolSyncState;
   toolTable: ToolTable;
   /** True when the machine reports which pocket holds each tool */
   hasPocketInfo: boolean;
@@ -13,12 +20,52 @@ interface ToolTableTabProps {
 /** A length or a diameter with 4 decimal places, or a dash when the machine does not send it */
 const formatMeasure = (value: number | undefined) => value?.toFixed(4) ?? '—';
 
+const timeOf = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+
+/** The newer of two states, by the end of their last read */
+function newerState(fromStatus: ToolSyncState, fromSync: ToolSyncState | null): ToolSyncState {
+  if (!fromSync) return fromStatus;
+  return (fromStatus.lastAttemptAt ?? '') > (fromSync.lastAttemptAt ?? '') || fromStatus.running ? fromStatus : fromSync;
+}
+
+/** When Chatter read the tool table, and the Sync button that reads it now */
+function ToolSyncBar({ machineId, toolSync }: { machineId: string; toolSync: ToolSyncState }) {
+  const [syncing, setSyncing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fromSync, setFromSync] = useState<ToolSyncState | null>(null);
+  const state = newerState(toolSync, fromSync);
+  const running = syncing || state.running;
+
+  const sync = async () => {
+    setSyncing(true);
+    setError(null);
+    try {
+      setFromSync(await syncTools(machineId));
+    } catch (err) {
+      setError(errorMessageOf(err, 'Could not read the tool table'));
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const shownError = error ?? state.error;
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-zinc-800 px-4 py-3 text-zinc-200">
+      <span>{running ? 'Syncing…' : state.lastSyncAt ? `Synced ${timeOf(state.lastSyncAt)}` : 'Not synced yet'}</span>
+      <Button size="sm" onClick={() => void sync()} disabled={running}>Sync</Button>
+      <span className="text-xs">Chatter reads the tool table when the machine runs no program, at most each 10 minutes.</span>
+      {shownError && !running && <span role="alert" className="w-full text-alarm-soft">{shownError}</span>}
+    </div>
+  );
+}
+
 /** One row for each tool, with its lengths and wear. The tool in the spindle is marked. */
-export function ToolTableTab({ toolTable, hasPocketInfo, spindleTool }: ToolTableTabProps) {
+export function ToolTableTab({ machineId, toolSync, toolTable, hasPocketInfo, spindleTool }: ToolTableTabProps) {
   const toolsByPocket = Object.entries(toolTable) as [string, ToolInfo][];
 
   return (
     <>
+      {toolSync && <ToolSyncBar machineId={machineId} toolSync={toolSync} />}
       <div className="flex flex-wrap justify-between gap-3 px-4 py-3 text-zinc-200">
         <span>The lengths and diameters are in the machine's units. The tool in the spindle is marked.</span>
         {!hasPocketInfo && <span>This machine does not send the pocket of each tool.</span>}
