@@ -6,13 +6,12 @@ import { InfoTip } from '../../components/ui/InfoTip';
 import { Notice } from '../../components/ui/Notice';
 import { Panel } from '../../components/ui/Panel';
 import { machineTypeLabel } from '../../machines/machineStatus';
-import { isValidIPv4, type AddMachineRequest, type SupportedMachineType } from '../../types';
+import { isValidIPv4, SUPPORTED_MACHINE_TYPES, type AddMachineRequest, type SupportedMachineType } from '../../types';
 import { fetchFocasStatus } from '../../api/focasLibrary';
 import { FocasLibrary } from '../settings/FocasLibrary';
 import { useServerReport } from '../settings/useServerReport';
 import { errorMessageOf } from '../../utils/errorMessage';
 
-const MACHINE_TYPES: SupportedMachineType[] = ['brother', 'haas', 'mtconnect', 'fanuc', 'siemens'];
 const DEFAULT_MACHINE_TYPE: SupportedMachineType = 'brother';
 
 /** Why FANUC is gray in the list of machine types */
@@ -91,7 +90,7 @@ export function AddMachinePanel({ onAdd, onClose }: AddMachinePanelProps) {
                 onChange={event => setMachineType(event.target.value as SupportedMachineType)}
                 disabled={isSubmitting}
               >
-                {MACHINE_TYPES.map(type => (
+                {SUPPORTED_MACHINE_TYPES.map(type => (
                   <MachineTypeOption key={type} type={type} offReason={type === 'fanuc' && !canReadFanuc ? NO_FANUC_HERE : undefined} />
                 ))}
               </SelectInput>

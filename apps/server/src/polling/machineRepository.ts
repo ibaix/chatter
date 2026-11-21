@@ -3,6 +3,7 @@
  * Each machine type has its own table.
  */
 import type Database from 'better-sqlite3';
+import type { SupportedMachineType } from '@local-chatter/shared';
 import type {
   BrotherMachineConfig,
   BrotherMachineRow,
@@ -30,7 +31,8 @@ import {
   type NewSiemensMachine,
 } from './machineSettings.js';
 
-export type StoredMachineType = 'brother' | 'haas' | 'mtconnect' | 'fanuc' | 'siemens';
+/** Each machine type has its own table. TABLES must name a table for each supported type. */
+export type StoredMachineType = SupportedMachineType;
 
 const TABLES: Record<StoredMachineType, string> = {
   brother: 'brother_machines',

@@ -8,7 +8,7 @@ import { loggedInAuth } from './auth/testSupport.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
-import { PROGRAM_UPLOAD_LIMIT_BYTES } from '@local-chatter/shared';
+import { PROGRAM_UPLOAD_LIMIT_BYTES, SUPPORTED_MACHINE_TYPES } from '@local-chatter/shared';
 
 // Mock the db module
 vi.mock('./storage/database.js', () => ({
@@ -194,6 +194,8 @@ describe('API Routes', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('brother');
+      // The message names each type that Chatter supports, from the shared list
+      for (const type of SUPPORTED_MACHINE_TYPES) expect(res.body.error).toContain(`"${type}"`);
     });
 
     it.each([

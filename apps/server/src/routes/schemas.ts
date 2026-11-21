@@ -56,7 +56,7 @@ const machineSettings = {
 
 export const addMachineSchema = z.object({
   type: z.string({ error: MACHINE_FIELDS_REQUIRED }).trim().min(1, MACHINE_FIELDS_REQUIRED)
-    .pipe(z.enum(SUPPORTED_MACHINE_TYPES, { error: 'Type must be "brother", "haas", "mtconnect", "fanuc", or "siemens"' })),
+    .pipe(z.enum(SUPPORTED_MACHINE_TYPES, { error: `Type must be one of: ${SUPPORTED_MACHINE_TYPES.map(type => `"${type}"`).join(', ')}` })),
   name: z.string({ error: MACHINE_FIELDS_REQUIRED }).trim().min(1, MACHINE_FIELDS_REQUIRED),
   host: z.string({ error: MACHINE_FIELDS_REQUIRED }).trim().min(1, MACHINE_FIELDS_REQUIRED).pipe(ipv4),
   ...machineSettings,
