@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   areaTable,
+  baseFrom,
   changedLineCoverage,
   changedLinesFromDiff,
   changeTable,
@@ -40,10 +41,11 @@ if (command === 'summary') {
   const summary = JSON.parse(readReport('coverage-summary.json')) as CoverageSummary;
   console.log(areaTable(coverageByArea(summary, root)));
 } else if (command === 'changed') {
-  const baseFlag = rest.indexOf('--base');
-  const base = baseFlag >= 0 ? rest[baseFlag + 1] : 'origin/main';
-  if (!base) {
-    console.error('Give a git ref after --base, for example: --base main');
+  let base: string;
+  try {
+    base = baseFrom(rest);
+  } catch (error) {
+    console.error((error as Error).message);
     process.exit(1);
   }
   const mergeBase = git('merge-base', base, 'HEAD').trim();

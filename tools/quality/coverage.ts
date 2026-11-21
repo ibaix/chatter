@@ -158,3 +158,12 @@ export function changeTable(rows: FileChangeCoverage[]): string {
     ...rows.map(row => `| ${row.file} | ${row.covered} of ${row.measured} | ${row.uncovered.join(', ')} |`),
   ].join('\n');
 }
+
+/** The git ref after --base, or origin/main when there is no --base. */
+export function baseFrom(args: string[]): string {
+  const flag = args.indexOf('--base');
+  if (flag < 0) return 'origin/main';
+  const base = args[flag + 1];
+  if (!base || base.startsWith('--')) throw new Error('Give a git ref after --base, for example: --base main');
+  return base;
+}
