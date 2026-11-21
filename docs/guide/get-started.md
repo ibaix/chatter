@@ -39,6 +39,14 @@ Chatter uses FTP to show, send and download the program files on a machine. Do t
 
 Chatter never shows a saved password again. To keep it, leave the password box empty.
 
+### Delete a machine
+
+An **Admin** can delete a machine from Chatter. Chatter then stops reading the machine and deletes its spindle speed history. You cannot undo this.
+
+1. Click the **Settings** tab of the machine.
+2. In the **Delete machine** panel at the bottom, click **Delete machine**.
+3. In the box, type `delete`. Then click **Delete the machine**.
+
 ## 4. Add users and give them roles
 
 Go to **Settings > Users and roles**, and click **Add user**. Give each person a role:
