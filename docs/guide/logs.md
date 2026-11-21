@@ -41,6 +41,15 @@ Chatter polls each machine every few seconds, but the log has a line only when s
 
 A machine that is off for a weekend gives two lines, not one for each poll.
 
+### A slow Brother
+
+Each poll of a machine must end in 10 seconds. A Brother answers each request in turn, so a busy Brother can come near this limit.
+
+- When a poll of a Brother uses more than 6 seconds, the log has a warning: `[poll-times] A poll used most of its time limit`. `slowest` names the slowest requests. You get this warning at most one time in 10 minutes for each machine.
+- When the time is too short for all requests, Chatter skips the last requests of that poll, and sends them first in the next poll. The machine stays online. The values of the skipped requests stay on the screen until the next read. With `LOG_LEVEL=debug`, the `Poll times` line of each poll shows the time of each request and the skipped requests.
+- Chatter reads the tool table and the tool data of a Brother every 60 seconds, and at once after a tool change or a new connection. It reads the other values in each poll.
+- Every 60 seconds, Chatter closes the connection to a Brother and opens it again. This gives the control a new session. The machine does not show offline, and the log has no line for it.
+
 ## Change the level or the format
 
 Set these in the `environment:` of the `chatterbox` service in `docker-compose.yml`, then run `docker compose up -d`:
