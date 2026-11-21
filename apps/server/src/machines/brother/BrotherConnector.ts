@@ -155,6 +155,21 @@ const TOOL_DATA_COLUMN = { length: 0, lengthWear: 1, diameter: 2, diameterWear: 
  */
 export const TOOL_REFRESH_MS = 60_000;
 
+/** The mode, the program and run state, and the alarm. Each poll sends these first, and never skips them. */
+const CORE_COMMANDS = ['PANEL', 'MEM', 'ALARM'];
+
+/**
+ * A poll sends an optional command only when it fits in the poll limit less this margin: 20 %, which is 2 s
+ * of the 10 s limit. The margin is for a reply that is slower than its estimate: it is more than one
+ * reply of a slow but working Brother (about 1.5 s), so the poll ends in time.
+ */
+const BUDGET_MARGIN_SHARE = 0.2;
+
+/** True when the tool command was never read, or was read TOOL_REFRESH_MS ago or more */
+function isDue(readAt: number | null): boolean {
+  return readAt === null || Date.now() - readAt >= TOOL_REFRESH_MS;
+}
+
 /** A valid ATC reply has M## keys */
 function isValidAtcResponse(response: ParsedResponse): boolean {
   return Object.keys(response).some(key => /^M\d{2}$/.test(key));
@@ -174,6 +189,10 @@ export class BrotherConnector extends BaseMachineConnector {
   private data: BrotherMachineData = {};
   private prevData: BrotherMachineData = {};
   private toolTable: ToolTable = {};
+  /** The tool in each pot, from the last ATC reply */
+  private potTools: Record<number, number> = {};
+  /** The offsets and the name of each tool, from the last tool data reply */
+  private toolOffsets = new Map<number, Omit<ToolTable[number], 'toolNum'>>();
   private hasPocketInfo = false;
   private controlType: ControlType | null = null;
   private atcCommand: AtcCommand | null = null;
@@ -181,8 +200,11 @@ export class BrotherConnector extends BaseMachineConnector {
   private macroCommand: string;
   private dataItems: DataItem[];
   private readonly timings: PollTimingRecorder;
-  /** When the poll read the tool table and the tool data. Null: read them at the next poll. */
-  private toolsReadAt: number | null = null;
+  /** When a poll read the tool table and the tool data. Null: read it at the next poll. */
+  private atcReadAt: number | null = null;
+  private toolDataReadAt: number | null = null;
+  /** The optional commands that the last poll skipped. The next poll sends them first. */
+  private skippedLastPoll: string[] = [];
 
   constructor(config: BrotherMachineConfig) {
     super(config);
@@ -339,36 +361,46 @@ export class BrotherConnector extends BaseMachineConnector {
   }
 
   /** The tool in each pot, from the ATC reply */
-  private updateToolTable(atcResponse: ParsedResponse): void {
-    this.toolTable = {};
+  private updatePotTools(atcResponse: ParsedResponse): void {
+    this.potTools = {};
     for (let potKey = FIRST_POT_KEY; potKey <= LAST_POT_KEY; potKey++) {
       const rawValue = atcResponse[`M${String(potKey).padStart(2, '0')}`]?.[0];
       const toolNum = parseInt(rawValue, 10);
       if (toolNum >= 1 && toolNum <= MAX_TOOL_NUMBER) {
-        this.toolTable[potKey - 1] = { toolNum };
+        this.potTools[potKey - 1] = toolNum;
       }
     }
-    this.hasPocketInfo = Object.keys(this.toolTable).length > 0;
   }
 
-  /** Add the offsets and names from the tool data reply to the tools in the tool table */
+  /** The offsets and names from the tool data reply */
   private updateToolOffsets(toolDataResponse: ParsedResponse): void {
     // Some controls send 3-digit keys (T001), others 2-digit keys (T01)
     const keyDigits = toolDataResponse['T001'] !== undefined ? 3 : 2;
 
+    this.toolOffsets = new Map();
     for (let toolNum = 1; toolNum <= MAX_TOOL_NUMBER; toolNum++) {
       const values = toolDataResponse[`T${String(toolNum).padStart(keyDigits, '0')}`];
       if (!values) continue;
-
-      const tool = Object.values(this.toolTable).find(t => t?.toolNum === toolNum);
-      if (tool) {
-        tool.length = parseFloat(values[TOOL_DATA_COLUMN.length]) || 0;
-        tool.lengthWear = parseFloat(values[TOOL_DATA_COLUMN.lengthWear]) || 0;
-        tool.diameter = parseFloat(values[TOOL_DATA_COLUMN.diameter]) || 0;
-        tool.diameterWear = parseFloat(values[TOOL_DATA_COLUMN.diameterWear]) || 0;
-        tool.name = withoutQuotes(values[TOOL_DATA_COLUMN.name] || '');
-      }
+      this.toolOffsets.set(toolNum, {
+        length: parseFloat(values[TOOL_DATA_COLUMN.length]) || 0,
+        lengthWear: parseFloat(values[TOOL_DATA_COLUMN.lengthWear]) || 0,
+        diameter: parseFloat(values[TOOL_DATA_COLUMN.diameter]) || 0,
+        diameterWear: parseFloat(values[TOOL_DATA_COLUMN.diameterWear]) || 0,
+        name: withoutQuotes(values[TOOL_DATA_COLUMN.name] || ''),
+      });
     }
+  }
+
+  /**
+   * The tool table: the tool in each pot, with its offsets and name. A poll can read the pots and the tool data
+   * at different times, so the table is made from the last reply of each.
+   */
+  private updateToolTable(): void {
+    this.toolTable = {};
+    for (const [pot, toolNum] of Object.entries(this.potTools)) {
+      this.toolTable[Number(pot)] = { toolNum, ...this.toolOffsets.get(toolNum) };
+    }
+    this.hasPocketInfo = Object.keys(this.toolTable).length > 0;
   }
 
   async poll(): Promise<BrotherMachineStatus> {
@@ -387,7 +419,7 @@ export class BrotherConnector extends BaseMachineConnector {
     if (!this.socket || !this.connected) {
       if (!(await this.ensureConnected())) return;
       // The tools can have changed while the machine was not connected
-      this.toolsReadAt = null;
+      this.readToolsAtNextPoll();
     }
 
     this.prevData = { ...this.data };
@@ -398,14 +430,13 @@ export class BrotherConnector extends BaseMachineConnector {
     this.saveDataItems(responses);
     if (this.prevData.toolNumber !== undefined && this.data.toolNumber !== this.prevData.toolNumber) {
       // A tool change: show the offsets of the new tool at the next poll
-      this.toolsReadAt = null;
+      this.readToolsAtNextPoll();
     }
-    if (this.atcCommand && responses[this.atcCommand]) {
-      this.updateToolTable(responses[this.atcCommand]);
-    }
-    if (responses[this.toolDataCommand]) {
-      this.updateToolOffsets(responses[this.toolDataCommand]);
-    }
+    const atcResponse = this.atcCommand ? responses[this.atcCommand] : undefined;
+    const toolDataResponse = responses[this.toolDataCommand];
+    if (atcResponse) this.updatePotTools(atcResponse);
+    if (toolDataResponse) this.updateToolOffsets(toolDataResponse);
+    if (atcResponse || toolDataResponse) this.updateToolTable();
 
     this.updatePollTime();
     this.emitDataChanges(this.prevData, this.data);
@@ -420,10 +451,10 @@ export class BrotherConnector extends BaseMachineConnector {
   private async readMachine(): Promise<Record<string, ParsedResponse> | null> {
     try {
       const responses: Record<string, ParsedResponse> = {};
-      for (const command of new Set(this.dataItems.map(([, command]) => command))) {
+      for (const command of CORE_COMMANDS) {
         responses[command] = await this.send(command);
       }
-      if (this.toolsAreDue()) await this.readTools(responses);
+      await this.sendOptionalCommands(responses);
       return responses;
     } catch (err) {
       if (err instanceof NoReplyError) {
@@ -436,16 +467,64 @@ export class BrotherConnector extends BaseMachineConnector {
     }
   }
 
-  private toolsAreDue(): boolean {
-    return this.toolsReadAt === null || Date.now() - this.toolsReadAt >= TOOL_REFRESH_MS;
+  /**
+   * Send the other commands of the machine state, and the tool commands when they are due.
+   * A machine that answers slowly can run out of poll time. Then the poll skips the commands that do not fit,
+   * keeps their last values, and the next poll sends them first. The poll is still a good poll.
+   */
+  private async sendOptionalCommands(responses: Record<string, ParsedResponse>): Promise<void> {
+    const budgetMs = this.pollTimeLimitMs * (1 - BUDGET_MARGIN_SHARE);
+    const skipped: string[] = [];
+    for (const command of this.optionalCommands()) {
+      if (skipped.length > 0 || !this.fitsInTime(command, budgetMs)) {
+        skipped.push(command);
+        this.timings.skip(command);
+        continue;
+      }
+      await this.sendOptional(command, responses);
+    }
+    this.skippedLastPoll = skipped;
   }
 
-  /** Read the tool table and the tool data. The first time, find the control type, which also gives the tool table. */
-  private async readTools(responses: Record<string, ParsedResponse>): Promise<void> {
-    const atcResponse = this.atcCommand ? await this.send(this.atcCommand) : await this.detectControlType();
-    if (this.atcCommand && atcResponse) responses[this.atcCommand] = atcResponse;
-    responses[this.toolDataCommand] = await this.send(this.toolDataCommand);
-    this.toolsReadAt = Date.now();
+  /** The optional commands of this poll, the ones that the last poll skipped first */
+  private optionalCommands(): string[] {
+    const stateCommands = [...new Set(this.dataItems.map(([, command]) => command))]
+      .filter(command => !CORE_COMMANDS.includes(command));
+    const toolCommands = [
+      ...(isDue(this.atcReadAt) ? [this.atcCommandName()] : []),
+      ...(isDue(this.toolDataReadAt) ? [this.toolDataCommand] : []),
+    ];
+    const commands = [...stateCommands, ...toolCommands];
+    const first = this.skippedLastPoll.filter(command => commands.includes(command));
+    return [...first, ...commands.filter(command => !first.includes(command))];
+  }
+
+  /** A machine that is slow now is slow for the next command too, so the estimate is never below the slowest reply of this poll */
+  private fitsInTime(command: string, budgetMs: number): boolean {
+    const estimateMs = Math.max(this.timings.estimateMs(command) ?? 0, this.timings.slowestInPollMs());
+    return this.timings.elapsedMs() + estimateMs <= budgetMs;
+  }
+
+  /** The ATC command of this control, or the first one to try when the control type is not known yet */
+  private atcCommandName(): string {
+    return this.atcCommand ?? ATC_COMMANDS[0].command;
+  }
+
+  private async sendOptional(command: string, responses: Record<string, ParsedResponse>): Promise<void> {
+    if (command === this.atcCommandName()) {
+      // The first time, find the control type. Its reply is also the first tool table.
+      const atcResponse = this.atcCommand ? await this.send(this.atcCommand) : await this.detectControlType();
+      if (this.atcCommand && atcResponse) responses[this.atcCommand] = atcResponse;
+      this.atcReadAt = Date.now();
+      return;
+    }
+    responses[command] = await this.send(command);
+    if (command === this.toolDataCommand) this.toolDataReadAt = Date.now();
+  }
+
+  private readToolsAtNextPoll(): void {
+    this.atcReadAt = null;
+    this.toolDataReadAt = null;
   }
 
   private saveDataItems(responses: Record<string, ParsedResponse>): void {

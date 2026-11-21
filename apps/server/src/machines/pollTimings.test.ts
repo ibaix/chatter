@@ -99,6 +99,16 @@ describe('PollTimingRecorder', () => {
     expect(recorder.estimateMs('MEM')).toBeUndefined();
   });
 
+  it('gives the time of the slowest command of this poll so far, and 0 before the first command', async () => {
+    recorder.startPoll();
+    expect(recorder.slowestInPollMs()).toBe(0);
+
+    await recorder.time('PANEL', async () => { clock.advance(300); });
+    await recorder.time('MEM', async () => { clock.advance(100); });
+
+    expect(recorder.slowestInPollMs()).toBe(300);
+  });
+
   it('writes the times of each poll at debug level', async () => {
     await poll(recorder, clock, { PANEL: 120, MEM: 80 });
 

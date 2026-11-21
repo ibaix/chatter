@@ -19,29 +19,44 @@ const SLOW_REPLY_MS = 100;
 const REPLIES: Record<string, string> = {
   PANEL: 'RLOD    PANEL   00\r\nK01,0,5,0,0,0,0,0,0,0,1,0\r\n\r\n10%',
   WKCNTR: 'RLOD    WKCNTR  00\r\nA01,  1,    78,   200,     0\r\n\r\n08%',
+  ATCTL: 'RLOD    ATCTL   00\r\nM02,  1,0,0\r\nM03,  2,0,0\r\n\r\n00%',
+  TOLNI1: "RLOD    TOLNI1  00\r\nT01, 1.5000, 0.0000, 0.2500, 0.0000, 0, 0, 0, 0, 'ENDMILL '\r\n\r\n00%",
 };
 
-/** A fake Brother. The first connection answers slowly, each later one at once. */
-function startFakeBrother(): Promise<{ server: net.Server; sockets: Set<net.Socket> }> {
+interface FakeBrother {
+  server: net.Server;
+  sockets: Set<net.Socket>;
+  /** Each command that the fake got, in order */
+  commands: string[];
+}
+
+/** A fake Brother. Each reply of the first connection takes `firstDelayMs`, and each reply of a later one `laterDelayMs`. */
+function startFakeBrother(firstDelayMs = SLOW_REPLY_MS, laterDelayMs = 0): Promise<FakeBrother> {
   const sockets = new Set<net.Socket>();
+  const commands: string[] = [];
   let connections = 0;
   const server = net.createServer(socket => {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
     socket.on('error', () => {});
-    const delayMs = ++connections === 1 ? SLOW_REPLY_MS : 0;
+    const delayMs = ++connections === 1 ? firstDelayMs : laterDelayMs;
+    // Like a real control, it answers one command at a time
+    let replyQueue = Promise.resolve();
     socket.on('data', chunk => {
       const command = /CLOD\s+(\S+)/.exec(chunk.toString('ascii'))?.[1] ?? '';
+      commands.push(command);
       const reply = '%' + (REPLIES[command] ?? `RLOD    ${command.padEnd(8)}00\r\n\r\n00%`);
-      setTimeout(() => { if (!socket.destroyed) socket.write(reply); }, delayMs);
+      replyQueue = replyQueue
+        .then(() => new Promise(resolve => setTimeout(resolve, delayMs)))
+        .then(() => { if (!socket.destroyed) socket.write(reply); });
     });
   });
-  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ server, sockets })));
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ server, sockets, commands })));
 }
 
 describe('a Brother poll that runs out of time in the scheduler', () => {
   let scheduler: PollScheduler | null = null;
-  let fake: { server: net.Server; sockets: Set<net.Socket> } | null = null;
+  let fake: FakeBrother | null = null;
   let connector: BrotherConnector | null = null;
 
   afterEach(async () => {
@@ -76,5 +91,60 @@ describe('a Brother poll that runs out of time in the scheduler', () => {
     expect(results[0].connected).toBe(false);
     expect(results[0].errors.join('; ')).toContain('did not answer all requests');
     expect(results.at(-1)?.errors).toEqual([]);
+  });
+});
+
+describe('a slow Brother in the scheduler', () => {
+  /** The limits of a real Chatter, 10 times shorter: a 1 s poll limit, and 150 ms for each reply (1.5 s on a real machine) */
+  const SCALED = { pollTimeoutMs: 1000, stuckPollMs: 6000, intervalMs: 20 };
+  let scheduler: PollScheduler | null = null;
+  let fake: FakeBrother | null = null;
+  let connector: BrotherConnector | null = null;
+
+  afterEach(async () => {
+    scheduler?.stopAll();
+    connector?.disconnect();
+    if (fake) {
+      for (const socket of fake.sockets) socket.destroy();
+      await new Promise(resolve => fake!.server.close(resolve));
+    }
+    scheduler = null;
+    fake = null;
+    connector = null;
+  });
+
+  /** Poll the fake Brother with a real scheduler until `count` polls ended, and give the result of each poll */
+  async function pollSlowBrother(replyDelayMs: number, count: number) {
+    fake = await startFakeBrother(replyDelayMs, replyDelayMs);
+    const port = (fake.server.address() as net.AddressInfo).port;
+    connector = new BrotherConnector({ id: 'speedio', name: 'Speedio', host: '127.0.0.1', dataPort: port, timeout: 500 });
+    const results: { connected: boolean; errors: string[]; skipped: string[] }[] = [];
+    scheduler = new PollScheduler({
+      afterPoll: (machine: BaseMachineConnector) => {
+        const { connected, errors, pollTimings } = machine.getStatus();
+        results.push({ connected, errors: [...errors], skipped: pollTimings?.lastPoll.skipped ?? [] });
+      },
+      connectingEnded: () => {},
+    }, SCALED);
+    scheduler.setInterval(SCALED.intervalMs);
+
+    scheduler.start(connector);
+    await expect.poll(() => results.length, { timeout: count * 1500, interval: 20 }).toBeGreaterThanOrEqual(count);
+    scheduler.stopAll();
+    return results.slice(0, count);
+  }
+
+  it('stays online when each reply takes 15 % of the poll limit, and reads each command within a few polls', async () => {
+    const results = await pollSlowBrother(150, 4);
+
+    expect(results.every(result => result.connected && result.errors.length === 0)).toBe(true);
+    expect(results[0].skipped.length).toBeGreaterThan(0);
+    expect(new Set(fake!.commands)).toEqual(new Set(['PANEL', 'MEM', 'ALARM', 'WKCNTR', 'PDSP', 'ATCTL', 'TOLNI1']));
+  }, 10_000);
+
+  it('skips nothing when the machine answers fast', async () => {
+    const results = await pollSlowBrother(5, 4);
+
+    expect(results.every(result => result.connected && result.skipped.length === 0)).toBe(true);
   });
 });

@@ -96,6 +96,11 @@ export class PollTimingRecorder {
     return Math.max(lastMs, avgMs);
   }
 
+  /** The time of the slowest command of this poll so far. A machine that is slow now is slow for the next command too. */
+  slowestInPollMs(): number {
+    return Math.max(0, ...Object.values(this.current.commands));
+  }
+
   endPoll(limitMs: number): void {
     const totalMs = this.elapsedMs();
     this.polls.add(totalMs);

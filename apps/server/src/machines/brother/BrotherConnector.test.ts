@@ -2,6 +2,7 @@ import net from 'net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BrotherConnector, NO_REPLY_ERROR, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
 import type { BrotherMachineConfig, DataItemTransform } from '../../types/index.js';
+import { captureLog } from '../../logging/testSupport.js';
 
 /**
  * Replies of a Brother control to each command, matching the Python test fixtures
@@ -796,5 +797,117 @@ describe('Brother tool table and tool data, read less often than the machine sta
 
     expect(machine.sent.filter(command => command === 'ATCTL')).toHaveLength(1);
     expect(machine.sent).not.toContain('ATCTLD');
+  });
+});
+
+describe('Brother time budget in a poll', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-21T08:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('skips nothing when the machine answers in time', async () => {
+    const machine = machineThatTakes(100);
+
+    for (let i = 0; i < 3; i++) {
+      const status = await machine.poll();
+      expect(status.pollTimings?.lastPoll.skipped).toEqual([]);
+    }
+  });
+
+  it('sends the mode, the program and run state, and the alarm first', async () => {
+    const machine = machineThatTakes(100);
+
+    await machine.poll();
+
+    expect(machine.sent.slice(0, 3)).toEqual(['PANEL', 'MEM', 'ALARM']);
+  });
+
+  it('skips the optional commands that do not fit in the poll limit, and the poll is still good', async () => {
+    // 1.5 s for each answer: the 8 commands of the first poll take 12 s, more than the 10 s limit
+    const machine = machineThatTakes(1500);
+
+    const status = await machine.poll();
+
+    expect(status.errors).toEqual([]);
+    expect(status.connected).toBe(true);
+    expect(status.data.mode).toBe('MANUAL');
+    expect(status.pollTimings!.lastPoll.totalMs).toBeLessThanOrEqual(8000);
+    expect(status.pollTimings!.lastPoll.skipped).toEqual(['MCRNI1', 'ATCTL', 'TOLNI1']);
+  });
+
+  it('starts the next poll with the commands that the last poll skipped, so no command is left out for long', async () => {
+    const machine = machineThatTakes(1500);
+    await machine.poll();
+
+    await machine.poll();
+
+    expect(machine.sent).toEqual(['PANEL', 'MEM', 'ALARM', 'MCRNI1', 'ATCTL']);
+  });
+
+  it('reads each command within a few polls when the machine is slow', async () => {
+    const machine = machineThatTakes(1500);
+    const read = new Set<string>();
+
+    for (let i = 0; i < 3; i++) {
+      const status = await machine.poll();
+      machine.sent.forEach(command => read.add(command));
+      expect(status.errors).toEqual([]);
+    }
+
+    expect([...read].sort()).toEqual([...STATE_COMMANDS, ...TOOL_COMMANDS].sort());
+  });
+
+  it('keeps the values of the skipped commands, so they stay on the screen', async () => {
+    const machine = machineThatTakes(100);
+    await machine.poll();
+    machine.speed.msPerCommand = 3000;
+
+    const status = await machine.poll();
+
+    expect(machine.sent).toEqual(['PANEL', 'MEM', 'ALARM']);
+    expect(status.errors).toEqual([]);
+    expect(status.data.partCount).toBe(78);
+    expect(status.data.Count).toBe(42);
+    expect(status.data.toolTable?.[1]).toMatchObject({ toolNum: 1, length: 1.5, name: 'ENDMILL' });
+  });
+
+  it('keeps the tool offsets when a poll reads the tool table but skips the tool data', async () => {
+    const machine = machineThatTakes(100);
+    await machine.poll();
+    vi.setSystemTime(Date.now() + 60_000);
+    machine.speed.msPerCommand = 1500;
+    await machine.poll();
+
+    const status = await machine.poll();
+
+    expect(machine.sent).toContain('ATCTL');
+    expect(machine.sent).not.toContain('TOLNI1');
+    expect(status.data.toolTable?.[1]).toMatchObject({ toolNum: 1, length: 1.5, name: 'ENDMILL' });
+  });
+
+  it('writes the skipped commands in the debug log, not as a machine error', async () => {
+    const log = captureLog();
+    try {
+      const status = await machineThatTakes(3000).poll();
+
+      expect(status.errors).toEqual([]);
+      expect(log.text('debug')).toMatch(/Poll times.*skipped=/);
+    } finally {
+      log.restore();
+    }
+  });
+
+  it('uses the poll limit that the scheduler gives', async () => {
+    const machine = machineThatTakes(1500);
+    machine.connector.pollTimeLimitMs = 20000;
+
+    const status = await machine.poll();
+
+    expect(status.pollTimings!.lastPoll.skipped).toEqual([]);
   });
 });
