@@ -40,6 +40,9 @@ const KEY_VALUE = /\b([A-Za-z_]*(?:pass(?:word)?|token|secret|authorization|api[
 const BEARER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/g;
 /** A Telegram bot token is in the path of the address: /bot<number>:<text>/ */
 const TELEGRAM_BOT = /\/bot\d+:[A-Za-z0-9_-]+/g;
+/** A Discord or Slack webhook address holds its token in the path */
+const DISCORD_WEBHOOK = /(\/api\/webhooks\/\d+)\/[A-Za-z0-9_-]+/g;
+const SLACK_WEBHOOK = /(hooks\.slack\.com\/services)\/[A-Za-z0-9/_-]+/g;
 
 /** A line of text with the secrets hidden: the user info and secret query values of an address, secret key=value pairs, and tokens */
 export function redactText(text: string): string {
@@ -48,7 +51,9 @@ export function redactText(text: string): string {
     .replace(URL_QUERY, redactQuery)
     .replace(KEY_VALUE, `$1=${HIDDEN}`)
     .replace(BEARER, `$1 ${HIDDEN}`)
-    .replace(TELEGRAM_BOT, `/bot${HIDDEN}`);
+    .replace(TELEGRAM_BOT, `/bot${HIDDEN}`)
+    .replace(DISCORD_WEBHOOK, `$1/${HIDDEN}`)
+    .replace(SLACK_WEBHOOK, `$1/${HIDDEN}`);
 }
 
 function redactQuery(query: string): string {

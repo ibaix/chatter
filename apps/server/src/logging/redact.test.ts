@@ -50,6 +50,12 @@ describe('redactText', () => {
       .toBe(`https://api.telegram.org/bot${HIDDEN}/sendMessage`);
   });
 
+  it('hides the token in the path of a Discord or Slack webhook address', () => {
+    expect(redactText('POST https://discord.com/api/webhooks/123456/AbC-dEf_9 gave 404'))
+      .toBe(`POST https://discord.com/api/webhooks/123456/${HIDDEN} gave 404`);
+    expect(redactText('https://hooks.slack.com/services/T0/B0/xyz')).toBe(`https://hooks.slack.com/services/${HIDDEN}`);
+  });
+
   it('keeps a normal line as it is', () => {
     const line = '2026-11-12T10:00:00.000Z WARN  [machines] Machine went offline machine=m1 reason="Connection refused"';
     expect(redactText(line)).toBe(line);

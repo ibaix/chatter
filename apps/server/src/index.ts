@@ -136,6 +136,7 @@ async function start(): Promise<void> {
     const app = createApp({
       poller, auth, accounts, history, statePeriods, alerts, alertRules, proxySettings, loginLog: new LoginLog(getDb()), version, updates,
       notifications, serverLog, connections,
+      historyHealthUrls: { victoriaMetrics: `${VICTORIA_METRICS_URL}/health`, vmalert: `${VMALERT_URL}/health` },
     });
     if (WEB_DIR) app.route('/', webAppRoutes(WEB_DIR));
     // serve() makes a plain HTTP/1 server, because no HTTP/2 option is given.
