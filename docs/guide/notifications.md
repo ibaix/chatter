@@ -1,11 +1,14 @@
 # Notifications
 
 Chatter can send a message when a machine alert starts and when it ends.
-The message goes to a **channel**. There are three types of channel:
+The message goes to a **channel**. There are six types of channel:
 
 - **Twilio** sends a text message to the phones of the shop.
-- **Webhook** sends the message to a web address, for example Slack, ntfy, or Home Assistant.
-- **Apprise** sends the message to an Apprise server. Apprise then sends it to Teams, Discord, Telegram, email, and many more services.
+- **Webhook** sends the message to a web address, for example Slack or Home Assistant.
+- **Apprise** sends the message to an Apprise server. Apprise then sends it to Teams, Pushover, email, and many more services.
+- **Discord** sends the message to a channel of a Discord server. It can mention people or roles.
+- **Telegram** sends the message to a Telegram chat, with a bot of your own.
+- **ntfy** sends a push message to the ntfy app on your phones.
 
 You set up the channels in **Settings > Notifications**. Only an **Admin** can see this tab.
 To make the alerts themselves, see [Alerts](./alerts.md).
@@ -33,14 +36,45 @@ The **Message settings** panel is at the bottom of the tab.
 
 1. Click **Add channel**.
 2. Select the **Type**, and type a **Name**, for example "Shop phones".
-3. Fill in the boxes of the type. See [Text messages with Twilio](#text-messages-with-twilio), [Webhooks](#webhooks), or [Apprise](#apprise).
+3. Fill in the boxes of the type. See [Text messages with Twilio](#text-messages-with-twilio), [Webhooks](#webhooks), [Apprise](#apprise), [Discord](#discord), [Telegram](#telegram), or [ntfy](#ntfy-app).
 4. Under **Which alerts**, select:
    - **Level:** **Warning and up** sends each alert. **Critical only** sends only the critical alerts.
    - **Machines:** **All machines, also the machines that you add later** sends the alerts of each machine, now and later. **Pick machines** sends only the alerts of the machines that you select.
+   - **Ignore messages (optional):** Chatter does not send a message when its text has one of these patterns. For example, `Door open` stops each message about an open door, and `Haas VF-2*Idle` stops the idle alerts of the Haas VF-2. Click **Add a pattern** to add a box. See [Ignore some messages](#ignore-some-messages).
 5. Click **Send test**. The result shows under the form. Fix the problem if the test fails.
 6. Click **Save channel**.
 
 Each alert sends 2 messages: one when it starts, and one when it ends.
+
+## Ignore some messages
+
+An alert can be useful on the screen, but too frequent for the phones. To stop some messages of a channel, add **ignore patterns** under **Ignore messages**. A channel can have at most 20 patterns.
+
+- A pattern finds text in any part of the message. Chatter looks at the full text that it sends, for example `CRITICAL - Haas VF-2: Door open. Started 9:02 AM.`
+- Upper case and lower case are the same. `door open` also finds `Door open`.
+- `*` finds any text, also no text. `?` finds one character. All the other characters are only text. For example, `.` and `(` are not special.
+- Under each pattern, Chatter tells how many of the last messages it finds, for example "Matches 3 of the last 40 messages." Use this line to check the pattern before you save.
+- Chatter does not keep a pattern of only `*` and `?`, because that pattern finds each message. To stop all the messages, turn the channel off.
+
+| Pattern | Finds |
+| --- | --- |
+| `Door open` | Each message about an open door, on each machine. |
+| `Haas VF-2*Idle` | The idle alerts of the Haas VF-2. |
+| `WARNING - ` | The start of each warning alert. The end of that alert is ignored too. |
+| `Haas VF-?:` | The alerts of the Haas VF-2, the Haas VF-4, and each other Haas VF with one digit. It does not find the Haas VF-10. |
+
+Chatter does not send an ignored message. It shows the message in the message list as **Ignored**, with the pattern that found it.
+
+- When Chatter ignores the start of an alert, it also ignores the end of that alert.
+- When the start of an alert waits and the alert ends, Chatter sends one message for both. Chatter checks only the start text of this message. So a pattern for the end messages, such as `ended`, does not stop an alert that nobody saw.
+- When the start of an alert went, Chatter checks the text of the end alone.
+- Chatter never ignores a test or an "And N more alerts" message.
+- An ignored message does not count in the limit of 10 messages in 10 minutes.
+
+:::tip The limit of 10 messages in 10 minutes
+A channel gets at most 10 alert messages in 10 minutes. When more alerts come, Chatter puts them in one "And N more alerts" message.
+A **Program ended** message does not count in this limit. It always goes alone, and it never goes in an "And N more alerts" message. So the program ends of a busy shop do not stop the alarm messages.
+:::
 
 ## Change, turn off, or delete a channel
 
@@ -49,8 +83,8 @@ Each alert sends 2 messages: one when it starts, and one when it ends.
 - **Edit** opens the channel. Change it, then click **Save channel**.
 - To delete a channel, click **Edit**, then **Delete channel**, then **Delete the channel**. Chatter stops its waiting messages. Its sent and failed messages stay in the message list as **Deleted channel**, until Chatter removes them.
 
-After you save, Chatter never shows a secret again, such as the Twilio auth token or the Apprise password. To keep the saved secret, leave its box empty.
-To change it, type the new one. To stop sending a webhook secret, select **Delete the saved secret**.
+After you save, Chatter never shows a secret again, such as the Twilio auth token, the Apprise password, the Discord webhook address, the Telegram bot token, or the ntfy access token. To keep the saved secret, leave its box empty.
+To change it, type the new one. To stop sending an optional secret, for example a webhook secret or an ntfy access token, select **Delete the saved secret**.
 
 ## Text messages with Twilio
 
@@ -92,29 +126,30 @@ A webhook channel sends each message as JSON to a web address, with `POST`:
 - `level` is `warning`, `critical`, or `null` (for `more`, `test`, and an alert with an unknown level).
 - `machine`, `alert`, `summary`, `startedAt`, `endedAt`, and `link` can be `null`.
 
-If you type a **Secret (optional)**, Chatter sends it in the header `Authorization: Bearer <secret>`. Then the other app can check that the message is from Chatter.
+**Secret (optional)** is under **Advanced**. If you type a secret, Chatter sends it in the header `Authorization: Bearer <secret>`. Then the other app can check that the message is from Chatter.
 
 ### Slack
 
 1. In Slack, make an app with an **incoming webhook** for your channel, and copy its address. It starts with `https://hooks.slack.com/`.
-2. In Chatter, add a **Webhook** channel, and paste the address in **Web address**. Leave **Secret** empty.
+2. In Chatter, add a **Webhook** channel, and paste the address in **Web address**. Leave **Advanced** closed.
 
 Slack shows the `text` line.
 
-### ntfy
+### ntfy with a webhook
 
-[ntfy](https://ntfy.sh) sends push messages to the ntfy app on a phone. ntfy can show one field of the JSON, so add <code v-pre>?tpl=yes&amp;m={{.text}}</code> to the address of your topic:
+Use the [ntfy](#ntfy-app) channel type for new channels. A webhook channel that you made before for ntfy continues to work.
+ntfy can show one field of the JSON, so the address of the topic ends with <code v-pre>?tpl=yes&amp;m={{.text}}</code>:
 
 ```
 https://ntfy.sh/your-topic?tpl=yes&m={{.text}}
 ```
 
-Use a topic name that other people cannot guess. If your topic needs a login, put an ntfy access token in **Secret**.
+Use a topic name that other people cannot guess. If your topic needs a login, open **Advanced**, and put an ntfy access token in **Secret**.
 
 ### Home Assistant
 
 1. In Home Assistant, make an automation with a **Webhook** trigger, and copy its webhook address, for example `http://homeassistant.local:8123/api/webhook/chatter-alerts`.
-2. In Chatter, add a **Webhook** channel with that address. Leave **Secret** empty.
+2. In Chatter, add a **Webhook** channel with that address. Leave **Advanced** closed.
 
 In the automation, `trigger.json.text` is the message, and `trigger.json.machine.name` is the machine name.
 
@@ -147,7 +182,7 @@ Apprise API runs on a computer with a 64-bit processor (Intel, AMD, or 64-bit AR
 4. In Chatter, add a channel of the type **Apprise**:
    - **Apprise address:** the Apprise address, then `/notify/`, then your config key, for example `http://apprise.local:8000/notify/chatter`.
    - **Tag (optional):** sends only to the services that have this tag in Apprise. Leave it empty to send to the services with no tag. Type `all` to send to each service.
-   - **User name** and **Password (optional):** only when your Apprise asks for a login (`APPRISE_AUTH_REQUIRED=yes`).
+   - **User name** and **Password (optional):** under **Advanced**. Only when your Apprise asks for a login (`APPRISE_AUTH_REQUIRED=yes`).
 5. Click **Send test**.
 
 Chatter gives each message an Apprise type, so each service can show it with its own color or icon:
@@ -167,9 +202,105 @@ The text is the same as in a text message.
 Apprise answers only after it sent the message to each service. So Chatter waits up to 60 seconds for Apprise. For the other types, it waits 10 seconds.
 If Apprise does not answer in 60 seconds, Chatter tries again later. Then a service that already got the message can get it two times.
 
+## Discord
+
+Chatter sends each message to a channel of a Discord server, through a **webhook**. A webhook is a web address that lets an app post to one channel. You need the **Manage Webhooks** permission on the server.
+
+1. In Discord, open **Server Settings > Integrations > Webhooks**. Click **New Webhook**, and select the channel. Click **Copy Webhook URL**.
+2. In Chatter, add a channel of the type **Discord**:
+   - **Webhook address:** the address from step 1. It starts with `https://discord.com/api/webhooks/`. It has a token in it, so Chatter never shows it again after you save.
+   - **Mention (optional):** the people or roles that Discord mentions when an alert starts. See [Mention people in Discord](#mention-people-in-discord).
+   - **Notification sound:** **Normal** or **Quiet**. Quiet still shows each message in the Discord channel, but Discord sends no notification to phones and computers. The sound is the same for each message of the channel, also for a test.
+3. Click **Send test**.
+
+Each message is an embed (a card) with the text of the message. The color of the bar shows the kind of message:
+
+| Message | Color |
+| --- | --- |
+| A critical alert starts | Red |
+| A warning alert starts | Amber |
+| An alert ends | Green |
+| A test, an "And N more alerts" message, or an alert with no known level | Gray |
+
+Discord shows the time of the alert under the embed.
+
+### Mention people in Discord
+
+Type one mention or more in **Mention (optional)**. Put a space between them:
+
+| To mention | Type |
+| --- | --- |
+| A person | `<@USER_ID>` |
+| A role | `<@&ROLE_ID>` |
+| The people in the channel who are online | `@here` |
+| Everyone on the server | `@everyone` |
+
+To get an ID, turn on **Developer Mode** in Discord (**User Settings > Advanced**). Then right-click the person, or the role in **Server Settings > Roles**, and click **Copy ID**. Put the ID in the form, for example `<@&123456789012345678>` for a role.
+
+Chatter mentions the people when an alert starts, and for a test. It does not mention them when an alert ends, or for an "And N more alerts" message.
+Only the mentions in this box send a notification to people. A machine name that has `@everyone` in it sends none.
+
+## Telegram
+
+Chatter sends each message to a Telegram chat, with a bot of your own. The chat can be a group, a channel, or a private chat with you.
+
+1. In Telegram, send `/newbot` to **@BotFather**. Follow the steps, and copy the **bot token**.
+2. Send a message to your bot. Or add the bot to your group or channel, and write a message there. Telegram does not let a bot write first.
+3. Open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser. Put your bot token in place of `<TOKEN>`. Look for `"chat":{"id":` in the answer. The number after it is the chat ID.
+   A group has a negative number, for example `-1001234567890`. A private chat with you has a positive number.
+4. In Chatter, add a channel of the type **Telegram**:
+   - **Bot token:** from step 1. Chatter never shows it again after you save.
+   - **Chat ID:** from step 3. For a public channel, you can type `@` and the name of the channel. The bot must be an admin of the channel.
+   - **Notification sound:** **Normal** or **Quiet**. Quiet still shows each message, but the phone makes no sound. The sound is the same for each message of the channel, also for a test.
+5. Click **Send test**.
+
+The message has the same text as a text message.
+
+## ntfy app {#ntfy-app}
+
+[ntfy](https://ntfy.sh) sends push messages to the ntfy app on Android and iPhone. You can use the free public server `ntfy.sh`, or run your own ntfy server in the shop.
+
+1. Install the **ntfy** app on each phone.
+2. In Chatter, add a channel of the type **ntfy**.
+3. In **Topic**, click **Make a random topic**. Chatter fills in three random words, for example `maple-otter-lantern`. You can also type your own topic name. Use only letters, digits, `-` and `_`, and use a name that other people cannot guess.
+4. In the ntfy app on each phone, subscribe to the same topic. To add a phone later, open the channel in Chatter and read the topic there.
+5. Select the **Notification sound**. See the table below. Quiet still shows each message.
+6. Only for your own ntfy server, or for a topic that needs a login: open **Advanced**.
+   - **Server (optional):** the address of your own ntfy server, for example `http://ntfy.shop.local`. Do not put the topic in the address. Leave it empty for `ntfy.sh`. If you type the address of `ntfy.sh`, type only `https://ntfy.sh`, with no path after it. In the ntfy app, type the same server address.
+   - **Access token (optional):** only when the topic needs a login. In ntfy, make a token under **Account > Access tokens**.
+7. Click **Send test**.
+
+::: warning
+On `ntfy.sh`, a topic has no login. Each person who knows the topic name can read your alerts and send messages to it. Use a name that is hard to guess, or use an access token on a reserved topic or on your own server.
+:::
+
+The **Notification sound** sets the ntfy priority of each message of the channel, also of a test. The level of the alert does not change it.
+
+| Notification sound | ntfy priority | On the phone |
+| --- | --- | --- |
+| **Quiet** | 2 (low) | The message shows, with no sound and no vibration. |
+| **Normal** | 3 (default) | The message shows, with the usual sound and vibration. |
+| **High** | 4 (high) | A longer vibration, and the message shows over other apps. |
+| **Urgent** | 5 (urgent) | The longest vibration, and the message shows over other apps. |
+
+To make the critical alerts louder than the warnings, make two ntfy channels. Give one **Critical only** and **Urgent**. Give the other **Warning and up**, **Normal**, and an ignore pattern `CRITICAL - `.
+
+Chatter gives each message an icon:
+
+| Message | Icon |
+| --- | --- |
+| A critical alert starts | 🚨 |
+| A warning alert starts, or an "And N more alerts" message | ⚠️ |
+| An alert ends | ✅ |
+| A test | 🔔 |
+
+The title is `Chatter: ` and the machine name. When you tap the message, the phone opens the machine in Chatter. For this, set **Chatter address for links** in **Message settings**. The phone must also be on the shop network.
+
 ## The message list
 
 The **Messages** panel shows each message of the last 30 days, the newest first. Chatter keeps at most 1000 messages, so a busy shop sees fewer days. Select a channel in **Channel** to see only its messages.
+
+The panel shows the newest 10 messages. To see 10 more, click **Show more** at the bottom of the list. While the tab is open, Chatter adds new messages to the list every 20 seconds.
 
 | Result | Meaning |
 | --- | --- |
@@ -177,12 +308,13 @@ The **Messages** panel shows each message of the last 30 days, the newest first.
 | **Waiting** | Chatter sends it soon, or tries again soon. |
 | **Failed** | Chatter did not send it. Under it is the reason. |
 | **In an "And more alerts" message** | The channel got too many messages, so this alert went in an "And N more alerts" message. |
+| **Ignored** | Chatter did not send it, because its text has an ignore pattern of the channel. Under it is the pattern. See [Ignore some messages](#ignore-some-messages). |
 
 ## Check
 
 | What you see | What to do |
 | --- | --- |
-| No message comes when an alert starts | Check that the channel is **On**, and that its **Level** and **Machines** include the alert. Then look in the message list. |
+| No message comes when an alert starts | Check that the channel is **On**, and that its **Level** and **Machines** include the alert. Check that no pattern in **Ignore messages** finds the text. Then look in the message list. An ignored message shows as **Ignored**. |
 | **Failed:** Twilio refused the login | The Account SID or the auth token is wrong. Copy them again from the Twilio Console. |
 | **Sent**, but the phone gets no text | **Sent** means only that Twilio took the message. In the Twilio Console, open **Monitor > Logs > Messaging** and look at the status of the message. Error 30034 means that your US number is not registered for A2P 10DLC. See [Before the first message](#before-the-first-message). |
 | **Failed:** a Twilio trial account can send only the message templates of Twilio | Upgrade the Twilio account. |
@@ -194,12 +326,23 @@ The **Messages** panel shows each message of the last 30 days, the newest first.
 | **Failed:** Apprise could not send to one service or more | One of your services in Apprise failed, or no service has the tag. Look in the Apprise log. Chatter does not try again, so no service gets the message two times. |
 | **Failed:** Apprise has no config with this key | The config key in the **Apprise address** is wrong, or you did not save the config in Apprise. |
 | **Failed:** Apprise refused the login | Type the user name and password of Apprise. |
+| **Failed:** Discord answered 401, 403, or 404 | The webhook is deleted, or the address is wrong. Copy the webhook address from Discord again. |
+| **Failed:** Discord answered 400 and refused the message | Check the **Mention** box. Empty it, and send a test. |
+| **Failed:** Telegram refused the bot token | The bot token is wrong. Copy it again from @BotFather. |
+| **Failed:** Telegram cannot find the chat | The chat ID is wrong. Look in `getUpdates` again. |
+| **Failed:** The group is now a supergroup | Telegram gave the group a new chat ID. Type the new chat ID from the message in **Chat ID**. |
+| **Failed:** Telegram answered 400 | The answer had no reason. A proxy of the shop network can cause this. Check the chat ID and the bot token. |
+| **Failed:** Telegram refused the message: ... | The text after the colon is the reason from Telegram. |
+| **Failed:** The bot cannot write to the chat | Send a message to the bot, or add the bot to the group or channel. For a channel, make the bot an admin. |
+| **Failed:** ntfy refused the access | The access token is wrong, or it cannot write to the topic. Make a new token in ntfy. |
+| **Failed:** ntfy answered 404 | The **Server** address is wrong. Do not put the topic in it. |
+| The ntfy app gets no message, but Chatter shows **Sent** | The app subscribes to another topic or another server. Check the topic name in the app. |
 | **Failed:** Chatter could not reach Apprise | Apprise API is not running, or the address is wrong. Chatter tries again for 24 hours. |
 | **Waiting:** Apprise did not answer in time | Apprise needs more than 60 seconds to send to your services. Look in the Apprise log for a slow service. Chatter tries again later. |
 | **Waiting:** Apprise answered 500 (or 502, 503, 429) | Apprise or one of its parts has a problem, or is busy. Look in the Apprise log. Chatter tries again for 24 hours. |
 | Apprise API does not start on the Chatter Raspberry Pi card | The Apprise image is only for 64-bit processors. The Pi card is 32-bit. Run Apprise API on another computer. See [Apprise](#apprise). |
 | **Waiting** for a long time | The service does not answer, or answers with an error that can go away. Chatter tries again for 24 hours, then the message fails. |
-| An "And 7 more alerts" message | A channel gets at most 10 messages in 10 minutes. Chatter puts the other alerts in one message. Make fewer alerts fire, or select **Critical only**. |
+| An "And 7 more alerts" message | A channel gets at most 10 alert messages in 10 minutes. Chatter puts the other alerts in one message. A **Program ended** message does not count. Make fewer alerts fire, or select **Critical only**. |
 | The times are in UTC | Set the **Time zone** in **Message settings**. |
 | The messages have no link | Set **Chatter address for links** in **Message settings**. |
 
@@ -209,13 +352,15 @@ When an alert starts or ends, Chatter makes one message for each channel that wa
 The message waits in a queue in `chatter.db`.
 After a restart or a power cut, the message is still in the queue, and Chatter sends it.
 If the end of an alert comes before Chatter sent its start, Chatter sends one message for both.
+When the text of a message has an ignore pattern of the channel, Chatter keeps the message in the list as **Ignored**, and does not send it.
 A channel that did not get the start of an alert gets no end message for it, for example a channel that you add while the alert is on.
+A **Program ended** alert gets only its start message. Chatter sends no end message and no combined message for it. The message goes also when the channel is at its limit. See [Program ended](./alerts.md#program-ended).
 
 Sometimes the service does not answer, or answers that it is busy. Then Chatter tries the message again.
 The waits are 30 seconds, 1 minute, 2 minutes, and 5 minutes, then 10 minutes each time. After 24 hours, the message fails.
 It does not try again when the service refuses the message, for example for a wrong login, because the next try fails too.
 
-Chatter keeps the Twilio auth token, the webhook secret, and the Apprise password in `chatter.db` as plain text, because it must send them to the service. See [Keep chatter.db private](../security.md#keep-chatter-db-private).
+Chatter keeps the Twilio auth token, the webhook secret, the Discord webhook address, the Telegram bot token, the ntfy access token, and the Apprise password in `chatter.db` as plain text, because it must send them to the service. It also keeps the ntfy topic there. The topic is not secret in the form, but each person who knows it can read the messages. See [Keep chatter.db private](../security.md#keep-chatter-db-private).
 
 Chatter sends the messages directly to Twilio, to the web address, or to Apprise. It cannot send them through a proxy server yet.
 

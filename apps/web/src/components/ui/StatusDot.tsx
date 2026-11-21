@@ -1,10 +1,10 @@
 import { cn } from '@toolpath/ui';
 import type { ReactNode } from 'react';
 
-/** good: green. check: yellow, a state the user should look at. bad: red. */
-export type StatusTone = 'good' | 'check' | 'bad';
+/** good: green. check: yellow, a state the user should look at. bad: red. neutral: gray, a state that needs nothing. */
+export type StatusTone = 'good' | 'check' | 'bad' | 'neutral';
 
-const DOT_COLORS: Record<StatusTone, string> = { good: 'bg-running', check: 'bg-idle', bad: 'bg-alarm' };
+const DOT_COLORS: Record<StatusTone, string> = { good: 'bg-running', check: 'bg-idle', bad: 'bg-alarm', neutral: 'bg-zinc-500' };
 
 /** A colored dot before a text. The text gives the meaning, so the color is never the only sign. */
 export function StatusDot({ tone, children }: { tone: StatusTone; children: ReactNode }) {

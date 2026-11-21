@@ -6,8 +6,8 @@ import { ALERT_SEVERITIES, type AlertSeverity } from './alertRules.js';
  * Settings > Notifications shows the channels and the messages. Only an admin (manage-chatter) changes them.
  */
 
-/** How the web app shows one input of a channel form */
-export const CHANNEL_FIELD_KINDS = ['text', 'secret', 'url', 'phone-list'] as const;
+/** How the web app shows one input of a channel form. A `choice` field is a select with `options`. */
+export const CHANNEL_FIELD_KINDS = ['text', 'secret', 'url', 'phone-list', 'choice'] as const;
 export type ChannelFieldKind = typeof CHANNEL_FIELD_KINDS[number];
 
 /**
@@ -23,6 +23,17 @@ export interface ChannelField {
   required: boolean;
   /** Show the value in the mono font, for ids and web addresses */
   mono?: boolean;
+  /**
+   * 'words': the form shows a button that fills the box with three random words, for example a hard-to-guess topic.
+   * Only for a `text` field, because the admin must see the value to type it in another app.
+   */
+  generate?: 'words';
+  /** The form puts the field under a closed "Advanced" heading. Only for a field that most admins leave empty. */
+  advanced?: boolean;
+  /** The options of a `choice` field, in the order of the select */
+  options?: { value: string; label: string }[];
+  /** The value that a new form starts with, and that a saved channel with no value shows */
+  default?: string;
 }
 
 /** A channel type that the server knows, from GET /api/notification-types */
@@ -46,6 +57,8 @@ export interface ChannelRouting {
   minSeverity: AlertSeverity;
   /** null gets the alerts of all machines, also of machines that you add later */
   machineIds: string[] | null;
+  /** The channel does not send a message whose text matches one of these patterns (see ignorePatterns.ts) */
+  ignorePatterns: string[];
 }
 
 /** A channel as the API shows it. It has no secret values. */
@@ -66,7 +79,9 @@ export interface NotificationChannel extends ChannelRouting {
  * The body of POST and PUT /api/notification-channels, and of a test before you save.
  * `values` has all the fields, also the secret fields. An empty secret on an edit keeps the saved secret.
  */
-export interface ChannelInput extends ChannelRouting {
+export interface ChannelInput extends Omit<ChannelRouting, 'ignorePatterns'> {
+  /** Without it, a new channel has no patterns, and an edit keeps the saved patterns */
+  ignorePatterns?: string[];
   type: string;
   name: string;
   values: ChannelValues;
@@ -85,8 +100,9 @@ export type NotificationKind = typeof NOTIFICATION_KINDS[number];
 /**
  * "waiting" is in the outbox. "failed" means that Chatter stopped trying.
  * "grouped" means that the message went into one "more" message, because the channel was at its limit.
+ * "ignored" means that Chatter did not send the message, because its text matched an ignore pattern of the channel.
  */
-export const MESSAGE_STATUSES = ['waiting', 'sent', 'failed', 'grouped'] as const;
+export const MESSAGE_STATUSES = ['waiting', 'sent', 'failed', 'grouped', 'ignored'] as const;
 export type MessageStatus = typeof MESSAGE_STATUSES[number];
 
 /** One message in the list, from GET /api/notification-messages */
@@ -137,7 +153,7 @@ export function isAtLeastLevel(severity: AlertSeverity, minSeverity: AlertSeveri
 
 /** True when the channel gets this alert */
 export function channelWantsAlert(
-  routing: ChannelRouting,
+  routing: Pick<ChannelRouting, 'minSeverity' | 'machineIds'>,
   alert: { machineId: string; severity: AlertSeverity },
 ): boolean {
   const machineMatches = routing.machineIds === null || routing.machineIds.includes(alert.machineId);

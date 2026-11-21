@@ -1,4 +1,4 @@
-import { isMachineRunning, type HistoryValue } from '@local-chatter/shared';
+import { isMachineRunning, isProgramEnded, type HistoryValue } from '@local-chatter/shared';
 import type { MachineDataSnapshot } from '../types/index.js';
 
 type ReadValue = (snapshot: MachineDataSnapshot) => number | boolean | undefined;
@@ -19,6 +19,8 @@ const METRICS: Record<Exclude<HistoryValue, 'connected'>, ReadValue> = {
   // The same rule as the dashboard. Undefined when the machine does not tell whether a program runs
   // (for example a Haas with no query port).
   running: isMachineRunning,
+  // 1 while the control says the program ended. 0 during a hold, an alarm or an emergency stop.
+  'program-ended': isProgramEnded,
 };
 
 /**

@@ -48,5 +48,15 @@ export function useServerReport<Report>(load: () => Promise<Report>) {
     }
   }, [load]);
 
-  return { report, loadError, changeError, isChanging, change, refresh };
+  /** Load one part of the report again, for example a list that changes often. A failure keeps the last report. */
+  const refreshPart = useCallback(async (loadPart: () => Promise<Partial<Report>>) => {
+    try {
+      const part = await loadPart();
+      setReport(current => (current ? { ...current, ...part } : current));
+    } catch {
+      // The next refresh tries again
+    }
+  }, []);
+
+  return { report, loadError, changeError, isChanging, change, refresh, refreshPart };
 }

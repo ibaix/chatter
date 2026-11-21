@@ -1,5 +1,5 @@
 import { cn } from '@toolpath/ui';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   addChannel, fetchChannels, fetchChannelTypes, fetchMessages, fetchNotificationSettings, inputOf, removeChannel, saveNotificationSettings,
   sendTestMessage, updateChannel,
@@ -11,6 +11,7 @@ import { Notice } from '../../components/ui/Notice';
 import { Panel } from '../../components/ui/Panel';
 import { Switch } from '../../components/ui/Switch';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
+import { useRefreshWhileVisible } from '../../hooks/useRefreshWhileVisible';
 import { errorMessageOf } from '../../utils/errorMessage';
 import { formatAgo } from '../../utils/formatters';
 import { ChannelForm } from './ChannelForm';
@@ -36,6 +37,9 @@ async function loadNotifications(): Promise<NotificationsReport> {
   return { types, channels, messages, settings };
 }
 
+/** New messages come in while the tab is open, so the tab loads the message list again this often */
+export const MESSAGES_REFRESH_MS = 20_000;
+
 /** The place of the last change, so its error shows next to the button that the user clicked */
 type ChangedPanel = 'channels' | 'settings' | 'form';
 
@@ -53,7 +57,10 @@ interface TestOutcome {
  * the messages of the last 30 days, and the settings of the message text.
  */
 export function NotificationsTab({ machines }: { machines: MachineName[] }) {
-  const { report, loadError, changeError, isChanging, change, refresh } = useServerReport(loadNotifications);
+  const { report, loadError, changeError, isChanging, change, refresh, refreshPart } = useServerReport(loadNotifications);
+  // Only the message list: the channels and the settings change only when an admin changes them
+  const refreshMessages = useCallback(() => refreshPart(async () => ({ messages: await fetchMessages() })), [refreshPart]);
+  useRefreshWhileVisible(refreshMessages, MESSAGES_REFRESH_MS);
   const [changedPanel, setChangedPanel] = useState<ChangedPanel | null>(null);
   const [openForm, setOpenForm] = useState<OpenForm>(null);
   if (loadError || !report) return <ReportPending loadError={loadError} />;
@@ -102,6 +109,7 @@ export function NotificationsTab({ machines }: { machines: MachineName[] }) {
         <ChannelForm
           types={report.types}
           machines={machines}
+          messages={report.messages}
           channel={openForm.channel}
           error={errorIn('form')}
           isSaving={isChanging}

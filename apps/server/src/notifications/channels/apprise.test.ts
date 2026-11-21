@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { appriseChannel } from './apprise.js';
-import type { OutgoingMessage, SendContext } from './ChannelType.js';
+import type { OutgoingMessage } from './ChannelType.js';
+import { fakeFetch } from './testSupport.js';
 
 const MESSAGE: OutgoingMessage = {
   kind: 'started',
@@ -13,21 +14,6 @@ const MESSAGE: OutgoingMessage = {
   endedAt: null,
   link: 'http://chatter.local:3001/machine/haas-vf2',
 };
-
-interface SentRequest {
-  url: string;
-  init: RequestInit;
-}
-
-/** A fetch that keeps each request and gives the answer of `answer` */
-function fakeFetch(answer: () => Response | Promise<Response>) {
-  const requests: SentRequest[] = [];
-  const fetch = (async (url: string | URL | Request, init: RequestInit = {}) => {
-    requests.push({ url: String(url), init });
-    return answer();
-  }) as typeof globalThis.fetch;
-  return { requests, context: (): SendContext => ({ fetch, signal: new AbortController().signal }) };
-}
 
 const URL_WITH_KEY = 'http://apprise.local:8000/notify/chatter';
 const settings = { url: URL_WITH_KEY, tag: '', username: '', password: '' };
@@ -54,6 +40,10 @@ describe('appriseChannel', () => {
       ['username', 'text', false],
       ['password', 'secret', false],
     ]);
+  });
+
+  it('puts the login under Advanced, because Apprise asks for it only when it has a login, and keeps the tag in view', () => {
+    expect(appriseChannel.fields.filter(field => field.advanced).map(field => field.key)).toEqual(['username', 'password']);
   });
 
   it('tells the admin before they start that Apprise runs on another computer, with a saved config key', () => {

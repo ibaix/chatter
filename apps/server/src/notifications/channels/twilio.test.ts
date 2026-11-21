@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { OutgoingMessage, SendContext } from './ChannelType.js';
+import type { OutgoingMessage } from './ChannelType.js';
+import { fakeFetch } from './testSupport.js';
 import { createTwilioChannel, TWILIO_API, twilioAddressOf } from './twilio.js';
 
 const MESSAGE: OutgoingMessage = {
@@ -12,19 +13,9 @@ const SID = `AC${'0123456789abcdef'.repeat(2)}`;
 const settings = { accountSid: SID, authToken: 'token-for-tests', from: '+15551230000', to: ['+15559870001', '+15559870002'] };
 const twilioChannel = createTwilioChannel(TWILIO_API);
 
-interface SentRequest {
-  url: string;
-  init: RequestInit;
-}
-
-/** A fetch that keeps each request and gives the answer of `answer` for the number in the request */
+/** A fake Twilio that gives the answer of `answer` for the number in the request */
 function fakeTwilio(answer: (to: string) => Response) {
-  const requests: SentRequest[] = [];
-  const fetch = (async (url: string | URL | Request, init: RequestInit = {}) => {
-    requests.push({ url: String(url), init });
-    return answer(new URLSearchParams(String(init.body)).get('To') ?? '');
-  }) as typeof globalThis.fetch;
-  return { requests, context: (): SendContext => ({ fetch, signal: new AbortController().signal }) };
+  return fakeFetch(({ init }) => answer(new URLSearchParams(String(init.body)).get('To') ?? ''));
 }
 
 const created = () => Response.json({ sid: 'SM1', status: 'queued' }, { status: 201 });
@@ -94,7 +85,43 @@ describe('twilioChannel', () => {
       .toEqual({ ok: false, retry: false, error });
   });
 
-  it.each([[429, 20429], [500, undefined], [503, undefined]])('tries again later when Twilio answers %i', async (status, code) => {
+  it('does not follow a redirect, because a redirect changes the POST to a GET', async () => {
+    const twilio = fakeTwilio(created);
+
+    await twilioChannel.send(settings, MESSAGE, twilio.context());
+
+    expect(twilio.requests.map(request => request.init.redirect)).toEqual(['manual', 'manual']);
+  });
+
+  it('stops at once when Twilio answers with a redirect', async () => {
+    const twilio = fakeTwilio(() => new Response(null, { status: 301, headers: { location: 'https://example.com/' } }));
+
+    expect(await twilioChannel.send({ ...settings, to: ['+15559870001'] }, MESSAGE, twilio.context())).toEqual({
+      ok: false, retry: false,
+      error: 'Twilio answered 301 and points to another address. A proxy of the shop network can cause this.',
+    });
+  });
+
+  it('reads at most 64 KB of an error answer, so a large answer cannot fill the memory of a Pi', async () => {
+    let readBytes = 0;
+    const part = new TextEncoder().encode(' '.repeat(16 * 1024));
+    const parts = [new TextEncoder().encode('{"code":21211'), ...Array.from({ length: 64 }, () => part), new TextEncoder().encode('}')];
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const next = parts.shift();
+        if (!next) return controller.close();
+        readBytes += next.byteLength;
+        controller.enqueue(next);
+      },
+    }, { highWaterMark: 0 });
+    const twilio = fakeTwilio(() => new Response(body, { status: 400 }));
+
+    expect(await twilioChannel.send({ ...settings, to: ['+15559870001'] }, MESSAGE, twilio.context()))
+      .toEqual({ ok: false, retry: false, error: 'Twilio refused the message to +15559870001 (answer 400).' });
+    expect(readBytes).toBeLessThanOrEqual(64 * 1024 + part.byteLength);
+  });
+
+  it.each([[408, undefined], [429, 20429], [500, undefined], [503, undefined]])('tries again later when Twilio answers %i', async (status, code) => {
     const twilio = fakeTwilio(() => twilioError(status, code));
 
     expect(await twilioChannel.send({ ...settings, to: ['+15559870001'] }, MESSAGE, twilio.context()))

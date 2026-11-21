@@ -1,5 +1,6 @@
 import {
   ALERT_SUBJECTS,
+  isEventSubject,
   hasMachinePlaceholder,
   isSameRule,
   MACHINE_PLACEHOLDER,
@@ -38,7 +39,7 @@ const NEW_QUERY_RULE: Omit<QueryAlertRule, 'id'> = {
 
 /** A limit to start from, when a rule changes to a value with a limit */
 const STARTING_LIMITS: Record<AlertSubject, number> = {
-  'spindle-speed': 10000, 'spindle-load': 90, 'part-count': 100, 'not-connected': 0, 'in-alarm': 0, 'emergency-stop': 0,
+  'spindle-speed': 10000, 'spindle-load': 90, 'part-count': 100, 'not-connected': 0, 'in-alarm': 0, 'emergency-stop': 0, 'program-ended': 0,
 };
 
 let newRuleCount = 0;
@@ -57,8 +58,12 @@ export function addRule(draft: DraftRule[], kind: 'simple' | 'query'): DraftRule
   return [...draft, { ...rule, key: `new-${newRuleCount}` }];
 }
 
-/** The change for a new subject. A state rule has no real limit, so a rule that gets a limit starts from a sensible one. */
+/**
+ * The change for a new subject. A state rule has no real limit, so a rule that gets a limit starts from a sensible one.
+ * An event, such as "program ended", fires once at the first true check, so its minutes are 0.
+ */
 export function subjectPatch(rule: SimpleAlertRule | Omit<SimpleAlertRule, 'id'>, subject: AlertSubject): RulePatch {
+  if (isEventSubject(subject)) return { subject, forMinutes: 0 };
   const hadLimit = ALERT_SUBJECTS[rule.subject].kind === 'value';
   const needsLimit = ALERT_SUBJECTS[subject].kind === 'value';
   return needsLimit && !hadLimit ? { subject, limit: STARTING_LIMITS[subject] } : { subject };
@@ -71,11 +76,19 @@ export function removeRule(draft: DraftRule[], key: string): DraftRule[] {
 /** Turn a simple rule into a custom query that does the same check, so an expert can start from it */
 export function toCustomQuery(draft: DraftRule[], key: string): DraftRule[] {
   return draft.map(rule => {
-    if (rule.key !== key || rule.kind !== 'simple') return rule;
+    if (rule.key !== key || !canBeCustomQuery(rule)) return rule;
     const { key: ruleKey, id, enabled, forMinutes, severity } = rule;
     const query = ruleQuery({ ...rule, id: id ?? '' }, MACHINE_PLACEHOLDER);
     return { key: ruleKey, id, kind: 'query', enabled, name: ruleName(rule), query, forMinutes, severity };
   });
+}
+
+/**
+ * True for a simple rule that is not an event. A custom query has no event label,
+ * so a "program ended" query would send an "OK" message after each program end.
+ */
+export function canBeCustomQuery(rule: DraftRule): rule is Extract<DraftRule, { kind: 'simple' }> {
+  return rule.kind === 'simple' && !isEventSubject(rule.subject);
 }
 
 /** How many rules are new, changed or removed since the last save */

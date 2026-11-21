@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { sendTestMessage, type ChannelTypeInfo, type NotificationChannel } from '../../api/notifications';
+import { sendTestMessage, type ChannelTypeInfo, type NotificationChannel, type NotificationMessage } from '../../api/notifications';
 import { ChannelForm } from './ChannelForm';
 
 vi.mock('../../api/notifications', async importOriginal => ({
@@ -22,13 +22,29 @@ const TYPES: ChannelTypeInfo[] = [
       { key: 'secret', label: 'Secret (optional)', kind: 'secret', required: false },
     ],
   },
+  {
+    id: 'ntfy', name: 'ntfy', fields: [
+      { key: 'topic', label: 'Topic', kind: 'text', required: true, generate: 'words' },
+      { key: 'url', label: 'Server (optional)', kind: 'url', required: false, advanced: true },
+      { key: 'token', label: 'Access token (optional)', kind: 'secret', required: false, advanced: true },
+    ],
+  },
+  {
+    id: 'telegram', name: 'Telegram', fields: [
+      { key: 'chatId', label: 'Chat ID', kind: 'text', required: true },
+      {
+        key: 'sound', label: 'Notification sound', kind: 'choice', required: false, default: 'normal', hint: 'Quiet still shows the message.',
+        options: [{ value: 'normal', label: 'Normal' }, { value: 'quiet', label: 'Quiet' }],
+      },
+    ],
+  },
 ];
 
 const MACHINES = [{ id: 'haas-vf2', name: 'Haas VF-2' }, { id: 'okuma', name: 'Okuma LB3000' }];
 
 const slack: NotificationChannel = {
   id: 'slack', type: 'webhook', name: 'Slack', settings: { url: 'https://hooks.slack.com/x' }, hasSecret: { secret: true },
-  minSeverity: 'warning', machineIds: null, enabled: true, createdAt: '2026-11-13T09:00:00.000Z',
+  minSeverity: 'warning', machineIds: null, ignorePatterns: [], enabled: true, createdAt: '2026-11-13T09:00:00.000Z',
 };
 
 function renderForm(props: Partial<Parameters<typeof ChannelForm>[0]> = {}) {
@@ -66,6 +82,112 @@ describe('ChannelForm', () => {
     expect(screen.getByText('Register the number for A2P 10DLC.')).toBeInTheDocument();
   });
 
+  it('keeps the browser from filling in the channel name, because it is not a person or an account', () => {
+    renderForm();
+
+    expect(screen.getByLabelText('Name')).toHaveAttribute('autocomplete', 'off');
+  });
+
+  describe('a field that Chatter can fill with random words', () => {
+    const pickNtfy = () => fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'ntfy' } });
+
+    it('fills the box with three random words when the admin clicks the button', () => {
+      renderForm();
+      pickNtfy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Make a random topic' }));
+
+      expect((screen.getByLabelText('Topic') as HTMLInputElement).value).toMatch(/^[a-z]+-[a-z]+-[a-z]+$/);
+    });
+
+    it('shows the value, so the admin can type it in the other app, and keeps the browser from filling it in', () => {
+      renderForm();
+      pickNtfy();
+
+      expect(screen.getByLabelText('Topic')).not.toHaveAttribute('type', 'password');
+      expect(screen.getByLabelText('Topic')).toHaveAttribute('autocomplete', 'off');
+    });
+
+    it('sends the random words when the admin saves', async () => {
+      const onSave = vi.fn().mockResolvedValue(true);
+      renderForm({ onSave });
+      pickNtfy();
+      type('Name', 'Shop phones');
+      fireEvent.click(screen.getByRole('button', { name: 'Make a random topic' }));
+      const topic = (screen.getByLabelText('Topic') as HTMLInputElement).value;
+
+      fireEvent.click(screen.getByRole('button', { name: 'Save channel' }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+      expect(onSave.mock.calls[0][0].values.topic).toBe(topic);
+    });
+
+    it('shows the saved topic when the admin opens a saved channel', () => {
+      renderForm({ channel: { ...slack, id: 'phones', type: 'ntfy', name: 'Phones', settings: { topic: 'maple-otter-lantern' }, hasSecret: {} } });
+
+      expect(screen.getByLabelText('Topic')).toHaveValue('maple-otter-lantern');
+    });
+
+    it('keeps each other secret hidden, with no button', () => {
+      renderForm();
+      pickNtfy();
+
+      expect(screen.getByLabelText('Access token (optional)')).toHaveAttribute('type', 'password');
+      expect(screen.getAllByRole('button', { name: /^Make a random/ })).toHaveLength(1);
+    });
+  });
+
+  describe('advanced fields', () => {
+    const advancedGroup = () => screen.getByText('Advanced').closest('details')!;
+    const ntfyChannel = (change: Partial<NotificationChannel>): NotificationChannel => ({
+      ...slack, id: 'phones', type: 'ntfy', name: 'Phones', settings: { topic: 'maple-otter-lantern' }, hasSecret: {}, ...change,
+    });
+
+    it('puts the advanced fields under a closed Advanced heading', () => {
+      renderForm();
+      fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'ntfy' } });
+
+      const group = advancedGroup();
+      expect(group).not.toHaveAttribute('open');
+      expect(group).toContainElement(screen.getByLabelText('Server (optional)'));
+      expect(group).toContainElement(screen.getByLabelText('Access token (optional)'));
+      expect(group).not.toContainElement(screen.getByLabelText('Topic'));
+    });
+
+    it('opens the Advanced heading when the admin clicks it', () => {
+      renderForm();
+      fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'ntfy' } });
+
+      fireEvent.click(screen.getByText('Advanced'));
+
+      expect(advancedGroup()).toHaveAttribute('open');
+    });
+
+    it('opens the Advanced heading for a saved channel with a value in an advanced field', () => {
+      renderForm({ channel: ntfyChannel({ settings: { topic: 'maple-otter-lantern', url: 'https://ntfy.shop.local' } }) });
+
+      expect(advancedGroup()).toHaveAttribute('open');
+    });
+
+    it('opens the Advanced heading for a saved channel with an advanced secret', () => {
+      renderForm({ channel: ntfyChannel({ hasSecret: { token: true } }) });
+
+      expect(advancedGroup()).toHaveAttribute('open');
+    });
+
+    it('keeps the Advanced heading closed for a saved channel with no advanced value', () => {
+      renderForm({ channel: ntfyChannel({ settings: { topic: 'maple-otter-lantern', url: '' } }) });
+
+      expect(advancedGroup()).not.toHaveAttribute('open');
+    });
+
+    it('shows no Advanced heading for a type with no advanced field', () => {
+      renderForm();
+
+      expect(screen.queryByText('Advanced')).not.toBeInTheDocument();
+    });
+  });
+
   it('saves a new channel with each phone number, and closes', async () => {
     const onSave = vi.fn().mockResolvedValue(true);
     const { onClose } = renderForm({ onSave });
@@ -77,7 +199,7 @@ describe('ChannelForm', () => {
 
     expect(onSave).toHaveBeenCalledWith({
       type: 'twilio-sms', name: 'Shop phones', values: { accountSid: 'AC1', authToken: 'token', to: ['+15559870001', '+15559870002'] },
-      minSeverity: 'warning', machineIds: null, enabled: true,
+      minSeverity: 'warning', machineIds: null, ignorePatterns: [], enabled: true,
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
@@ -114,6 +236,129 @@ describe('ChannelForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save channel' }));
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ machineIds: ['haas-vf2'], minSeverity: 'critical' }));
+  });
+
+  describe('a choice field', () => {
+    it('shows the options and starts on the default', () => {
+      renderForm();
+
+      type('Type', 'telegram');
+
+      const select = screen.getByLabelText('Notification sound');
+      expect(select).toHaveValue('normal');
+      expect(screen.getByRole('option', { name: 'Quiet' })).toBeInTheDocument();
+      expect(screen.getByText('Quiet still shows the message.')).toBeInTheDocument();
+    });
+
+    it('saves the option that the admin picks', () => {
+      const { onSave } = renderForm();
+      type('Type', 'telegram');
+      type('Name', 'Shop chat');
+      type('Chat ID', '-100123');
+
+      type('Notification sound', 'quiet');
+      fireEvent.click(screen.getByRole('button', { name: 'Save channel' }));
+
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ values: { chatId: '-100123', sound: 'quiet' } }));
+    });
+
+    it('starts on the default for a saved channel with no value', () => {
+      renderForm({ channel: { ...slack, type: 'telegram', settings: { chatId: '-100123' } } });
+
+      expect(screen.getByLabelText('Notification sound')).toHaveValue('normal');
+    });
+  });
+
+  describe('ignore patterns', () => {
+    function sent(
+      text: string, kind: NotificationMessage['kind'] = 'started', { alertId = 7, channelId = 'phones' } = {},
+    ): NotificationMessage {
+      return {
+        id: 1, channelId, alertId, kind, machineId: 'haas-vf2', severity: 'critical', text, status: 'sent',
+        attempts: 1, lastError: null, detail: null, createdAt: '2026-11-13T09:00:00.000Z', sentAt: '2026-11-13T09:00:00.000Z',
+      };
+    }
+
+    it('adds and removes pattern boxes, and saves only the filled patterns', () => {
+      const { onSave } = renderForm();
+      fillTwilio();
+
+      type('Ignore pattern 1', 'Door open');
+      fireEvent.click(screen.getByRole('button', { name: 'Add a pattern' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add a pattern' }));
+      type('Ignore pattern 2', 'Coolant');
+      type('Ignore pattern 3', 'Program 9*');
+      fireEvent.click(screen.getByRole('button', { name: 'Remove ignore pattern 2' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add a pattern' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Save channel' }));
+
+      expect(screen.getAllByLabelText(/^Ignore pattern \d$/)).toHaveLength(3);
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ ignorePatterns: ['Door open', 'Program 9*'] }));
+    });
+
+    it('starts with the saved patterns of a channel', () => {
+      renderForm({ channel: { ...slack, ignorePatterns: ['Door open', 'Coolant'] } });
+
+      expect(screen.getByLabelText('Ignore pattern 1')).toHaveValue('Door open');
+      expect(screen.getByLabelText('Ignore pattern 2')).toHaveValue('Coolant');
+    });
+
+    it('shows how many of the last alert messages each pattern matches', () => {
+      renderForm({
+        messages: [
+          sent('CRITICAL - Haas VF-2: Door open. Started 9:02 AM.'),
+          sent('OK - Haas VF-2: Door open ended at 9:04 AM.', 'ended'),
+          sent('WARNING - Okuma LB3000: Idle for 20 minutes. Started 9:10 AM.', 'started', { alertId: 8 }),
+          // A test is never ignored, so the preview does not count it
+          sent('Test from Chatter. Door open.', 'test'),
+        ],
+      });
+
+      type('Ignore pattern 1', 'door OPEN');
+      expect(screen.getByText('Matches 2 of the last 3 messages.')).toBeInTheDocument();
+
+      type('Ignore pattern 1', 'Haas*Started');
+      expect(screen.getByText('Matches 1 of the last 3 messages.')).toBeInTheDocument();
+    });
+
+    it('counts each alert message of a new channel one time, also when several channels got it', () => {
+      const doorOpen = 'CRITICAL - Haas VF-2: Door open. Started 9:02 AM.';
+      renderForm({
+        messages: [
+          sent(doorOpen, 'started', { channelId: 'phones' }),
+          sent(doorOpen, 'started', { channelId: 'slack' }),
+          sent('WARNING - Okuma LB3000: Idle for 20 minutes. Started 9:10 AM.', 'started', { alertId: 8, channelId: 'slack' }),
+        ],
+      });
+
+      type('Ignore pattern 1', 'Door open');
+
+      expect(screen.getByText('Matches 1 of the last 2 messages.')).toBeInTheDocument();
+    });
+
+    it('counts only the messages of the saved channel that the admin edits', () => {
+      renderForm({
+        channel: slack,
+        messages: [
+          sent('CRITICAL - Haas VF-2: Door open. Started 9:02 AM.', 'started', { channelId: 'phones' }),
+          sent('CRITICAL - Haas VF-2: Door open. Started 9:02 AM.', 'started', { channelId: 'slack' }),
+          sent('OK - Haas VF-2: Door open ended at 9:04 AM.', 'ended', { channelId: 'slack' }),
+          sent('WARNING - Okuma LB3000: Idle for 20 minutes. Started 9:10 AM.', 'started', { alertId: 8, channelId: 'phones' }),
+        ],
+      });
+
+      type('Ignore pattern 1', 'Door open');
+
+      expect(screen.getByText('Matches 2 of the last 2 messages.')).toBeInTheDocument();
+    });
+
+    it('tells why a pattern cannot be saved, in place of the count', () => {
+      renderForm({ messages: [sent('CRITICAL - Haas VF-2: Door open. Started 9:02 AM.')] });
+
+      type('Ignore pattern 1', '*');
+
+      expect(screen.getByText('This pattern matches each message. To stop all messages, turn the channel off.')).toBeInTheDocument();
+    });
   });
 
   it('keeps the form open and shows the error when the save fails', () => {

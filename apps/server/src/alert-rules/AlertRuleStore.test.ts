@@ -50,7 +50,7 @@ describe('AlertRuleStore', () => {
     store.addRules('m1', STARTER_RULES);
 
     expect(store.rulesOf('m1').map(rule => rule.kind === 'simple' ? rule.subject : rule.name))
-      .toEqual(['Slow spindle', 'not-connected', 'in-alarm', 'spindle-load']);
+      .toEqual(['Slow spindle', 'in-alarm', 'emergency-stop', 'program-ended']);
   });
 
   it('removes the rules of a removed machine only', () => {

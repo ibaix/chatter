@@ -1,0 +1,143 @@
+import { z } from 'zod';
+import { type ChannelDefinition, type OutgoingMessage, type SendResult, titleOf } from './ChannelType.js';
+import { type Answer, type JsonObject, postJson, serviceReason, statusResult } from './http.js';
+import { soundField, soundSetting } from './sound.js';
+import { HEADER_SAFE, hasNoLogin, isHttpAddress } from './webAddress.js';
+
+const PUBLIC_HOST = 'ntfy.sh';
+const PUBLIC_SERVER = `https://${PUBLIC_HOST}`;
+
+const BAD_TOPIC = 'Topic can have only letters, digits, - and _, up to 64 characters';
+const BAD_URL = 'Server must start with http:// or https://';
+const LOGIN_IN_URL = 'Remove the user name and password from the server address. Put an access token in Access token.';
+const TOPIC_IN_URL = 'Remove the topic from the server address. Put only the topic in Topic.';
+const BAD_TOKEN = 'Access token can have only plain letters, digits, and signs, with no spaces';
+
+/** The topic names that ntfy accepts */
+const TOPIC = /^[-_A-Za-z0-9]{1,64}$/;
+
+const ntfySettings = z.object({
+  topic: z.string({ error: BAD_TOPIC }).trim().regex(TOPIC, BAD_TOPIC),
+  url: z.string().trim()
+    .refine(text => text === '' || isHttpAddress(text), BAD_URL)
+    .refine(hasNoLogin, LOGIN_IN_URL)
+    .optional(),
+  token: z.string().trim().regex(HEADER_SAFE, BAD_TOKEN).optional(),
+  sound: soundSetting(['quiet', 'normal', 'high', 'urgent']),
+}).refine(({ topic, url }) => !url || !hasTopicPath(url, topic), { message: TOPIC_IN_URL, path: ['url'] });
+
+type NtfySettings = z.infer<typeof ntfySettings>;
+
+/**
+ * Sends each message as a push message to a topic of ntfy, on ntfy.sh or on a server of the shop.
+ * Chatter sends JSON, not headers, because a header cannot have a machine name with accents.
+ * Chatter shows the topic, so the admin can subscribe a new phone. On ntfy.sh, each person who knows the topic can read it,
+ * so the error texts never show it.
+ */
+export const ntfyChannel: ChannelDefinition<NtfySettings> = {
+  id: 'ntfy',
+  name: 'ntfy',
+  fields: [
+    {
+      key: 'topic', label: 'Topic', kind: 'text', required: true, mono: true, generate: 'words',
+      hint: 'Use a name that other people cannot guess, or click Make a random topic. On ntfy.sh, each person who knows the name can read the alerts.',
+    },
+    {
+      key: 'url', label: 'Server (optional)', kind: 'url', required: false, mono: true, advanced: true,
+      hint: `Only for a server of the shop, without the topic. Empty sends to ${PUBLIC_SERVER}.`,
+    },
+    {
+      key: 'token', label: 'Access token (optional)', kind: 'secret', required: false, mono: true, advanced: true,
+      hint: 'Only when the topic needs a login. Make a token in ntfy under Account > Access tokens.',
+    },
+    soundField(
+      ['quiet', 'normal', 'high', 'urgent'],
+      'For each message of this channel. Quiet shows the message with no sound and no vibration. High and Urgent vibrate longer.',
+    ),
+  ],
+  note: 'Install the ntfy app on each phone, and subscribe to the topic in the ntfy app before you send a test.',
+  settings: ntfySettings,
+  send(settings, message, context) {
+    const request = {
+      url: serverOf(settings.url),
+      headers: settings.token ? { authorization: `Bearer ${settings.token}` } : undefined,
+      body: ntfyBody(settings, message),
+      readJson: true,
+    };
+    return postJson(context, 'the ntfy server', request, answer => resultOf(answer, settings));
+  },
+};
+
+/** The JSON publish of ntfy: https://docs.ntfy.sh/publish/#publish-as-json */
+function ntfyBody({ topic, sound }: NtfySettings, message: OutgoingMessage) {
+  return {
+    topic,
+    title: titleOf(message),
+    message: message.text,
+    priority: PRIORITIES[sound],
+    tags: [tagOf(message)],
+    ...(message.link ? { click: message.link } : {}),
+  };
+}
+
+/**
+ * The ntfy priority of each message of the channel: https://docs.ntfy.sh/publish/#message-priority
+ * 2 shows the message with no sound and no vibration, 3 is the default, 4 vibrates longer, and 5 vibrates longest.
+ */
+const PRIORITIES: Record<NtfySettings['sound'], number> = { quiet: 2, normal: 3, high: 4, urgent: 5 };
+
+/** ntfy shows these tags as emoji in front of the title */
+function tagOf({ kind, severity }: OutgoingMessage): string {
+  if (kind === 'ended') return 'white_check_mark';
+  if (kind === 'test') return 'bell';
+  return severity === 'critical' ? 'rotating_light' : 'warning';
+}
+
+/** The address of the server as the admin typed it. A proxy under /ntfy/ answers a redirect for /ntfy, so Chatter does not remove a slash. */
+function serverOf(url: string | undefined): string {
+  return new URL(url || PUBLIC_SERVER).href;
+}
+
+/**
+ * A pasted topic address, for example https://ntfy.sh/my-topic, would send the JSON as the text of the message.
+ * ntfy.sh takes the JSON only at its root, so each path there is a topic. A server of the shop can be under a path,
+ * so there only a path that ends with the topic is refused. A server under /alerts with the topic "alerts" is refused too.
+ */
+function hasTopicPath(url: string, topic: string): boolean {
+  if (!URL.canParse(url)) return false;
+  const { hostname, pathname } = new URL(url);
+  if (hostname === PUBLIC_HOST) return pathname !== '/';
+  return pathname.replace(/\/$/, '').endsWith(`/${topic}`);
+}
+
+function resultOf({ status, json }: Answer, settings: NtfySettings): SendResult {
+  return statusResult(status, {
+    answered: `ntfy answered ${status}`,
+    sent: 'ntfy sent it',
+    refused: () => refusalOf(status, json, settings),
+  });
+}
+
+/** `json` is the error answer of ntfy, for example {"code":40009,"http":400,"error":"invalid request"} */
+function refusalOf(status: number, json: JsonObject | undefined, { topic, token }: NtfySettings): string {
+  if (status === 401 || status === 403) return 'ntfy refused the access. Check the access token, and that it can write to the topic.';
+  if (status === 413) return 'ntfy refused the message because it is too long.';
+  const reason = json?.error;
+  if (status === 400 && typeof reason === 'string' && reason) {
+    const secrets = [[wholeWord(topic), '(topic)'], ...(token ? [[token, '(access token)'] as const] : [])] as const;
+    return `ntfy refused the message: ${serviceReason(reason, secrets)}.`;
+  }
+  return `ntfy answered ${status}. Check the server address.`;
+}
+
+/**
+ * The topic as a whole word: a topic can be short, for example "a", and "invalid" must stay a word.
+ * A topic has only letters, digits, - and _, so a letter, a digit, - or _ next to it makes another word.
+ */
+function wholeWord(text: string): RegExp {
+  return new RegExp(`(?<![\\w-])${escapedForRegExp(text)}(?![\\w-])`, 'g');
+}
+
+function escapedForRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
+}

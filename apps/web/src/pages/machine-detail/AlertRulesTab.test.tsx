@@ -60,6 +60,25 @@ describe('AlertRulesTab', () => {
     expect(limitBox()).toHaveValue(90);
   });
 
+  it('puts a space between "min," and "raise a"', async () => {
+    await renderTab();
+
+    const rows = within(screen.getByRole('list', { name: 'Alert rules' })).getAllByRole('listitem');
+    for (const row of rows) expect(row.textContent).toContain('min, raise a');
+  });
+
+  it('shows "program ended" as an event, with no limit and no minutes', async () => {
+    await renderTab([{ id: 'r3', kind: 'simple', enabled: true, subject: 'program-ended', check: 'above', limit: 0, forMinutes: 0, severity: 'warning' }]);
+
+    const [row] = within(screen.getByRole('list', { name: 'Alert rules' })).getAllByRole('listitem');
+    expect(row).toHaveTextContent('When this machine reports');
+    expect(row).toHaveTextContent('program ended');
+    expect(row).toHaveTextContent(/When this machine reports.*program ended,\s*raise a.*warning\./);
+    expect(row).not.toHaveTextContent(/\bmin\b/);
+    expect(screen.queryByRole('spinbutton', { name: 'Limit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('spinbutton', { name: 'Minutes' })).not.toBeInTheDocument();
+  });
+
   it('links to the alerts docs', async () => {
     await renderTab();
 
@@ -147,6 +166,16 @@ describe('AlertRulesTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Change to a custom query' }));
 
     expect(screen.getByRole('textbox', { name: 'Query' })).toHaveValue('chatter_spindle_load{machine="$machine"} > 90');
+  });
+
+  it('shows the query of an event rule, but cannot change it to a custom query', async () => {
+    await renderTab([{ ...HIGH_LOAD, subject: 'program-ended', limit: 0, forMinutes: 0 }]);
+
+    fireEvent.click(screen.getByText('Expert: show the query'));
+
+    expect(screen.getByText(/^chatter_program_ended\{machine="\$machine"\} == 1 and /)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Change to a custom query' })).not.toBeInTheDocument();
+    expect(screen.getByText(/An event rule cannot change to a custom query/)).toBeInTheDocument();
   });
 
   it('copies the saved rules to the chosen machines', async () => {

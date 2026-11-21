@@ -8,7 +8,7 @@ import type { OutgoingMessage } from './channels/ChannelType.js';
 /** A channel gets at most this many messages in SEND_LIMIT_WINDOW_MS */
 export const SEND_LIMIT = 10;
 export const SEND_LIMIT_WINDOW_MS = 10 * 60_000;
-/** The message list keeps at most this many sent, failed and grouped messages */
+/** The message list keeps at most this many sent, failed, grouped and ignored messages */
 export const MAX_KEPT_MESSAGES = 1000;
 
 const KEEP_MS = NOTIFICATION_MESSAGE_DAYS * 24 * 60 * 60_000;
@@ -18,6 +18,11 @@ export interface QueuedMessage {
   channelId: string;
   alertId: number | null;
   message: OutgoingMessage;
+  /**
+   * True for the message of an event alert, such as "program ended". It does not count in the limit, it never goes
+   * into a "more" message, and it goes also when the channel is at its limit. So the alarms keep the whole limit.
+   */
+  event?: boolean;
 }
 
 /** A message that the sender must send now */
@@ -53,6 +58,8 @@ interface MessageRow {
   machine_id: string | null;
   payload: string;
   status: MessageStatus;
+  /** 1 for the message of an event alert */
+  is_event: number;
   attempts: number;
   last_error: string | null;
   detail: string | null;
@@ -90,6 +97,11 @@ export class Outbox implements MachineRemovalListener {
       );
       CREATE INDEX IF NOT EXISTS notification_messages_channel ON notification_messages (channel_id, status);
     `);
+    // A table of an older Chatter has no event column
+    const columns = db.pragma('table_info(notification_messages)') as { name: string }[];
+    if (!columns.some(column => column.name === 'is_event')) {
+      db.exec('ALTER TABLE notification_messages ADD COLUMN is_event INTEGER NOT NULL DEFAULT 0');
+    }
     // Chatter stopped while it sent these messages. It does not know if they went, so it sends them again.
     db.exec("UPDATE notification_messages SET sending = 0 WHERE sending = 1");
   }
@@ -100,25 +112,40 @@ export class Outbox implements MachineRemovalListener {
   }
 
   /**
-   * When the start message of the alert still waits, it becomes `combined`, so the channel gets one message.
-   * Returns false when the start message went, or is being sent. Then queue the end message.
+   * A message that matched an ignore pattern of the channel. It stays in the list with the reason, as a finished message:
+   * the sender never takes it, it does not count in the limit, and it never goes into a "more" message.
    */
-  combineWithWaitingStart(channelId: string, alertId: number, combined: OutgoingMessage): boolean {
-    return this.db.prepare(`
-      UPDATE notification_messages SET kind = ?, payload = ?
-      WHERE channel_id = ? AND alert_id = ? AND kind = 'started' AND status = 'waiting' AND sending = 0
-    `).run(combined.kind, JSON.stringify(combined), channelId, alertId).changes > 0;
+  keepIgnored(item: QueuedMessage, detail: string, now: number): void {
+    this.insert(item, null, now, { status: 'ignored', detail });
   }
 
   /**
-   * True when the channel got the start message of the alert, in any status. A channel without it gets no end message,
-   * for example a channel that the admin added while the alert was on. The clean-up can delete the start message of an
-   * alert that is still on (after 30 days, or over MAX_KEPT_MESSAGES), so that alert gets no end message.
+   * When the start message of the alert still waits, it becomes `combined`, so the channel gets one message.
+   * With `ignoredDetail`, the combined message is ignored, with that reason, and the channel gets no message.
+   * Returns false when the start message went, or is being sent. Then queue the end message.
    */
-  hasStartMessage(channelId: string, alertId: number): boolean {
+  combineWithWaitingStart(channelId: string, alertId: number, combined: OutgoingMessage, ignoredDetail?: string): boolean {
     return this.db.prepare(`
-      SELECT 1 FROM notification_messages WHERE channel_id = ? AND alert_id = ? AND kind = 'started'
-    `).get(channelId, alertId) !== undefined;
+      UPDATE notification_messages SET kind = @kind, payload = @payload,
+        status = CASE WHEN @ignoredDetail IS NULL THEN status ELSE 'ignored' END,
+        detail = COALESCE(@ignoredDetail, detail)
+      WHERE channel_id = @channelId AND alert_id = @alertId AND kind = 'started' AND status = 'waiting' AND sending = 0
+    `).run({
+      kind: combined.kind, payload: JSON.stringify(combined), ignoredDetail: ignoredDetail ?? null, channelId, alertId,
+    }).changes > 0;
+  }
+
+  /**
+   * The status of the start message of the alert on the channel, or null when the channel did not get it.
+   * A channel without it gets no end message, for example a channel that the admin added while the alert was on.
+   * The clean-up keeps the start message of an alert that is still on, but only for 30 days.
+   * So an alert that is on for longer gets no end message.
+   */
+  startStatus(channelId: string, alertId: number): MessageStatus | null {
+    const row = this.db.prepare(`
+      SELECT status FROM notification_messages WHERE channel_id = ? AND alert_id = ? AND kind = 'started' ORDER BY id DESC LIMIT 1
+    `).get(channelId, alertId) as { status: MessageStatus } | undefined;
+    return row?.status ?? null;
   }
 
   /** A test goes at once, not through the outbox. Its result goes in the message list, so the admin sees it there too. */
@@ -162,13 +189,22 @@ export class Outbox implements MachineRemovalListener {
     `).run(error, id);
   }
 
-  /** Deletes the finished messages that are older than 30 days, and then the oldest over MAX_KEPT_MESSAGES */
+  /**
+   * Deletes the finished messages that are older than 30 days, and then the oldest over MAX_KEPT_MESSAGES.
+   * The second step keeps the start message of an alert that is still on (no end message on the channel yet),
+   * because AlertNotifier needs it to send the end. An event alert has no end, so its start is not kept.
+   */
   cleanUp(now: number): void {
     this.db.transaction(() => {
       this.db.prepare("DELETE FROM notification_messages WHERE status != 'waiting' AND created_at < ?").run(now - KEEP_MS);
       this.db.prepare(`
-        DELETE FROM notification_messages WHERE id IN (
+        DELETE FROM notification_messages AS message WHERE id IN (
           SELECT id FROM notification_messages WHERE status != 'waiting' ORDER BY id DESC LIMIT -1 OFFSET ?
+        ) AND NOT (
+          message.kind = 'started' AND message.alert_id IS NOT NULL AND message.is_event = 0 AND NOT EXISTS (
+            SELECT 1 FROM notification_messages AS ended
+            WHERE ended.channel_id = message.channel_id AND ended.alert_id = message.alert_id AND ended.kind = 'ended'
+          )
         )
       `).run(MAX_KEPT_MESSAGES);
     })();
@@ -193,12 +229,16 @@ export class Outbox implements MachineRemovalListener {
     return rows.map(toNotificationMessage);
   }
 
-  /** The first waiting message of each channel that has no message being sent, when its time came */
+  /**
+   * The first waiting message of each channel that has no message being sent, when its time came.
+   * An event message can go past the head (see headOrMoreMessage), so the check is for each message of the channel.
+   */
   private dueHeads(now: number): MessageRow[] {
     return this.db.prepare(`
       SELECT * FROM notification_messages
       WHERE id IN (SELECT MIN(id) FROM notification_messages WHERE status = 'waiting' GROUP BY channel_id)
-        AND sending = 0 AND next_try_at <= ?
+        AND next_try_at <= ?
+        AND channel_id NOT IN (SELECT channel_id FROM notification_messages WHERE sending = 1)
       ORDER BY id
     `).all(now) as MessageRow[];
   }
@@ -206,30 +246,42 @@ export class Outbox implements MachineRemovalListener {
   /**
    * The head message, or nothing when the channel is at its limit. When the channel has room for only one more
    * message and more alert messages wait, they all become "grouped", and a new "more" message goes in their place.
+   * An event message goes at once, and at the limit the first event message that waits goes past the held messages.
    */
   private headOrMoreMessage(head: MessageRow, now: number): OutboxEntry | null {
+    if (head.is_event) return toEntry(head);
     const room = SEND_LIMIT - this.sentInWindow(head.channel_id, now);
-    if (room <= 0) return null;
+    if (room <= 0) return this.firstDueEvent(head.channel_id, now);
     const groupable = this.groupable(head.channel_id);
     if (room === 1 && groupable.messages > 1) return this.groupWaiting(head.channel_id, groupable, now);
     return toEntry(head);
   }
 
+  private firstDueEvent(channelId: string, now: number): OutboxEntry | null {
+    const row = this.db.prepare(`
+      SELECT * FROM notification_messages
+      WHERE channel_id = ? AND status = 'waiting' AND is_event = 1 AND sending = 0 AND next_try_at <= ?
+      ORDER BY id LIMIT 1
+    `).get(channelId, now) as MessageRow | undefined;
+    return row ? toEntry(row) : null;
+  }
+
+  /** The event messages do not count */
   private sentInWindow(channelId: string, now: number): number {
     return (this.db.prepare(`
-      SELECT COUNT(*) AS count FROM notification_messages WHERE channel_id = ? AND status = 'sent' AND sent_at > ?
+      SELECT COUNT(*) AS count FROM notification_messages WHERE channel_id = ? AND status = 'sent' AND is_event = 0 AND sent_at > ?
     `).get(channelId, now - SEND_LIMIT_WINDOW_MS) as { count: number }).count;
   }
 
   /**
-   * The waiting messages that can go into a "more" message: all but the test messages.
+   * The waiting messages that can go into a "more" message: all but the test messages and the event messages.
    * `alerts` counts the start and the end of one alert one time, and adds the alerts of a "more" message that waits.
    */
   private groupable(channelId: string): GroupableCount {
     return this.db.prepare(`
       SELECT COUNT(*) AS messages,
         COUNT(DISTINCT alert_id) + COALESCE(SUM(alert_count), 0) AS alerts
-      FROM notification_messages WHERE channel_id = ? AND status = 'waiting' AND kind != 'test'
+      FROM notification_messages WHERE channel_id = ? AND status = 'waiting' AND kind != 'test' AND is_event = 0
     `).get(channelId) as GroupableCount;
   }
 
@@ -237,19 +289,31 @@ export class Outbox implements MachineRemovalListener {
     const others = messages - 1;
     const detail = `Grouped with ${others} more ${others === 1 ? 'message' : 'messages'}, because a channel gets at most ${SEND_LIMIT} messages in 10 minutes.`;
     this.db.prepare(`
-      UPDATE notification_messages SET status = 'grouped', detail = ? WHERE channel_id = ? AND status = 'waiting' AND kind != 'test'
+      UPDATE notification_messages SET status = 'grouped', detail = ?
+      WHERE channel_id = ? AND status = 'waiting' AND kind != 'test' AND is_event = 0
     `).run(detail, channelId);
     const message = this.moreAlerts(alerts);
     const id = this.insert({ channelId, alertId: null, message }, alerts, now);
     return { id, channelId, message, attempts: 0, createdAt: now };
   }
 
-  /** `alertCount` is the number of alerts in a "more" message, and null for each other message */
-  private insert({ channelId, alertId, message }: QueuedMessage, alertCount: number | null, now: number): number {
+  /**
+   * `alertCount` is the number of alerts in a "more" message, and null for each other message.
+   * A message is "waiting", unless `finished` gives another status and its detail.
+   */
+  private insert(
+    { channelId, alertId, message, event }: QueuedMessage, alertCount: number | null, now: number,
+    finished: { status: MessageStatus; detail: string } | null = null,
+  ): number {
     return Number(this.db.prepare(`
-      INSERT INTO notification_messages (channel_id, alert_id, kind, machine_id, payload, alert_count, status, next_try_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'waiting', ?, ?)
-    `).run(channelId, alertId, message.kind, message.machine?.id ?? null, JSON.stringify(message), alertCount, now, now).lastInsertRowid);
+      INSERT INTO notification_messages (
+        channel_id, alert_id, kind, machine_id, payload, alert_count, is_event, status, detail, next_try_at, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      channelId, alertId, message.kind, message.machine?.id ?? null, JSON.stringify(message), alertCount, event ? 1 : 0,
+      finished?.status ?? 'waiting', finished?.detail ?? null, now, now,
+    ).lastInsertRowid);
   }
 }
 

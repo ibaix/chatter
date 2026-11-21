@@ -3,12 +3,16 @@ import { useState } from 'react';
 import type { NotificationChannel, NotificationMessage } from '../../api/notifications';
 import { Field, SelectInput } from '../../components/ui/fields';
 import { Panel } from '../../components/ui/Panel';
+import { ShowMoreFooter } from '../../components/ui/ShowMoreFooter';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
+import { useShownItems } from '../../hooks/useShownItems';
 import { formatDateTime } from '../../utils/formatters';
 import { MessageResult } from './MessageResult';
 import { KIND_LABELS } from './notificationLabels';
 
 const ALL_CHANNELS = '';
+/** The list can have up to 1000 messages, so it shows this many at first, and this many more for each click */
+export const MESSAGES_PAGE_SIZE = 10;
 const NO_CHANNEL_NAME = 'Deleted channel';
 
 interface MessagesPanelProps {
@@ -20,7 +24,8 @@ interface MessagesPanelProps {
 /** Each message that Chatter sent or tried to send in the last 30 days, and its result */
 export function MessagesPanel({ channels, messages }: MessagesPanelProps) {
   const [channelId, setChannelId] = useState(ALL_CHANNELS);
-  const shown = channelId === ALL_CHANNELS ? messages : messages.filter(message => message.channelId === channelId);
+  const matching = channelId === ALL_CHANNELS ? messages : messages.filter(message => message.channelId === channelId);
+  const { shown, total, showMore } = useShownItems(matching, MESSAGES_PAGE_SIZE, channelId);
   const channelNameOf = (id: string) => channels.find(channel => channel.id === id)?.name ?? NO_CHANNEL_NAME;
 
   return (
@@ -48,6 +53,7 @@ export function MessagesPanel({ channels, messages }: MessagesPanelProps) {
               ))}
             </tbody>
           </table>
+          <ShowMoreFooter shownCount={shown.length} total={total} noun="messages" onShowMore={showMore} />
         </div>
       )}
     </Panel>

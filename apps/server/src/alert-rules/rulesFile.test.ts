@@ -57,6 +57,25 @@ describe('rulesFileText', () => {
     ]);
   });
 
+  it('marks an event rule with the event label, and fires it at the first true check', () => {
+    const programEnded: AlertRule = { ...highLoad, id: 'r4', subject: 'program-ended', limit: 0, forMinutes: 5 };
+
+    const [rule] = parse(rulesFileText(new Map([['haas_1', [programEnded]]]))).groups[0].rules;
+
+    expect(rule).toMatchObject({
+      alert: 'Program ended',
+      for: '0m',
+      labels: { machine: 'haas_1', severity: 'warning', rule_id: 'r4', event: 'true' },
+      annotations: { summary: 'Program ended' },
+    });
+    expect(rule.expr).toBe(
+      'chatter_program_ended{machine="haas_1"} == 1'
+      + ' and on(machine) max_over_time(chatter_running{machine="haas_1"}[1m]) == 1'
+      + ' unless on(machine) max_over_time(chatter_alarm{machine="haas_1"}[1m]) == 1'
+      + ' unless on(machine) max_over_time(chatter_emergency{machine="haas_1"}[1m]) == 1',
+    );
+  });
+
   it('leaves out rules that are off, and machines with no rule on', () => {
     const file = parse(rulesFileText(new Map([['haas_1', [{ ...highLoad, enabled: false }]]])));
     expect(file.groups).toEqual([]);

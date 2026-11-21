@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import {
-  sendTestMessage, type ChannelInput, type ChannelTestResult, type ChannelTypeInfo, type NotificationChannel,
+  sendTestMessage, type ChannelInput, type ChannelTestResult, type ChannelTypeInfo, type NotificationChannel, type NotificationMessage,
 } from '../../api/notifications';
 import { Button } from '../../components/ui/Button';
 import { CloseButton } from '../../components/ui/CloseButton';
@@ -17,6 +17,8 @@ import type { MachineName } from './notificationLabels';
 interface ChannelFormProps {
   types: ChannelTypeInfo[];
   machines: MachineName[];
+  /** The messages of the last 30 days, for the preview of the ignore patterns */
+  messages?: NotificationMessage[];
   /** The saved channel to change. Without it, the form adds a channel. */
   channel?: NotificationChannel;
   /** The server's reason when the last save failed */
@@ -32,7 +34,7 @@ interface ChannelFormProps {
 }
 
 /** The side panel to add or change a channel. Its inputs come from the fields of the channel type. */
-export function ChannelForm({ types, machines, channel, error, isSaving, onSave, onDelete, onTested, onClose }: ChannelFormProps) {
+export function ChannelForm({ types, machines, messages = [], channel, error, isSaving, onSave, onDelete, onTested, onClose }: ChannelFormProps) {
   const typeOf = (id: string) => types.find(type => type.id === id);
   const [form, setForm] = useState<ChannelFormState>(() => (channel ? editChannelForm(channel, typeOf(channel.type)) : newChannelForm(types[0])));
   const { isClosing, close } = useSlideOut(onClose);
@@ -72,11 +74,11 @@ export function ChannelForm({ types, machines, channel, error, isSaving, onSave,
           </Field>
           {!type && <Notice tone="error" title="This version of Chatter does not know this channel type">You can only delete the channel.</Notice>}
           <Field id="channel-name" label="Name">
-            <TextInput id="channel-name" value={form.name} placeholder="Shop phones" onChange={event => setForm({ ...form, name: event.target.value })} />
+            <TextInput id="channel-name" value={form.name} placeholder="Shop phones" autoComplete="off" onChange={event => setForm({ ...form, name: event.target.value })} />
           </Field>
           {type && <ChannelFields type={type} form={form} hasSecret={channel?.hasSecret ?? {}} onChange={setForm} />}
           {type?.note && <Notice tone="info" title={`About ${type.name}`}>{type.note}</Notice>}
-          <AlertChoiceFields form={form} machines={machines} onChange={setForm} />
+          <AlertChoiceFields form={form} machines={machines} messages={messages} channelId={channel?.id} onChange={setForm} />
         </div>
         <div className="flex flex-col gap-3 border-t border-zinc-800 px-5 py-4">
           {error && <Notice tone="error" title={error} />}

@@ -7,22 +7,24 @@ Each machine has its own rules. You set them in the **Alert rules** tab of the m
 
 ## The starter rules
 
-Each machine starts with 3 rules:
+Each new machine starts with 3 rules:
 
 | Rule | Level |
 | --- | --- |
-| The machine is not connected for 10 minutes | warning |
-| The machine is in alarm for 5 minutes | critical alert |
-| The spindle load is above 90% for 1 minute | warning |
+| The machine is in alarm for 0 minutes | critical alert |
+| The machine is in emergency stop for 0 minutes | critical alert |
+| The program of the machine ended. See [Program ended](#program-ended). | warning |
 
+0 minutes means that the alert fires at once.
 You can change, turn off, or remove each of them.
+A machine that you added before keeps its rules. Chatter does not change them.
 
 ## Open the rules
 
 1. On the **Machines** page, click the machine.
 2. Click the **Alert rules** tab. The number next to the name is how many rules the machine has.
 
-![The Alert rules tab: 3 starter rules as sentences, and a custom query](../images/chatter-alert-rules-tab.png)
+![The Alert rules tab: rules as sentences, and a custom query](../images/chatter-alert-rules-tab.png)
 
 Each user can see the rules. Only an **Admin** can change them.
 
@@ -40,12 +42,35 @@ Each rule is a sentence. The words with a box around them are the parts that you
 A rule can check these values:
 - **spindle speed**, **spindle load** and **part count**: these need a limit, and **above** or **below**.
 - **not connected**, **in alarm** and **emergency stop**: these are states. They have no limit.
+- **program ended**: this is an event. It has no limit and no minutes. See [Program ended](#program-ended).
 
 **0** minutes means that the alert fires at the first check that is true.
 The level is **warning** (a yellow dot) or **critical alert** (a red dot).
 
 When you change something, a bar shows how many rules changed. Click **Save changes** to keep the changes, or **Undo changes** to go back to the saved rules.
 Chatter uses the new rules within 30 seconds.
+
+## Program ended
+
+A **program ended** rule reads: "When this machine reports **program ended**, raise a **warning**."
+The alert fires one time when the machine stops at the end of a program.
+
+The alert fires only when all of these are true:
+- The control says that the program ended. A FANUC control shows **RESET**. The other controls show **READY** or **PROGRAM_COMPLETED**. **STOPPED** does not fire the alert: a Haas shows it for an alarm, and an MTConnect control for a stop by the operator.
+- The program ran in the last minute.
+- The machine had no alarm and no emergency stop in the last minute.
+
+A feed hold, an M00 or M01 stop, a single block stop, an alarm, or an emergency stop does not fire the alert.
+
+The alert stops by itself after about 1 minute. Chatter sends only the start message to the channels. It sends no "OK" message when the alert stops.
+The **Alerts** panel shows the alert as a past alert.
+
+Some limits:
+- When an operator pushes **RESET** while a program runs, Chatter cannot tell this from a program end. The alert fires.
+- A machine that does not tell if a program runs never fires this alert. For example, a Haas needs its query port (Setting 143).
+- vmalert checks the rules every 15 seconds. When the next program starts less than 15 seconds after the end, the alert can miss that end.
+- Some controls show **READY** for a short time while a program runs. If a check sees this, the alert fires, and it can fire again for the same program.
+- A **program ended** rule cannot change to a custom query. A custom query does not have the event label, so Chatter would send an "OK" message after each program end.
 
 ## Add a rule
 
@@ -58,7 +83,7 @@ Chatter uses the new rules within 30 seconds.
 ![The + Add rule menu: Simple rule and Custom query](../images/chatter-alert-add-rule.png)
 
 To see the query that a simple rule uses, click **Expert: show the query** under the rule.
-To change that query, click **Change to a custom query**. The rule then becomes a custom query that does the same check.
+To change that query, click **Change to a custom query**. The rule then becomes a custom query that does the same check. A **program ended** rule does not have this button. See [Program ended](#program-ended).
 
 ## Copy rules to other machines
 
@@ -75,6 +100,9 @@ Copy uses the saved rules. If you changed rules, click **Save changes** first.
 ## What Chatter shows
 
 The **Alerts** panel shows the alerts of the last 7 days. The alerts that fire now come first, with **Firing now**.
+The panel always shows all the alerts that fire now.
+It shows the newest 10 past alerts. To see 10 more, click **Show more** at the bottom of the list.
+While the page is open, Chatter loads the alerts again every 30 seconds.
 
 ![The Alerts panel: an alert that fires now](../images/chatter-alert-firing.png)
 

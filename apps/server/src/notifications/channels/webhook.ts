@@ -1,14 +1,11 @@
 import { z } from 'zod';
 import type { ChannelDefinition, OutgoingMessage, SendResult } from './ChannelType.js';
-import { networkFailure } from './networkFailure.js';
-import { hasNoLogin, isHttpAddress, REDIRECTS } from './webAddress.js';
+import { postJson, statusResult } from './http.js';
+import { HEADER_SAFE, hasNoLogin, isHttpAddress } from './webAddress.js';
 
 const BAD_URL = 'Web address must start with http:// or https://';
 const LOGIN_IN_URL = 'Remove the user name and password from the web address. Put a password in Secret.';
 const BAD_SECRET = 'Secret can have only plain letters, digits, and signs, with no spaces';
-
-/** fetch refuses a header value with other characters */
-const HEADER_SAFE = /^[\x21-\x7e]*$/;
 
 const webhookSettings = z.object({
   url: z.string({ error: BAD_URL }).trim()
@@ -32,25 +29,14 @@ export const webhookChannel: ChannelDefinition<WebhookSettings> = {
       hint: 'For Slack, make an incoming webhook in Slack and paste its address here.',
     },
     {
-      key: 'secret', label: 'Secret (optional)', kind: 'secret', required: false, mono: true,
+      key: 'secret', label: 'Secret (optional)', kind: 'secret', required: false, mono: true, advanced: true,
       hint: 'Chatter sends it in the Authorization header, so the other app knows the message is from Chatter.',
     },
   ],
   settings: webhookSettings,
-  async send(settings, message, { fetch, signal }) {
-    const headers: Record<string, string> = { 'content-type': 'application/json' };
-    if (settings.secret) headers.authorization = `Bearer ${settings.secret}`;
-    try {
-      // A redirect would change the POST to a GET, so Chatter does not follow it
-      const response = await fetch(settings.url, {
-        method: 'POST', headers, body: JSON.stringify(webhookBody(message)), redirect: 'manual', signal,
-      });
-      // Chatter does not read the answer. A failure to close it must not send the message again.
-      response.body?.cancel().catch(() => {});
-      return resultOf(response.status);
-    } catch (error) {
-      return networkFailure(error, 'the address');
-    }
+  send(settings, message, context) {
+    const headers = settings.secret ? { authorization: `Bearer ${settings.secret}` } : undefined;
+    return postJson(context, 'the address', { url: settings.url, headers, body: webhookBody(message) }, ({ status }) => resultOf(status));
   },
 };
 
@@ -70,13 +56,8 @@ function webhookBody(message: OutgoingMessage) {
 
 function resultOf(status: number): SendResult {
   const answered = `The address answered ${status}`;
-  if (status >= 200 && status < 300) return { ok: true, detail: answered };
-  if (REDIRECTS.has(status)) {
-    return { ok: false, retry: false, error: `${answered} and points to another address. Use the new address.` };
-  }
-  if (status === 408 || status === 429 || status >= 500) {
-    return { ok: false, retry: true, error: `${answered}. Chatter tries again later.` };
-  }
-  if (status === 401 || status === 403) return { ok: false, retry: false, error: `${answered}. Check the secret.` };
-  return { ok: false, retry: false, error: `${answered}. Check the web address.` };
+  return statusResult(status, {
+    answered,
+    refused: () => `${answered}. ${status === 401 || status === 403 ? 'Check the secret.' : 'Check the web address.'}`,
+  });
 }

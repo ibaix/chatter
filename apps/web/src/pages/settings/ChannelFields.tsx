@@ -1,9 +1,11 @@
 import type { ChannelField } from '@local-chatter/shared';
+import { useState, type ReactNode } from 'react';
 import type { ChannelTypeInfo } from '../../api/notifications';
 import { Button } from '../../components/ui/Button';
-import { Field, TextInput } from '../../components/ui/fields';
-import { CloseIcon, PlusIcon } from '../../components/ui/icons';
+import { Field, SelectInput, TextInput } from '../../components/ui/fields';
 import type { ChannelFormState } from './channelFormState';
+import { randomWords } from './randomWords';
+import { TextList } from './TextList';
 
 const SAVED_SECRET_PLACEHOLDER = 'Saved. Leave it empty to keep it.';
 
@@ -22,13 +24,13 @@ export function ChannelFields({ type, form, hasSecret, onChange }: ChannelFields
     ...form, clearSecrets: clear ? [...form.clearSecrets, key] : form.clearSecrets.filter(entry => entry !== key),
   });
 
-  return (
-    <>
-      {type.fields.map(field => {
+  const fieldOf = (field: ChannelField) => {
         const value = form.values[field.key];
         switch (field.kind) {
           case 'phone-list':
             return <PhoneListField key={field.key} field={field} phones={asList(value)} onChange={phones => setValue(field.key, phones)} />;
+          case 'choice':
+            return <ChoiceField key={field.key} field={field} value={asText(value)} onChange={text => setValue(field.key, text)} />;
           case 'secret':
             return (
               <SecretField
@@ -44,9 +46,42 @@ export function ChannelFields({ type, form, hasSecret, onChange }: ChannelFields
           default:
             return <TextField key={field.key} field={field} value={asText(value)} onChange={text => setValue(field.key, text)} />;
         }
-      })}
+  };
+
+  const basic = type.fields.filter(field => !field.advanced);
+  const advanced = type.fields.filter(field => field.advanced);
+  // A saved value in an advanced field opens the heading, so the admin sees it
+  const hasAdvancedValue = advanced.some(field => hasSecret[field.key] === true || asText(form.values[field.key]).trim() !== '');
+  return (
+    <>
+      {basic.map(fieldOf)}
+      {advanced.length > 0 && (
+        // A new type has other advanced fields, so the heading starts again
+        <AdvancedGroup key={type.id} startOpen={hasAdvancedValue}>{advanced.map(fieldOf)}</AdvancedGroup>
+      )}
     </>
   );
+}
+
+/** The fields that most admins leave empty, under a heading that opens and closes */
+function AdvancedGroup({ startOpen, children }: { startOpen: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(startOpen);
+  return (
+    <details open={open} className="flex flex-col gap-4">
+      <summary
+        className="cursor-pointer select-none text-xs font-semibold text-zinc-300"
+        onClick={event => { event.preventDefault(); setOpen(!open); }}
+      >
+        Advanced
+      </summary>
+      <div className="mt-3 flex flex-col gap-4">{children}</div>
+    </details>
+  );
+}
+
+/** A button that fills the box with three random words, for a field with `generate` */
+function GenerateButton({ field, onChange }: { field: ChannelField; onChange: (value: string) => void }) {
+  return <Button size="sm" onClick={() => onChange(randomWords())}>Make a random {field.label.toLowerCase()}</Button>;
 }
 
 const asText = (value: string | string[] | undefined) => (typeof value === 'string' ? value : '');
@@ -63,16 +98,37 @@ interface TextFieldProps {
 function TextField({ field, value, onChange }: TextFieldProps) {
   return (
     <Field id={idOf(field)} label={field.label} hint={field.hint}>
-      <TextInput
+      <div className="flex items-center gap-2">
+        <TextInput
+          id={idOf(field)}
+          mono={field.mono}
+          className="flex-1"
+          value={value}
+          inputMode={field.kind === 'url' ? 'url' : undefined}
+          onChange={event => onChange(event.target.value)}
+          aria-describedby={hintIdOf(field)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {field.generate && <GenerateButton field={field} onChange={onChange} />}
+      </div>
+    </Field>
+  );
+}
+
+/** A select of the options of the field. An empty value, for example of a channel saved before the field was there, shows the default. */
+function ChoiceField({ field, value, onChange }: TextFieldProps) {
+  const options = field.options ?? [];
+  return (
+    <Field id={idOf(field)} label={field.label} hint={field.hint}>
+      <SelectInput
         id={idOf(field)}
-        mono={field.mono}
-        value={value}
-        inputMode={field.kind === 'url' ? 'url' : undefined}
-        onChange={event => onChange(event.target.value)}
+        value={value || field.default || options[0]?.value || ''}
         aria-describedby={hintIdOf(field)}
-        autoComplete="off"
-        spellCheck={false}
-      />
+        onChange={event => onChange(event.target.value)}
+      >
+        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </SelectInput>
     </Field>
   );
 }
@@ -96,6 +152,7 @@ function SecretField({ field, value, isSaved, isCleared, onChange, onClearChange
         placeholder={isSaved && !isCleared ? SAVED_SECRET_PLACEHOLDER : undefined}
         onChange={event => onChange(event.target.value)}
         aria-describedby={hintIdOf(field)}
+        // new-password stops a browser from filling in a saved login
         autoComplete="new-password"
         spellCheck={false}
       />
@@ -122,39 +179,17 @@ interface PhoneListFieldProps {
 }
 
 function PhoneListField({ field, phones, onChange }: PhoneListFieldProps) {
-  const setPhone = (index: number, phone: string) => onChange(phones.map((entry, at) => (at === index ? phone : entry)));
   return (
-    <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
-      <legend className="mb-1 p-0 text-xs font-semibold text-zinc-300">{field.label}</legend>
-      {phones.map((phone, index) => (
-        // The boxes have no id of their own, so the place in the list is the key
-        <div key={index} className="flex items-center gap-2">
-          <TextInput
-            type="tel"
-            mono={field.mono}
-            className="flex-1"
-            value={phone}
-            placeholder="+15551234567"
-            aria-label={`Phone number ${index + 1}`}
-            onChange={event => setPhone(index, event.target.value)}
-            autoComplete="off"
-          />
-          {phones.length > 1 && (
-            <Button
-              variant="quiet"
-              size="icon"
-              aria-label={`Remove phone number ${index + 1}`}
-              onClick={() => onChange(phones.filter((_, at) => at !== index))}
-            >
-              <CloseIcon size={14} />
-            </Button>
-          )}
-        </div>
-      ))}
-      <div>
-        <Button size="sm" onClick={() => onChange([...phones, ''])}><PlusIcon /> Add a number</Button>
-      </div>
-      {field.hint && <p className="m-0 text-xs text-zinc-300">{field.hint}</p>}
-    </fieldset>
+    <TextList
+      legend={field.label}
+      values={phones}
+      onChange={onChange}
+      itemLabel="Phone number"
+      addLabel="Add a number"
+      inputType="tel"
+      placeholder="+15551234567"
+      mono={field.mono}
+      hint={field.hint}
+    />
   );
 }

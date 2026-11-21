@@ -19,14 +19,25 @@ const webhook: ChannelTypeInfo = {
 
 const slack: NotificationChannel = {
   id: 'slack', type: 'webhook', name: 'Slack', settings: { url: 'https://hooks.slack.com/x' }, hasSecret: { secret: true },
-  minSeverity: 'critical', machineIds: ['haas-vf2'], enabled: false, createdAt: '2026-11-13T09:00:00.000Z',
+  minSeverity: 'critical', machineIds: ['haas-vf2'], ignorePatterns: [], enabled: false, createdAt: '2026-11-13T09:00:00.000Z',
 };
 
 describe('newChannelForm', () => {
+  it('fills each field that has a default', () => {
+    const telegram: ChannelTypeInfo = {
+      id: 'telegram', name: 'Telegram', fields: [
+        { key: 'chatId', label: 'Chat ID', kind: 'text', required: true },
+        { key: 'sound', label: 'Notification sound', kind: 'choice', required: false, default: 'normal', options: [{ value: 'normal', label: 'Normal' }] },
+      ],
+    };
+
+    expect(newChannelForm(telegram).values).toEqual({ chatId: '', sound: 'normal' });
+  });
+
   it('starts empty, on, for all machines and warning alerts, with one phone box', () => {
     expect(newChannelForm(twilio)).toEqual({
       type: 'twilio-sms', name: '', values: { accountSid: '', authToken: '', to: [''] }, clearSecrets: [],
-      minSeverity: 'warning', machineIds: null, enabled: true,
+      minSeverity: 'warning', machineIds: null, ignorePatterns: [''], enabled: true,
     });
   });
 });
@@ -35,8 +46,13 @@ describe('editChannelForm', () => {
   it('starts with the saved values and an empty secret, so the server keeps the saved one', () => {
     expect(editChannelForm(slack, webhook)).toEqual({
       type: 'webhook', name: 'Slack', values: { url: 'https://hooks.slack.com/x', secret: '' }, clearSecrets: [],
-      minSeverity: 'critical', machineIds: ['haas-vf2'], enabled: false,
+      minSeverity: 'critical', machineIds: ['haas-vf2'], ignorePatterns: [''], enabled: false,
     });
+  });
+
+  it('starts with the saved ignore patterns', () => {
+    expect(editChannelForm({ ...slack, ignorePatterns: ['Door open', 'Program 9*'] }, webhook).ignorePatterns)
+      .toEqual(['Door open', 'Program 9*']);
   });
 
   it('gives one phone box when the saved list is empty', () => {
@@ -60,8 +76,14 @@ describe('channelInputOf', () => {
 
     expect(channelInputOf(form)).toEqual({
       type: 'twilio-sms', name: 'Shop phones', values: { accountSid: 'AC1', authToken: 'token', to: ['+15551230000'] },
-      minSeverity: 'warning', machineIds: null, enabled: true,
+      minSeverity: 'warning', machineIds: null, ignorePatterns: [], enabled: true,
     });
+  });
+
+  it('trims the ignore patterns and drops the empty boxes', () => {
+    const form = { ...newChannelForm(webhook), ignorePatterns: [' Door open ', '', '  ', 'Program 9*'] };
+
+    expect(channelInputOf(form).ignorePatterns).toEqual(['Door open', 'Program 9*']);
   });
 
   it('asks the server to delete a saved secret only when the secret box is empty', () => {

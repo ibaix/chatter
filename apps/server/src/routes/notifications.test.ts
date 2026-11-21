@@ -96,7 +96,7 @@ describe('notification routes', () => {
   it('gives the channel types and their fields', async () => {
     const types = (await (await asAdmin('GET', '/notification-types')).json()) as { id: string }[];
 
-    expect(types.map(type => type.id)).toEqual(['twilio-sms', 'webhook', 'apprise']);
+    expect(types.map(type => type.id)).toEqual(['twilio-sms', 'webhook', 'apprise', 'discord', 'telegram', 'ntfy']);
   });
 
   it('adds a channel and never sends its secret back', async () => {
@@ -130,6 +130,39 @@ describe('notification routes', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ id, name: 'Night shift', hasSecret: { secret: true } });
+  });
+
+  describe('ignore patterns', () => {
+    it('saves the patterns trimmed, and each pattern one time, because case does not change a match', async () => {
+      const res = await asAdmin('POST', '/notification-channels', { ...slack, ignorePatterns: [' Door open ', 'door open', 'Door open', 'Program 9*'] });
+
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as NotificationChannel).ignorePatterns).toEqual(['Door open', 'Program 9*']);
+    });
+
+    it('saves no patterns when the body has none', async () => {
+      expect((await addedChannel()).ignorePatterns).toEqual([]);
+    });
+
+    it('keeps the saved patterns when a change has no patterns', async () => {
+      const { id } = await addedChannel({ ...slack, ignorePatterns: ['Door open'] });
+
+      const res = await asAdmin('PUT', `/notification-channels/${id}`, { ...slack, enabled: false });
+
+      expect(await res.json()).toMatchObject({ enabled: false, ignorePatterns: ['Door open'] });
+    });
+
+    it.each([
+      [['*'], 'This pattern matches each message. To stop all messages, turn the channel off.'],
+      [['  '], 'A pattern cannot be empty'],
+      [['x'.repeat(101)], 'A pattern can have at most 100 characters'],
+      [Array.from({ length: 21 }, (_, index) => `Pattern ${index}`), 'A channel can have at most 20 ignore patterns'],
+    ])('refuses the patterns %o', async (ignorePatterns, error) => {
+      const res = await asAdmin('POST', '/notification-channels', { ...slack, ignorePatterns });
+
+      expect(res.status).toBe(400);
+      expect(await errorOf(res)).toBe(error);
+    });
   });
 
   it('tells when a channel to change, test or delete is not there', async () => {

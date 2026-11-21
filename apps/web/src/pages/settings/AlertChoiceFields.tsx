@@ -1,16 +1,23 @@
-import { ALERT_SEVERITIES, type AlertSeverity } from '@local-chatter/shared';
+import {
+  ALERT_SEVERITIES, type AlertSeverity, matchesPattern, MAX_IGNORE_PATTERNS, type NotificationMessage, patternProblem,
+} from '@local-chatter/shared';
 import { Field, SelectInput } from '../../components/ui/fields';
 import type { ChannelFormState } from './channelFormState';
 import { LEVEL_LABELS, machineNameOf, type MachineName } from './notificationLabels';
+import { TextList } from './TextList';
 
 interface AlertChoiceFieldsProps {
   form: ChannelFormState;
   machines: MachineName[];
+  /** The messages of the last 30 days, for the preview of each ignore pattern */
+  messages: NotificationMessage[];
+  /** The saved channel that the admin edits. Without it, the form adds a channel. */
+  channelId?: string;
   onChange: (form: ChannelFormState) => void;
 }
 
-/** Which alerts the channel gets: the level, and all machines or only some */
-export function AlertChoiceFields({ form, machines, onChange }: AlertChoiceFieldsProps) {
+/** Which alerts the channel gets: the level, all machines or only some, and the messages to ignore */
+export function AlertChoiceFields({ form, machines, messages, channelId, onChange }: AlertChoiceFieldsProps) {
   const isPicking = form.machineIds !== null;
   const picked = form.machineIds ?? [];
   const choices = choicesOf(machines, picked);
@@ -50,8 +57,66 @@ export function AlertChoiceFields({ form, machines, onChange }: AlertChoiceField
           </div>
         )}
       </div>
+      <IgnorePatterns patterns={form.ignorePatterns} texts={previewTexts(messages, channelId)} onChange={ignorePatterns => onChange({ ...form, ignorePatterns })} />
     </fieldset>
   );
+}
+
+/** Only an alert message can be ignored. A test and an "And N more" message always go. */
+const CAN_BE_IGNORED = new Set<NotificationMessage['kind']>(['started', 'ended', 'combined']);
+
+/**
+ * The texts that the preview checks. For a saved channel, only its own messages.
+ * For a new channel, each alert message one time: each channel gets a copy of the same message.
+ */
+function previewTexts(messages: NotificationMessage[], channelId: string | undefined): string[] {
+  const alertMessages = messages.filter(message => CAN_BE_IGNORED.has(message.kind));
+  if (channelId !== undefined) return alertMessages.filter(message => message.channelId === channelId).map(message => message.text);
+  const seen = new Set<string>();
+  return alertMessages.filter(message => {
+    const key = `${message.alertId}:${message.kind}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map(message => message.text);
+}
+
+interface IgnorePatternsProps {
+  patterns: string[];
+  /** The texts of the last alert messages, for the preview */
+  texts: string[];
+  onChange: (patterns: string[]) => void;
+}
+
+/** The ignore patterns, each with a line that tells how many of the last messages it matches */
+function IgnorePatterns({ patterns, texts, onChange }: IgnorePatternsProps) {
+  const preview = (pattern: string) => {
+    if (pattern.trim() === '') return null;
+    const problem = patternProblem(pattern);
+    return (
+      <p className={problem ? 'm-0 text-xs text-alarm-soft' : 'm-0 text-xs text-zinc-300'}>
+        {problem ?? matchCountText(texts.filter(text => matchesPattern(pattern.trim(), text)).length, texts.length)}
+      </p>
+    );
+  };
+  return (
+    <TextList
+      legend="Ignore messages"
+      values={patterns}
+      onChange={onChange}
+      itemLabel="Ignore pattern"
+      addLabel="Add a pattern"
+      canAdd={patterns.length < MAX_IGNORE_PATTERNS}
+      placeholder="Door open"
+      hint="Chatter does not send a message when its text has one of these patterns. * is any text, and ? is one character. Upper and lower case are the same."
+      below={preview}
+    />
+  );
+}
+
+function matchCountText(matches: number, total: number): string {
+  if (total === 0) return 'There are no messages to check yet.';
+  return `Matches ${matches} of the last ${total} ${total === 1 ? 'message' : 'messages'}.`;
 }
 
 /** The machines of Chatter. A picked machine that someone removed stays in the list, until the admin takes it out. */

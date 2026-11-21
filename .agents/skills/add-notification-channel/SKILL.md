@@ -13,19 +13,23 @@ Before you write code, write down for the user:
 - The endpoint, the login (token, key, or address with a key in it), and the success status.
 - The error answers: which mean "wrong settings" (do not try again) and which mean "busy or down" (try again). Use the service's own docs.
 - Any rule that stops the first message, for example a sender that the service must verify first. That rule goes in `note`.
-- The inputs of the form. Each must fit one of `CHANNEL_FIELD_KINDS` (`packages/shared/src/notifications.ts`): `text`, `secret`, `url`, `phone-list`. When an input fits none, stop and ask the user: a new kind needs web code in `apps/web/src/pages/settings/ChannelFields.tsx` and `channelFormState.ts`.
+- The inputs of the form. Each must fit one of `CHANNEL_FIELD_KINDS` (`packages/shared/src/notifications.ts`): `text`, `secret`, `url`, `phone-list`, `choice`. When an input fits none, stop and ask the user: a new kind needs web code in `apps/web/src/pages/settings/ChannelFields.tsx` and `channelFormState.ts`.
 - The **license** of each library. Chatter is MIT. Prefer plain `fetch` to an SDK: the Pi has 512 MB of RAM.
 
 Done when the user agrees with the list.
 
 ## 2. Write the type, test first
 
-Write `channels/<service>.test.ts` before the code (see CONTRIBUTING.md). Copy the `fakeFetch` helper of `webhook.test.ts`, so no test sends a real message. Then write `channels/<service>.ts` with one `ChannelDefinition` (`channels/ChannelType.ts`):
+Write `channels/<service>.test.ts` before the code (see CONTRIBUTING.md). Use `fakeFetch` of `channels/testSupport.ts`, so no test sends a real message. The file also has `WARNING_MESSAGE`, an alert to send, and `textOf`, the text of a result. Then write `channels/<service>.ts` with one `ChannelDefinition` (`channels/ChannelType.ts`):
 
 - **`id`** is fixed forever: saved channels keep it in `chatter.db`. Use kebab-case, for example `pushover`.
 - **`fields`** are the inputs of the form, in order. Give each token, key, or password `kind: 'secret'`: `ChannelStore` keeps secret fields out of each answer to the browser, and an empty secret box keeps the saved value. Give `hint` a plain line that tells where in the service to find the value.
+- **`kind: 'choice'`** shows a select. Give it `options` (a list of `{ value, label }`) and a `default`. In `settings`, use `z.enum([...]).default(...)`, so a channel that was saved before the field was there gets the default with no change to the database.
+- **Notification sound:** when the service can send a message with no sound, or with a higher priority, give the type the field `sound` with `soundField` and `soundSetting` of `channels/sound.ts`. Its label is **Notification sound**. Do not call it "level", because the form already has a **Level** for the alerts. Put the sound on each message of the channel, also on a test, whatever the level of the alert. See `ntfy.ts`, `telegram.ts`, and `discord.ts`.
+- **`generate: 'words'`** gives a field a button that fills in three random words, for a name that must be hard to guess (the ntfy topic). **`advanced: true`** puts a field that most admins leave empty under a closed **Advanced** heading.
 - **`settings`** is a zod schema of the values, also the secret values. Its messages are for the shop admin, in plain words, and the form shows the first one.
 - **`send(settings, message, { fetch, signal })`** sends one `OutgoingMessage`. Use `message.text` when the service shows one line. Pass `signal` to `fetch`, and use the `fetch` of the context. The signal stops the request after 10 seconds (`SEND_TIMEOUT_MS` in `OutboxSender.ts`). A service that answers only after it sent to each target can set a longer **`timeoutMs`**.
+- **HTTP:** for a JSON API, use `postJson` and `statusResult` of `channels/http.ts`. They send the request, do not follow a redirect, handle a network failure, and hold the one retry rule. Give only the refusal texts of the service. `refused` makes the text of an answer that a new try cannot fix. Set `readJson` when the service tells the problem in the body of an error answer (see `telegram.ts`). Chatter reads at most 64 KB of that body, and never reads a 2xx body. `serviceReason` removes the secrets from the reason of the service, and cuts it. `cutText` cuts a text to the limit of the service. `titleOf` gives the title of a message, for a service that shows a title.
 - **Results:** return `{ ok: true, detail }` with a short fact, for example "Sent to 2 phones". Return `{ ok: false, retry, error }` with `retry: true` for 408, 429, 5xx and network failures, and `retry: false` for each answer where a new try fails too. For a thrown `fetch`, return `networkFailure(error, '<the service>')`. `OutboxSender` tries again with longer waits, for at most 24 hours.
 - **Partial sends:** when the service sends to a list and only some got the message, return `retry: false`, so no one gets it two times. `twilio.ts` does this for its phones.
 - **Secrets stay out of text:** each `error` and `detail` goes in the message list, so it never has the token, the key, or a web address with a key in it.

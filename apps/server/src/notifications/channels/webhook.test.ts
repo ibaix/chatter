@@ -1,33 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { OutgoingMessage, SendContext } from './ChannelType.js';
 import { webhookChannel } from './webhook.js';
-
-const MESSAGE: OutgoingMessage = {
-  kind: 'started',
-  text: 'WARNING - Haas ST-10: Idle for 20 minutes. Started 9:40 AM.',
-  severity: 'warning',
-  machine: { id: 'haas-st10', name: 'Haas ST-10' },
-  alertName: 'Idle for 20 minutes',
-  summary: 'Idle for 20 min or more',
-  startedAt: '2026-11-13T15:40:00.000Z',
-  endedAt: null,
-  link: 'http://chatter.local:3001/machine/haas-st10',
-};
-
-interface SentRequest {
-  url: string;
-  init: RequestInit;
-}
-
-/** A fetch that keeps each request and gives the answer of `answer` */
-function fakeFetch(answer: () => Response | Promise<Response>) {
-  const requests: SentRequest[] = [];
-  const fetch = (async (url: string | URL | Request, init: RequestInit = {}) => {
-    requests.push({ url: String(url), init });
-    return answer();
-  }) as typeof globalThis.fetch;
-  return { requests, context: (): SendContext => ({ fetch, signal: new AbortController().signal }) };
-}
+import { fakeFetch, WARNING_MESSAGE as MESSAGE } from './testSupport.js';
 
 const settings = { url: 'https://hooks.slack.com/services/T0/B0/x', secret: '' };
 
@@ -41,6 +14,10 @@ describe('webhookChannel', () => {
       ['url', 'url', true],
       ['secret', 'secret', false],
     ]);
+  });
+
+  it('puts the secret under Advanced, because Slack and Home Assistant do not use it', () => {
+    expect(webhookChannel.fields.filter(field => field.advanced).map(field => field.key)).toEqual(['secret']);
   });
 
   it('sends the message as JSON, with the text line that Slack shows', async () => {

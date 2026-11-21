@@ -50,6 +50,28 @@ describe('metricLines', () => {
     expect(metricLines(snapshot(values), TIME)).toContain(`chatter_running{machine="m1",type="brother"} ${running} ${TIME}`);
   });
 
+  it.each([
+    ['fanuc', { runState: 'RESET' }, 1],
+    ['fanuc', { runState: 'STOP' }, 0],
+    ['fanuc', { runState: 'HOLD' }, 0],
+    ['brother', { execution: 'READY' }, 1],
+    ['brother', { execution: 'FEED_HOLD' }, 0],
+    ['haas', { execution: 'READY' }, 1],
+    ['haas', { execution: 'FEED_HOLD' }, 0],
+    ['siemens', { execution: 'READY' }, 1],
+    ['siemens', { execution: 'INTERRUPTED' }, 0],
+    ['mtconnect', { execution: 'PROGRAM_COMPLETED' }, 1],
+    ['mtconnect', { execution: 'ACTIVE' }, 0],
+  ] as const)('writes program-ended for a %s machine: %o', (machineType, values, ended) => {
+    expect(metricLines(snapshot({ machineType, ...values }), TIME))
+      .toContain(`chatter_program_ended{machine="m1",type="${machineType}"} ${ended} ${TIME}`);
+  });
+
+  it('writes no program end during an alarm or an emergency stop', () => {
+    expect(metricLines(snapshot({ runState: 'RESET', alarm: true }), TIME)).toContain(`chatter_program_ended{machine="m1",type="brother"} 0 ${TIME}`);
+    expect(metricLines(snapshot({ execution: 'READY', emergency: true }), TIME)).toContain(`chatter_program_ended{machine="m1",type="brother"} 0 ${TIME}`);
+  });
+
   it('does not write running when the machine does not tell it', () => {
     const lines = metricLines(snapshot({ mode: 'MEM' }), TIME);
 

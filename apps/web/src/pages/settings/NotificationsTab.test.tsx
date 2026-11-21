@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addChannel, fetchChannels, fetchChannelTypes, fetchMessages, fetchNotificationSettings, removeChannel, saveNotificationSettings, sendTestMessage, updateChannel,
   type ChannelTypeInfo, type NotificationChannel, type NotificationMessage,
@@ -34,7 +34,7 @@ const TYPES: ChannelTypeInfo[] = [
 const phones: NotificationChannel = {
   id: 'phones', type: 'twilio-sms', name: 'Shop phones',
   settings: { accountSid: 'AC1', from: '+15551230000', to: ['+15559870001', '+15559870002'] },
-  hasSecret: { authToken: true }, minSeverity: 'critical', machineIds: null, enabled: true, createdAt: '2026-11-13T09:00:00.000Z',
+  hasSecret: { authToken: true }, minSeverity: 'critical', machineIds: null, ignorePatterns: ['Door open'], enabled: true, createdAt: '2026-11-13T09:00:00.000Z',
 };
 
 const slack: NotificationChannel = {
@@ -95,7 +95,7 @@ describe('NotificationsTab', () => {
     expect(channelRow('Slack #shop-floor')).toHaveTextContent('The address answered 404 Not found.');
   });
 
-  it('turns a channel off, and keeps its saved secrets', async () => {
+  it('turns a channel off, and keeps its saved secrets and its ignore patterns', async () => {
     vi.mocked(updateChannel).mockResolvedValue({ ...phones, enabled: false });
     await renderTab();
 
@@ -104,7 +104,8 @@ describe('NotificationsTab', () => {
 
     await waitFor(() => expect(toggle).toBeEnabled());
     expect(updateChannel).toHaveBeenCalledWith('phones', {
-      type: 'twilio-sms', name: 'Shop phones', values: phones.settings, minSeverity: 'critical', machineIds: null, enabled: false,
+      type: 'twilio-sms', name: 'Shop phones', values: phones.settings, minSeverity: 'critical', machineIds: null,
+      ignorePatterns: ['Door open'], enabled: false,
     });
   });
 
@@ -170,10 +171,119 @@ describe('NotificationsTab', () => {
     expect(within(messages).getByText('Phone text')).toBeInTheDocument();
   });
 
+  describe('a long message list', () => {
+    const manyMessages = (count: number, channelId = 'phones') =>
+      Array.from({ length: count }, (_, index) => message({ id: count - index, channelId, text: `Message ${count - index}` }));
+    const messageRows = () => within(screen.getByRole('region', { name: 'Messages' })).getAllByRole('row').slice(1);
+
+    it('shows the newest 10 messages and a button for more', async () => {
+      await renderTab(manyMessages(120));
+
+      expect(messageRows()).toHaveLength(10);
+      expect(messageRows()[0]).toHaveTextContent('Message 120');
+      expect(screen.getByText('Showing 10 of 120 messages.')).toBeInTheDocument();
+    });
+
+    it('shows 10 more each time the admin clicks Show more, and then no button', async () => {
+      await renderTab(manyMessages(25));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+      expect(messageRows()).toHaveLength(20);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+      expect(messageRows()).toHaveLength(25);
+      expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Showing/)).not.toBeInTheDocument();
+    });
+
+    it('shows no button when all the messages fit', async () => {
+      await renderTab(manyMessages(10));
+
+      expect(messageRows()).toHaveLength(10);
+      expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+    });
+
+    it('starts again at 10 when the admin selects another channel', async () => {
+      await renderTab([...manyMessages(60, 'slack').map(entry => ({ ...entry, id: entry.id + 100 })), ...manyMessages(80)]);
+      fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+      expect(messageRows()).toHaveLength(20);
+
+      fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'phones' } });
+
+      expect(messageRows()).toHaveLength(10);
+      expect(screen.getByText('Showing 10 of 80 messages.')).toBeInTheDocument();
+    });
+  });
+
+  describe('new messages', () => {
+    let visibility: DocumentVisibilityState = 'visible';
+
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      visibility = 'visible';
+      vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it('loads the messages again every 20 seconds, and not the other parts of the tab', async () => {
+      await renderTab([message({ id: 1, text: 'Old message' })]);
+      vi.mocked(fetchMessages).mockResolvedValue([message({ id: 2, text: 'New message' }), message({ id: 1, text: 'Old message' })]);
+      const channelLoads = vi.mocked(fetchChannels).mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(await screen.findByText('New message')).toBeInTheDocument();
+      expect(fetchMessages).toHaveBeenCalledTimes(2);
+      expect(fetchChannels).toHaveBeenCalledTimes(channelLoads);
+    });
+
+    it('does not load while the page is hidden, and loads at once when the page shows again', async () => {
+      await renderTab();
+      visibility = 'hidden';
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fetchMessages).toHaveBeenCalledTimes(1);
+
+      visibility = 'visible';
+      document.dispatchEvent(new Event('visibilitychange'));
+      await waitFor(() => expect(fetchMessages).toHaveBeenCalledTimes(2));
+    });
+
+    it('keeps the list when a load fails, for example while the server restarts', async () => {
+      await renderTab([message({ id: 1, text: 'Old message' })]);
+      vi.mocked(fetchMessages).mockRejectedValue(new Error('offline'));
+
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(screen.getByText('Old message')).toBeInTheDocument();
+    });
+
+    it('stops loading when the admin leaves the tab', async () => {
+      await renderTab();
+      cleanup();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(fetchMessages).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('shows the error of a failed message in the message list', async () => {
     await renderTab([message({ status: 'failed', lastError: 'Twilio says: unverified number.', detail: null })]);
 
     expect(within(screen.getByRole('region', { name: 'Messages' })).getByText('Twilio says: unverified number.')).toBeInTheDocument();
+  });
+
+  it('shows an ignored message as Ignored, with the pattern that matched', async () => {
+    await renderTab([message({ status: 'ignored', detail: 'Ignored by the pattern "In alarm"', attempts: 0, sentAt: null })]);
+
+    const messages = within(screen.getByRole('region', { name: 'Messages' }));
+    expect(messages.getByText('Ignored')).toBeInTheDocument();
+    expect(messages.getByText('Ignored by the pattern "In alarm"')).toBeInTheDocument();
   });
 
   it('fills the time zone from the browser when none is saved', async () => {

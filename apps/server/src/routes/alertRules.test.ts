@@ -80,7 +80,7 @@ describe('alert rule routes', () => {
 
     expect(res.status).toBe(200);
     const { rules } = (await res.json()) as { rules: AlertRule[] };
-    expect(rules.map(rule => rule.kind === 'simple' && rule.subject)).toEqual(['not-connected', 'in-alarm', 'spindle-load']);
+    expect(rules.map(rule => rule.kind === 'simple' && rule.subject)).toEqual(['in-alarm', 'emergency-stop', 'program-ended']);
   });
 
   it('saves a new list for an admin', async () => {
@@ -124,8 +124,8 @@ describe('alert rule routes', () => {
     const res = await asAdmin('POST', `/machine/${haasId}/alert-rules/copy`, { machineIds: [brotherId] });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ copied: 1, notCopied: 0, vmalertReloaded: true });
-    expect(await rulesOf(brotherId)).toHaveLength(4);
+    expect(await res.json()).toEqual({ copied: 2, notCopied: 0, vmalertReloaded: true });
+    expect(await rulesOf(brotherId)).toHaveLength(5);
   });
 
   it('does not copy to a machine that is not there', async () => {

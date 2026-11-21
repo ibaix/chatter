@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Alert, AlertStore } from '../alerts/AlertStore.js';
 import { SettingsTable } from '../storage/settingsTable.js';
 import { Notifications } from './Notifications.js';
+import { SEND_LIMIT } from './Outbox.js';
 
 const NOW = Date.UTC(2026, 10, 13, 15, 2);
 
@@ -75,6 +76,32 @@ describe('Notifications', () => {
     it('gives the first problem of the form and sends nothing', async () => {
       expect(await notifications.sendTest({ ...slack, values: { url: 'not an address' } })).toEqual({ ok: false, error: expect.any(String) });
       expect(requests).toEqual([]);
+    });
+  });
+
+  describe('ignore patterns', () => {
+    it('never ignores a test, also when its text matches a pattern', async () => {
+      const id = addChannel({ ...slack, ignorePatterns: ['Test from Chatter'] });
+
+      expect(await notifications.sendTest({ ...slack, ignorePatterns: ['Test from Chatter'] }, id)).toMatchObject({ ok: true });
+
+      expect(requests).toHaveLength(1);
+      expect(notifications.outbox.list({ channelId: id })).toEqual([expect.objectContaining({ kind: 'test', status: 'sent' })]);
+    });
+
+    it('never ignores an "And N more" message, also when its text matches a pattern', async () => {
+      const id = addChannel({ ...slack, ignorePatterns: ['more alerts'] });
+      const many = Array.from({ length: SEND_LIMIT + 2 }, (_, index) => ({
+        ...alert, name: `Alarm ${index}`, labels: { ...alert.labels, alertname: `Alarm ${index}` },
+      }));
+      alerts.save(many, NOW);
+      notifications.findAlertChanges();
+
+      for (let index = 0; index < SEND_LIMIT; index += 1) await notifications.sendDue();
+
+      expect(requests).toHaveLength(SEND_LIMIT);
+      expect(requests[SEND_LIMIT - 1].body.text).toMatch(/more alerts/);
+      expect(notifications.outbox.list({ channelId: id }).filter(message => message.status === 'ignored')).toEqual([]);
     });
   });
 

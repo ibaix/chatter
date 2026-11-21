@@ -164,27 +164,86 @@ describe('Outbox', () => {
     });
   });
 
-  describe('hasStartMessage', () => {
-    it('is true when the channel got the start message of the alert, also when it waits, failed, or went in a "more" message', () => {
+  describe('startStatus', () => {
+    it('gives the status of the start message of the alert on the channel', () => {
       queue('waiting', 1);
       const failed = queue('failed', 1);
       outbox.takeDue(NOW);
       outbox.markFailed(failed, 'Twilio refused the login.');
+      outbox.keepIgnored({ channelId: 'ignored', alertId: 1, message: alertMessage('started') }, 'Ignored by the pattern "alarm"', NOW);
       sendMessages('grouped', SEND_LIMIT - 1, NOW);
       [1, 2].forEach(alertId => queue('grouped', alertId, alertMessage('started'), NOW + MINUTE));
       outbox.takeDue(NOW + MINUTE);
 
-      expect(outbox.hasStartMessage('waiting', 1)).toBe(true);
-      expect(outbox.hasStartMessage('failed', 1)).toBe(true);
-      expect(outbox.list({ channelId: 'grouped' }).find(message => message.alertId === 1)?.status).toBe('grouped');
-      expect(outbox.hasStartMessage('grouped', 1)).toBe(true);
+      expect(outbox.startStatus('waiting', 1)).toBe('waiting');
+      expect(outbox.startStatus('failed', 1)).toBe('failed');
+      expect(outbox.startStatus('ignored', 1)).toBe('ignored');
+      expect(outbox.startStatus('grouped', 1)).toBe('grouped');
     });
 
-    it('is false for another channel or another alert', () => {
+    it('is null for another channel or another alert', () => {
       queue('phones', 1);
 
-      expect(outbox.hasStartMessage('slack', 1)).toBe(false);
-      expect(outbox.hasStartMessage('phones', 2)).toBe(false);
+      expect(outbox.startStatus('slack', 1)).toBeNull();
+      expect(outbox.startStatus('phones', 2)).toBeNull();
+    });
+  });
+
+  describe('ignored messages', () => {
+    const IGNORED = 'Ignored by the pattern "alarm"';
+
+    function keepIgnored(channelId: string, alertId: number, message = alertMessage('started'), now = NOW): void {
+      outbox.keepIgnored({ channelId, alertId, message }, IGNORED, now);
+    }
+
+    it('keeps an ignored message in the list, with the reason', () => {
+      keepIgnored('phones', 7);
+
+      expect(outbox.list({})).toEqual([expect.objectContaining({
+        channelId: 'phones', alertId: 7, kind: 'started', status: 'ignored', detail: IGNORED, attempts: 0, sentAt: null,
+      })]);
+    });
+
+    it('never gives an ignored message to the sender', () => {
+      keepIgnored('phones', 7);
+      const next = queue('phones', 8);
+
+      expect(outbox.takeDue(NOW).map(entry => entry.id)).toEqual([next]);
+    });
+
+    it('does not count an ignored message in the limit of the channel', () => {
+      sendMessages('phones', SEND_LIMIT - 2, NOW);
+      for (let alertId = 1; alertId <= 5; alertId += 1) keepIgnored('phones', alertId);
+      queue('phones', 6, alertMessage('started'), NOW + MINUTE);
+      queue('phones', 7, alertMessage('started'), NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE)).toEqual([expect.objectContaining({ message: alertMessage('started') })]);
+    });
+
+    it('never puts an ignored message into a "more" message', () => {
+      sendMessages('phones', SEND_LIMIT - 1, NOW);
+      keepIgnored('phones', 1, alertMessage('started'), NOW + MINUTE);
+      [2, 3].forEach(alertId => queue('phones', alertId, alertMessage('started'), NOW + MINUTE));
+
+      expect(outbox.takeDue(NOW + MINUTE)[0].message).toEqual(moreAlerts(2));
+      expect(outbox.list({}).find(message => message.alertId === 1)).toMatchObject({ status: 'ignored', detail: IGNORED });
+    });
+
+    it('deletes old ignored messages like the other finished messages', () => {
+      keepIgnored('phones', 1, alertMessage('started'), NOW - 31 * DAY);
+
+      outbox.cleanUp(NOW);
+
+      expect(outbox.list({})).toEqual([]);
+    });
+
+    it('turns a waiting start message into an ignored combined message', () => {
+      const id = queue('phones', 7, alertMessage('started'));
+
+      expect(outbox.combineWithWaitingStart('phones', 7, alertMessage('combined'), IGNORED)).toBe(true);
+
+      expect(outbox.list({})).toEqual([expect.objectContaining({ id, kind: 'combined', status: 'ignored', detail: IGNORED })]);
+      expect(outbox.takeDue(NOW)).toEqual([]);
     });
   });
 
@@ -277,6 +336,86 @@ describe('Outbox', () => {
     });
   });
 
+  describe('event messages, such as "program ended"', () => {
+    function queueEvent(channelId: string, alertId: number, now: number): number {
+      return outbox.queue({ channelId, alertId, message: alertMessage('started'), event: true }, now);
+    }
+
+    it('sends an event message when the channel is at its limit', () => {
+      sendMessages('phones', SEND_LIMIT, NOW);
+      const event = queueEvent('phones', 1, NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([event]);
+    });
+
+    it('sends an event message that waits after an alert message that the limit holds', () => {
+      sendMessages('phones', SEND_LIMIT, NOW);
+      const held = queue('phones', 1, alertMessage('started'), NOW + MINUTE);
+      const event = queueEvent('phones', 2, NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([event]);
+      expect(outbox.list({}).find(message => message.id === held)?.status).toBe('waiting');
+    });
+
+    it('still sends one message of a channel at a time', () => {
+      sendMessages('phones', SEND_LIMIT, NOW);
+      queue('phones', 1, alertMessage('started'), NOW + MINUTE);
+      queueEvent('phones', 2, NOW + MINUTE);
+      queueEvent('phones', 3, NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE)).toHaveLength(1);
+      expect(outbox.takeDue(NOW + MINUTE)).toEqual([]);
+    });
+
+    it('does not count a sent event message in the limit', () => {
+      for (let alertId = 1; alertId <= SEND_LIMIT; alertId += 1) {
+        const id = queueEvent('phones', alertId, NOW);
+        outbox.takeDue(NOW);
+        outbox.markSent(id, 'Sent', NOW);
+      }
+      const alarm = queue('phones', 99, alertMessage('started'), NOW + MINUTE);
+      queue('phones', 100, alertMessage('started'), NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([alarm]);
+    });
+
+    it('never puts an event message into a "more" message', () => {
+      sendMessages('phones', SEND_LIMIT - 1, NOW);
+      queue('phones', 1, alertMessage('started'), NOW + MINUTE);
+      const event = queueEvent('phones', 2, NOW + MINUTE);
+      queue('phones', 3, alertMessage('started'), NOW + MINUTE);
+
+      const [more] = outbox.takeDue(NOW + MINUTE);
+      expect(more.message).toEqual(moreAlerts(2));
+      expect(outbox.list({}).find(message => message.id === event)?.status).toBe('waiting');
+
+      outbox.markSent(more.id, 'Sent', NOW + MINUTE);
+      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([event]);
+    });
+
+    it('adds the event column to the table of an older Chatter, and keeps its messages', () => {
+      const old = new Database(':memory:');
+      old.exec(`
+        CREATE TABLE notification_messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id TEXT NOT NULL, alert_id INTEGER, kind TEXT NOT NULL, machine_id TEXT,
+          payload TEXT NOT NULL, alert_count INTEGER, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+          next_try_at INTEGER NOT NULL, sending INTEGER NOT NULL DEFAULT 0, last_error TEXT, detail TEXT,
+          created_at INTEGER NOT NULL, sent_at INTEGER
+        )
+      `);
+      old.prepare(`
+        INSERT INTO notification_messages (channel_id, alert_id, kind, payload, status, next_try_at, created_at)
+        VALUES ('phones', 1, 'started', ?, 'waiting', ?, ?)
+      `).run(JSON.stringify(alertMessage('started')), NOW, NOW);
+
+      const upgraded = new Outbox(old, moreAlerts);
+
+      expect(texts(upgraded.takeDue(NOW))).toEqual(['started - Haas VF-2: In alarm']);
+      upgraded.queue({ channelId: 'slack', alertId: 2, message: alertMessage('started'), event: true }, NOW);
+      expect(upgraded.list({})).toHaveLength(2);
+    });
+  });
+
   describe('cleanUp', () => {
     it(`deletes the finished messages that are older than 30 days, and keeps the waiting messages`, () => {
       sendMessages('phones', 1, NOW - 31 * DAY);
@@ -300,6 +439,26 @@ describe('Outbox', () => {
       const kept = outbox.list({});
       expect(kept).toHaveLength(MAX_KEPT_MESSAGES);
       expect(kept[0].id).toBe(newest);
+    });
+
+    it(`keeps the start of an alert that is still on, also over ${MAX_KEPT_MESSAGES}, so the alert still gets its end message`, () => {
+      const finished = (alertId: number, kind: 'started' | 'ended', now: number) => {
+        outbox.keepIgnored({ channelId: 'phones', alertId, message: alertMessage(kind) }, 'Ignored', now);
+      };
+      finished(1, 'started', NOW);
+      finished(2, 'started', NOW);
+      finished(2, 'ended', NOW);
+      outbox.queue({ channelId: 'phones', alertId: 3, message: alertMessage('started'), event: true }, NOW);
+      const [event] = outbox.takeDue(NOW);
+      outbox.markSent(event.id, 'Sent', NOW);
+      sendMessages('slack', MAX_KEPT_MESSAGES, NOW + MINUTE, SEND_LIMIT_WINDOW_MS);
+
+      outbox.cleanUp(NOW + MINUTE);
+
+      expect(outbox.startStatus('phones', 1)).toBe('ignored');
+      expect(outbox.startStatus('phones', 2)).toBeNull();
+      expect(outbox.startStatus('phones', 3)).toBeNull();
+      expect(outbox.list({})).toHaveLength(MAX_KEPT_MESSAGES + 1);
     });
   });
 

@@ -51,8 +51,8 @@ describe('defineChannelType', () => {
 });
 
 describe('channel types', () => {
-  it('has the Twilio text message type first, then the webhook type, then the Apprise type', () => {
-    expect(channelTypeInfos().map(type => type.id)).toEqual(['twilio-sms', 'webhook', 'apprise']);
+  it('has the Twilio text message type first, then the webhook type, then the Apprise type, then the Discord type, then the Telegram type', () => {
+    expect(channelTypeInfos().map(type => type.id)).toEqual(['twilio-sms', 'webhook', 'apprise', 'discord', 'telegram', 'ntfy']);
   });
 
   it('keeps the time limit of a type on the server, out of the list for the web app', () => {

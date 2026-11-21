@@ -99,12 +99,15 @@ export function parseQueryResponse(response: string, isMacro: boolean): string |
   return cleaned.split(',')[1].trim();
 }
 
+/** The execution word of Q500 ALARM ON */
+const ALARM_EXECUTION = 'STOPPED';
+
 /** The Q500 status words, in MTConnect execution words */
 const RUN_STATUS_EXECUTION: Record<string, string> = {
   'BUSY': 'ACTIVE',
   'IDLE': 'READY',
   'FEED HOLD': 'FEED_HOLD',
-  'ALARM ON': 'STOPPED',
+  'ALARM ON': ALARM_EXECUTION,
 };
 
 /**
@@ -503,7 +506,8 @@ export class HaasConnector extends BaseMachineConnector {
       toolNumber: this.data.toolNumber,
       partCount: this.data.partCount,
       partGoal: this.data.partGoal,
-      alarm: this.data.alarm,
+      // Q500 ALARM ON is an alarm too, also when the data stream gives no alarm value
+      alarm: this.data.execution === ALARM_EXECUTION ? true : this.data.alarm,
       alarmCode: this.data.alarmCode,
       execution: this.data.execution,
       spindleLoad: this.data.spindleLoad,

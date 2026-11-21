@@ -29,6 +29,24 @@ interface StateSubject {
   firesAt: 0 | 1;
 }
 
+/**
+ * A one-time event at the end of a run, such as "program ended". The rule fires when the state becomes 1 shortly
+ * after the machine ran, and the alert clears by itself after EVENT_WINDOW. Chatter sends only its start message.
+ */
+interface EventSubject {
+  kind: 'event';
+  name: string;
+  metric: HistoryValue;
+}
+
+/** An event rule looks back this far for the run before the event. vmalert checks every 15 s, so it sees each event 3 or more times. */
+const EVENT_WINDOW = '1m';
+
+/** The label that vmalert puts on the alert of an event rule, so Chatter sends no "OK" message when the alert clears */
+export const EVENT_LABEL = 'event';
+
+type Subject = ValueSubject | StateSubject | EventSubject;
+
 export const ALERT_SUBJECTS = {
   'spindle-speed': { kind: 'value', name: 'Spindle speed', metric: 'spindle-speed', unitSuffix: ' RPM' },
   'spindle-load': { kind: 'value', name: 'Spindle load', metric: 'spindle-load', unitSuffix: '%' },
@@ -36,10 +54,16 @@ export const ALERT_SUBJECTS = {
   'not-connected': { kind: 'state', name: 'Not connected', metric: 'connected', firesAt: 0 },
   'in-alarm': { kind: 'state', name: 'In alarm', metric: 'alarm', firesAt: 1 },
   'emergency-stop': { kind: 'state', name: 'Emergency stop', metric: 'emergency', firesAt: 1 },
-} as const satisfies Record<string, ValueSubject | StateSubject>;
+  'program-ended': { kind: 'event', name: 'Program ended', metric: 'program-ended' },
+} as const satisfies Record<string, Subject>;
 
 export type AlertSubject = keyof typeof ALERT_SUBJECTS;
 export const ALERT_SUBJECT_IDS = Object.keys(ALERT_SUBJECTS) as AlertSubject[];
+
+/** True for a one-time event, such as "program ended": the alert fires once, and Chatter sends no "OK" message when it clears */
+export function isEventSubject(subject: AlertSubject): boolean {
+  return ALERT_SUBJECTS[subject].kind === 'event';
+}
 
 interface AlertRuleBase {
   id: string;
@@ -83,18 +107,24 @@ export const MAX_ALERT_FOR_MINUTES = 1440;
 
 /** The rules that each new machine gets */
 export const STARTER_RULES: readonly NewAlertRule[] = [
-  { kind: 'simple', enabled: true, subject: 'not-connected', check: 'above', limit: 0, forMinutes: 10, severity: 'warning' },
-  { kind: 'simple', enabled: true, subject: 'in-alarm', check: 'above', limit: 0, forMinutes: 5, severity: 'critical' },
-  { kind: 'simple', enabled: true, subject: 'spindle-load', check: 'above', limit: 90, forMinutes: 1, severity: 'warning' },
+  { kind: 'simple', enabled: true, subject: 'in-alarm', check: 'above', limit: 0, forMinutes: 0, severity: 'critical' },
+  { kind: 'simple', enabled: true, subject: 'emergency-stop', check: 'above', limit: 0, forMinutes: 0, severity: 'critical' },
+  { kind: 'simple', enabled: true, subject: 'program-ended', check: 'above', limit: 0, forMinutes: 0, severity: 'warning' },
 ];
 
 /** The MetricsQL query that vmalert runs for the rule on one machine */
 export function ruleQuery(rule: AlertRule, machineId: string): string {
   const machineLabel = escapeLabelValue(machineId);
   if (rule.kind === 'query') return rule.query.replaceAll(MACHINE_PLACEHOLDER, () => machineLabel);
-  const subject: ValueSubject | StateSubject = ALERT_SUBJECTS[rule.subject];
-  const series = `${metricName(subject.metric)}{machine="${machineLabel}"}`;
+  const subject: Subject = ALERT_SUBJECTS[rule.subject];
+  const seriesOf = (metric: HistoryValue) => `${metricName(metric)}{machine="${machineLabel}"}`;
+  const series = seriesOf(subject.metric);
   if (subject.kind === 'state') return `${series} == ${subject.firesAt}`;
+  if (subject.kind === 'event') {
+    // The run must come just before the end. An alarm or an emergency stop in that time means a stop, for example a reset after an alarm.
+    const inWindow = (metric: HistoryValue) => `on(machine) max_over_time(${seriesOf(metric)}[${EVENT_WINDOW}]) == 1`;
+    return `${series} == 1 and ${inWindow('running')} unless ${inWindow('alarm')} unless ${inWindow('emergency')}`;
+  }
   return `${series} ${rule.check === 'above' ? '>' : '<'} ${rule.limit}`;
 }
 
@@ -106,8 +136,8 @@ export function hasMachinePlaceholder(query: string): boolean {
 /** The alert name, for example "Spindle load above 90%" */
 export function ruleName(rule: AlertRule | NewAlertRule): string {
   if (rule.kind === 'query') return rule.name.trim() || 'Custom query';
-  const subject: ValueSubject | StateSubject = ALERT_SUBJECTS[rule.subject];
-  if (subject.kind === 'state') return subject.name;
+  const subject: Subject = ALERT_SUBJECTS[rule.subject];
+  if (subject.kind !== 'value') return subject.name;
   return `${subject.name} ${rule.check} ${rule.limit}${subject.unitSuffix}`;
 }
 

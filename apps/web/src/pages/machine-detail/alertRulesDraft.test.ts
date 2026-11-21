@@ -59,6 +59,13 @@ describe('alert rules draft', () => {
     });
   });
 
+  it('keeps an event rule as it is, because a custom query has no event label and would send an "OK" message', () => {
+    const programEnded: SimpleAlertRule = { ...highLoad, subject: 'program-ended', limit: 0, forMinutes: 0 };
+    const draft = draftOf([programEnded]);
+
+    expect(toCustomQuery(draft, 'r1')).toEqual(draft);
+  });
+
   it('gives the save list without the keys', () => {
     const list = toSaveList(addRule(draftOf([highLoad]), 'simple'));
 
@@ -71,6 +78,10 @@ describe('alert rules draft', () => {
     expect(subjectPatch(offline, 'spindle-load')).toEqual({ subject: 'spindle-load', limit: 90 });
     expect(subjectPatch(highLoad, 'part-count')).toEqual({ subject: 'part-count' });
     expect(subjectPatch(highLoad, 'in-alarm')).toEqual({ subject: 'in-alarm' });
+  });
+
+  it('sets the minutes to 0 for an event such as "program ended", because it fires once at the first true check', () => {
+    expect(subjectPatch(highLoad, 'program-ended')).toEqual({ subject: 'program-ended', forMinutes: 0 });
   });
 
   describe('firstProblem', () => {

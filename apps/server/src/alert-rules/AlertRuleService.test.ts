@@ -139,7 +139,7 @@ describe('AlertRuleService', () => {
     await service.publish();
     expect(service.rulesOf('haas_1')).toHaveLength(3);
     expect(lastFile().groups[0].rules.map((rule: { alert: string }) => rule.alert))
-      .toEqual(['Not connected', 'In alarm', 'Spindle load above 90%']);
+      .toEqual(['In alarm', 'Emergency stop', 'Program ended']);
 
     service.removeMachine('haas_1');
     await service.publish();

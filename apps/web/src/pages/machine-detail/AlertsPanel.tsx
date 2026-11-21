@@ -1,15 +1,22 @@
 import type { MachineAlert } from '../../api/alerts';
 import { Panel } from '../../components/ui/Panel';
+import { ShowMoreFooter } from '../../components/ui/ShowMoreFooter';
 import { StatusDot } from '../../components/ui/StatusDot';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
+import { useShownItems } from '../../hooks/useShownItems';
 import { formatDateTime } from '../../utils/formatters';
-import { alertText, alertTone, firingFirst } from './alertList';
+import { alertText, alertTone, splitFiring } from './alertList';
 import { useMachineAlerts } from './useMachineAlerts';
+
+/** The list shows this many past alerts at first, and this many more for each click. The firing alerts always show. */
+export const PAST_ALERTS_PAGE_SIZE = 10;
 
 /** The alerts of the machine's alert rules (the Alert rules tab), in the last week */
 export function AlertsPanel({ machineId }: { machineId: string }) {
   const { alerts, loaded, failed } = useMachineAlerts(machineId);
-  const firingCount = alerts.filter(alert => alert.firing).length;
+  const { firing, past } = splitFiring(alerts);
+  const { shown: shownPast, total: pastCount, showMore } = useShownItems(past, PAST_ALERTS_PAGE_SIZE, machineId);
+  const firingCount = firing.length;
 
   return (
     <Panel
@@ -20,7 +27,12 @@ export function AlertsPanel({ machineId }: { machineId: string }) {
       {loaded && !failed && alerts.length === 0 && (
         <p className="m-0 px-5 py-4 text-zinc-300">No alerts in the last 7 days. Set the rules in the Alert rules tab below.</p>
       )}
-      {alerts.length > 0 && <AlertTable alerts={firingFirst(alerts)} />}
+      {alerts.length > 0 && (
+        <>
+          <AlertTable alerts={[...firing, ...shownPast]} />
+          <ShowMoreFooter shownCount={shownPast.length} total={pastCount} noun="past alerts" onShowMore={showMore} />
+        </>
+      )}
     </Panel>
   );
 }

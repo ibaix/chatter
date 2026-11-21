@@ -1,7 +1,7 @@
 /**
  * The machine values that have a history. GET /api/machine/:id/history/:value takes one of these.
  * A number (such as spindle-speed, or spindle-load in percent) is the average in each window.
- * A state (connected, running, alarm, emergency) is 1 or 0, so its average is the part of the window that it was on.
+ * A state (connected, running, alarm, emergency, program-ended) is 1 or 0, so its average is the part of the window that it was on.
  */
 export const HISTORY_VALUES = [
   'spindle-speed',
@@ -14,6 +14,7 @@ export const HISTORY_VALUES = [
   'running',
   'alarm',
   'emergency',
+  'program-ended',
 ] as const;
 
 export type HistoryValue = typeof HISTORY_VALUES[number];

@@ -3,6 +3,9 @@
 /** The answers that point to another address in the Location header. Chatter does not follow them, because a redirect changes a POST to a GET. */
 export const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 
+/** fetch refuses a header value with other characters, for example a token or a secret */
+export const HEADER_SAFE = /^[\x21-\x7e]*$/;
+
 export function isHttpAddress(text: string): boolean {
   try {
     const { protocol } = new URL(text);
