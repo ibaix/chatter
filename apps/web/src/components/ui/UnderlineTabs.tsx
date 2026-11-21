@@ -53,7 +53,7 @@ export function UnderlineTabs<T extends string>({ label, tabs, value, onChange, 
   };
 
   return (
-    <div role="tablist" aria-label={label} className={cn('flex gap-1 overflow-x-auto border-b border-zinc-800', className)}>
+    <div role="tablist" aria-label={label} className={cn('flex flex-wrap gap-x-1 border-b border-zinc-800', className)}>
       {tabs.map((tab, index) => {
         const isOpen = tab.id === value;
         return (

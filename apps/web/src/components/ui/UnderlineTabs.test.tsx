@@ -76,4 +76,13 @@ describe('UnderlineTabs', () => {
     expect(tab('Dashboard')).toHaveFocus();
     expect(tab('Dashboard')).toHaveAttribute('aria-selected', 'true');
   });
+
+  it('puts the tabs that do not fit on a new line, so no tab hides out of view on a phone', () => {
+    render(<Tabs />);
+
+    // jsdom has no layout, so the test reads the classes: the row wraps, and it does not scroll
+    const tablist = screen.getByRole('tablist');
+    expect(tablist).toHaveClass('flex-wrap');
+    expect(tablist).not.toHaveClass('overflow-x-auto');
+  });
 });
