@@ -9,7 +9,6 @@ import { CurrentJobPanel } from './CurrentJobPanel';
 import { MachineHeader } from './MachineHeader';
 import { MachineNotice } from './MachineNotice';
 import { MachineSections } from './MachineSections';
-import { ReportPanel } from './ReportPanel';
 import MachineHistoryChart from './MachineHistoryChart';
 
 interface MachineDetailPageProps {
@@ -52,20 +51,30 @@ function MachineDetailPage({ machines, isLoaded, chatterIsLost = false, onRemove
     <>
       <MachineHeader machine={machine} state={state} now={now} />
       <MachineNotice machine={machine} state={state} now={now} chatterIsLost={chatterIsLost} />
-      <div className="flex flex-wrap items-stretch gap-5">
-        <CurrentJobPanel machine={machine} state={state} now={now} chartValue={chartChoice.id} />
-        <MachineHistoryChart
-          machine={machine}
-          choices={chartChoices}
-          choice={chartChoice}
-          onChoose={setChosenChartValue}
-          className="flex-[2_1_28.75rem]"
-        />
-      </div>
-      <ReportPanel machineId={machine.id} machineType={machine.type} />
-      <AlertsPanel machineId={machine.id} />
-      {/* A new key for each machine, so the files and the open tab start again */}
-      <MachineSections key={machine.id} machine={machine} machines={machines} now={now} onUpdate={onUpdate} onRemove={remove} />
+      {/* A new key for each machine, so the files start again */}
+      <MachineSections
+        key={machine.id}
+        machine={machine}
+        machines={machines}
+        now={now}
+        onUpdate={onUpdate}
+        onRemove={remove}
+        dashboard={
+          <>
+            <div className="flex flex-wrap items-stretch gap-5">
+              <CurrentJobPanel machine={machine} state={state} now={now} chartValue={chartChoice.id} />
+              <MachineHistoryChart
+                machine={machine}
+                choices={chartChoices}
+                choice={chartChoice}
+                onChoose={setChosenChartValue}
+                className="flex-[2_1_28.75rem]"
+              />
+            </div>
+            <AlertsPanel machineId={machine.id} />
+          </>
+        }
+      />
     </>
   );
 }
