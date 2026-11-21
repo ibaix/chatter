@@ -45,7 +45,7 @@ An **Admin** can delete a machine from Chatter. Chatter then stops reading the m
 
 1. Click the **Settings** tab of the machine.
 2. In the **Delete machine** panel at the bottom, click **Delete machine**.
-3. In the box, type `delete`. Then click **Delete the machine**.
+3. In the box, type `DELETE`. Then click **Delete the machine**.
 
 ## 4. Add users and give them roles
 
