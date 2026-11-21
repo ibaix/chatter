@@ -1,28 +1,26 @@
 import type { ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useCan } from '../../components/CurrentUser';
-import { Notice } from '../../components/ui/Notice';
 import { tabPanelProps } from '../../components/ui/tabPanel';
 import { UnderlineTabs, type TabItem } from '../../components/ui/UnderlineTabs';
 import type { Machine, MachineUpdate, ToolTable } from '../../types';
 import { AlertRulesTab } from './AlertRulesTab';
-import { FilesTab } from './FilesTab';
+import { FilesSection } from './FilesSection';
 import { MachineSettingsTab } from './MachineSettingsTab';
 import { ReportPanel } from './ReportPanel';
 import { ToolTableTab } from './ToolTableTab';
-import { UploadHistoryTab } from './UploadHistoryTab';
 import { useAlertRules } from './useAlertRules';
 import { useMachineFiles } from './useMachineFiles';
 import { useUploadHistory } from './useUploadHistory';
-import { useUploadMessages, type UploadMessages } from './useUploadMessages';
+import { useUploadMessages } from './useUploadMessages';
 
-type SectionId = 'dashboard' | 'report' | 'files' | 'history' | 'tools' | 'alerts' | 'settings';
+type SectionId = 'dashboard' | 'report' | 'files' | 'tools' | 'alerts' | 'settings';
 
 const ID_PREFIX = 'machine-sections';
 /** The address keeps the open tab (for example /machine/m1?tab=report), so a reload or a link opens the same tab */
 const TAB_PARAM = 'tab';
 /** The tabs that hold a list or a form. They share one card. Dashboard and Report hold cards of their own. */
-const CARD_TABS: readonly SectionId[] = ['files', 'history', 'tools', 'alerts', 'settings'];
+const CARD_TABS: readonly SectionId[] = ['files', 'tools', 'alerts', 'settings'];
 
 /** Brother and Haas machines send their tool table. Only Brother tells which pocket holds each tool. */
 function toolTableOf(machine: Machine): { toolTable: ToolTable | undefined; hasPocketInfo: boolean } {
@@ -43,7 +41,7 @@ interface MachineSectionsProps {
   dashboard: ReactNode;
 }
 
-/** The tabs under the machine name: the dashboard, the report, files, upload history, tool table, alert rules and settings */
+/** The tabs under the machine name: the dashboard, the report, files, tool table, alert rules and settings */
 export function MachineSections({ machine, machines, now, onUpdate, onRemove, dashboard }: MachineSectionsProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const openTab = searchParams.get(TAB_PARAM);
@@ -59,7 +57,6 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'report', label: 'Report' },
     { id: 'files', label: 'Files' },
-    { id: 'history', label: 'Upload history', count: history.historyFiles.length },
     ...(toolCount > 0 ? [{ id: 'tools' as const, label: 'Tool table', count: toolCount }] : []),
     { id: 'alerts', label: 'Alert rules', count: alertRules.saved?.length },
     ...(canManageMachines ? [{ id: 'settings' as const, label: 'Machine settings' }] : []),
@@ -81,17 +78,15 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
         {shownTab === 'report' && <ReportPanel machineId={machine.id} machineType={machine.type} />}
         {CARD_TABS.includes(shownTab) && (
           <div className="rounded-xl border border-zinc-800 bg-zinc-900">
-            {(shownTab === 'files' || shownTab === 'history') && <UploadMessageNotices messages={messages} />}
             {shownTab === 'files' && (
-              <FilesTab machineId={machine.id} files={files} messages={messages} onUploaded={reloadAfterUpload} now={now} />
-            )}
-            {shownTab === 'history' && (
-              <UploadHistoryTab
+              <FilesSection
                 machineId={machine.id}
                 machineName={machine.name}
+                files={files}
                 history={history}
                 messages={messages}
                 onUploaded={reloadAfterUpload}
+                now={now}
               />
             )}
             {shownTab === 'tools' && toolTable && (
@@ -114,13 +109,3 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
   );
 }
 
-/** The result of the last upload, above the files and the upload history */
-function UploadMessageNotices({ messages }: { messages: UploadMessages }) {
-  if (!messages.error && !messages.success) return null;
-  return (
-    <div className="px-4 pt-3">
-      {messages.error && <Notice tone="error" title={messages.error} onClose={messages.clear} />}
-      {messages.success && <Notice tone="success" title={messages.success} onClose={messages.clear} />}
-    </div>
-  );
-}
