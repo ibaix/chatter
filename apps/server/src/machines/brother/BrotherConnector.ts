@@ -2,6 +2,7 @@ import net from 'net';
 import { BaseMachineConnector } from '../BaseMachineConnector.js';
 import { PollTimingRecorder } from '../pollTimings.js';
 import { tuneMachineSocket } from '../machineSocket.js';
+import { createLogger } from '../../logging/logger.js';
 import type {
   BrotherMachineConfig,
   BrotherMachineStatus,
@@ -16,7 +17,21 @@ import type {
   MachineDataSnapshot,
 } from '../../types/index.js';
 
+const log = createLogger('brother');
+
 const DEFAULT_DATA_PORT = 10000;
+
+/**
+ * Chatter closes the data connection on purpose and opens it again every 60 seconds, at the start of a poll.
+ * This renews the session on the control, and limits how long a bad state of that session can last.
+ * A Brother serves one client at a time, so the close is an orderly close (FIN), and the control frees its
+ * client slot before the new connect. It does not help with a half-open session on the control after the Pi
+ * lost power: TCP keepalive and the timeout of the control cover that.
+ */
+export const BROTHER_RECONNECT_MS = 60_000;
+
+/** The time that an orderly close can take before Chatter destroys the socket */
+const ORDERLY_CLOSE_MS = 2000;
 const DEFAULT_UNIT = 'in';
 
 const PANEL_MODES = ['MANUAL', 'MDI', 'MEMORY', 'EDIT'];
@@ -187,6 +202,8 @@ export class BrotherConnector extends BaseMachineConnector {
   public macros: MacroConfig[];
 
   private socket: net.Socket | null = null;
+  /** When connect() opened the connection */
+  private connectedAt: number | null = null;
   private data: BrotherMachineData = {};
   private prevData: BrotherMachineData = {};
   private toolTable: ToolTable = {};
@@ -271,9 +288,32 @@ export class BrotherConnector extends BaseMachineConnector {
       socket.connect(this.dataPort, this.host, () => {
         socket.removeListener('timeout', onConnectTimeout);
         this.connected = true;
+        this.connectedAt = Date.now();
         this.clearErrors();
         resolve();
       });
+    });
+  }
+
+  /**
+   * Close the connection with a FIN, and wait until the control closes its side too, for at most ORDERLY_CLOSE_MS.
+   * Then the control has freed its one client slot for the next connect.
+   */
+  private async closeInOrder(): Promise<void> {
+    const socket = this.socket;
+    this.socket = null;
+    this.connected = false;
+    if (!socket) return;
+    // The listeners of connect() would report an error of the closing socket as an error of the machine
+    socket.removeAllListeners('error');
+    socket.on('error', () => socket.destroy());
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(() => socket.destroy(), ORDERLY_CLOSE_MS);
+      socket.once('close', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.end();
     });
   }
 
@@ -418,11 +458,7 @@ export class BrotherConnector extends BaseMachineConnector {
 
   /** Connect when needed, read the machine, and keep the values */
   private async pollMachine(): Promise<void> {
-    if (!this.socket || !this.connected) {
-      if (!(await this.ensureConnected())) return;
-      // The tools can have changed while the machine was not connected
-      this.readToolsAtNextPoll();
-    }
+    if (!(await this.connectForPoll())) return;
 
     this.prevData = { ...this.data };
 
@@ -434,14 +470,39 @@ export class BrotherConnector extends BaseMachineConnector {
       // A tool change: show the offsets of the new tool at the next poll
       this.readToolsAtNextPoll();
     }
+    this.saveTools(responses);
+
+    this.updatePollTime();
+    this.emitDataChanges(this.prevData, this.data);
+  }
+
+  /**
+   * Connect when not connected, and make the planned reconnect when it is time. False when the connect fails.
+   * It runs at the start of a poll, so no command waits for a reply during the planned reconnect.
+   */
+  private async connectForPoll(): Promise<boolean> {
+    const planned = this.connected && this.connectedAt !== null && Date.now() - this.connectedAt >= BROTHER_RECONNECT_MS;
+    if (planned) await this.closeInOrder();
+    if (this.socket && this.connected) return true;
+
+    if (!(await this.ensureConnected())) return false;
+    if (planned) {
+      this.timings.recordPlannedReconnect();
+      log.debug('Planned reconnect', { machine: this.id });
+    } else {
+      // The tools can have changed while the machine was not connected
+      this.readToolsAtNextPoll();
+    }
+    return true;
+  }
+
+  /** Keep the tool table and the tool data that this poll read */
+  private saveTools(responses: Record<string, ParsedResponse>): void {
     const atcResponse = this.atcCommand ? responses[this.atcCommand] : undefined;
     const toolDataResponse = responses[this.toolDataCommand];
     if (atcResponse) this.updatePotTools(atcResponse);
     if (toolDataResponse) this.updateToolOffsets(toolDataResponse);
     if (atcResponse || toolDataResponse) this.updateToolTable();
-
-    this.updatePollTime();
-    this.emitDataChanges(this.prevData, this.data);
   }
 
   /** Send a command, and record how long the machine took to answer */

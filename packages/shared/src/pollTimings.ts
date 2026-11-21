@@ -27,6 +27,8 @@ export interface PollTimings {
     /** The optional commands that this poll did not send, because too little time was left */
     skipped: string[];
   };
+  /** The times that Chatter closed the connection on purpose and opened it again, to renew the session on the control */
+  plannedReconnects: { count: number; lastAt: string | null };
 }
 
 /** The slowest commands of the last poll, the slowest first */

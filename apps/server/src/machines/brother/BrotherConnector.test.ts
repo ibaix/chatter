@@ -1,8 +1,9 @@
 import net from 'net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { BrotherConnector, NO_REPLY_ERROR, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
+import { BROTHER_RECONNECT_MS, BrotherConnector, NO_REPLY_ERROR, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
 import type { BrotherMachineConfig, DataItemTransform } from '../../types/index.js';
-import { captureLog } from '../../logging/testSupport.js';
+import { captureLog, type CapturedLog } from '../../logging/testSupport.js';
+import { ConnectionLog } from '../../logging/ConnectionLog.js';
 
 /**
  * Replies of a Brother control to each command, matching the Python test fixtures
@@ -925,5 +926,138 @@ describe('Brother time budget in a poll', () => {
     const status = await machine.poll();
 
     expect(status.pollTimings!.lastPoll.skipped).toEqual([]);
+  });
+});
+
+describe('Brother planned reconnect every 60 seconds, with a real TCP connection', () => {
+  let server: net.Server | null = null;
+  let connector: BrotherConnector;
+  let log: CapturedLog;
+  /** What the machine side saw, in order: "connect 1", "end 1" (an orderly close from Chatter), "connect 2", ... */
+  let events: string[];
+  /** Each command that the machine got */
+  let commands: string[];
+  /** The tool in the spindle, in the PDSP reply */
+  let spindleTool: number;
+  /** Called with each command before the machine answers it */
+  let onCommand: (command: string) => void;
+
+  /** A fake Brother that tells what it sees */
+  async function startRecordingBrother(): Promise<void> {
+    let connections = 0;
+    server = await startServer(socket => {
+      const id = ++connections;
+      events.push(`connect ${id}`);
+      socket.on('end', () => events.push(`end ${id}`));
+      socket.on('data', chunk => {
+        const command = /CLOD\s+(\S+)/.exec(chunk.toString('ascii'))?.[1] ?? '';
+        commands.push(command);
+        onCommand(command);
+        const reply = command === 'PDSP' ? pdspWithTool(spindleTool) : MOCK_RESPONSES[command];
+        socket.write('%' + (reply ?? `RLOD    ${command.padEnd(8)}01\r\n\r\n00%`));
+      });
+    });
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: portOf(server), timeout: 1000 });
+  }
+
+  /** A poll, and then what the connection log of the poller writes for it */
+  async function pollAndLog(connectionLog: ConnectionLog) {
+    const status = await connector.poll();
+    connectionLog.record(connector);
+    return status;
+  }
+
+  beforeEach(() => {
+    // Only the clock is fake, so the sockets work as usual
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-21T08:00:00Z'));
+    log = captureLog();
+    events = [];
+    commands = [];
+    spindleTool = 10;
+    onCommand = () => {};
+  });
+
+  afterEach(async () => {
+    log.restore();
+    vi.useRealTimers();
+    connector?.disconnect();
+    if (server) await closeServer(server);
+    server = null;
+  });
+
+  it('closes the connection in order and opens a new one at the first poll after 60 seconds', async () => {
+    await startRecordingBrother();
+    await connector.poll();
+    vi.setSystemTime(Date.now() + 59_000);
+    await connector.poll();
+    expect(events).toEqual(['connect 1']);
+
+    vi.setSystemTime(Date.now() + 1_000);
+    const status = await connector.poll();
+
+    await vi.waitFor(() => expect(events).toEqual(['connect 1', 'end 1', 'connect 2']));
+    expect(status.connected).toBe(true);
+    expect(status.errors).toEqual([]);
+    expect(status.data.partCount).toBe(78);
+    expect(BROTHER_RECONNECT_MS).toBe(60_000);
+  });
+
+  it('does not show the machine offline, and writes no connection log line for it', async () => {
+    await startRecordingBrother();
+    const connectionLog = new ConnectionLog();
+    await pollAndLog(connectionLog);
+    const linesBefore = log.text('info') + log.text('warn');
+
+    vi.setSystemTime(Date.now() + BROTHER_RECONNECT_MS);
+    const status = await pollAndLog(connectionLog);
+    await pollAndLog(connectionLog);
+
+    expect(status.connected).toBe(true);
+    expect(log.text('info') + log.text('warn')).toBe(linesBefore);
+    expect(log.text('debug')).toMatch(/Planned reconnect.*machine=b1/);
+  });
+
+  it('counts the planned reconnects in the poll times', async () => {
+    await startRecordingBrother();
+    await connector.poll();
+
+    vi.setSystemTime(Date.now() + BROTHER_RECONNECT_MS);
+    const status = await connector.poll();
+
+    expect(status.pollTimings?.plannedReconnects).toEqual({ count: 1, lastAt: new Date(Date.now()).toISOString() });
+  });
+
+  it('does not read the tool table again because of a planned reconnect', async () => {
+    await startRecordingBrother();
+    await connector.poll();
+    vi.setSystemTime(Date.now() + 40_000);
+    spindleTool = 7;
+    await connector.poll();
+    // The tool change: this poll reads the tool table
+    await connector.poll();
+    commands = [];
+
+    vi.setSystemTime(Date.now() + 20_000);
+    await connector.poll();
+
+    await vi.waitFor(() => expect(events).toContain('connect 2'));
+    expect(commands).not.toContain('ATCTL');
+    expect(commands).not.toContain('TOLNI1');
+  });
+
+  it('does not stop a poll that runs at the 60 s mark, and reconnects at the next poll', async () => {
+    await startRecordingBrother();
+    await connector.poll();
+    vi.setSystemTime(Date.now() + 59_000);
+    onCommand = command => { if (command === 'MEM') vi.setSystemTime(Date.now() + 2_000); };
+
+    const status = await connector.poll();
+
+    expect(status.errors).toEqual([]);
+    expect(events).toEqual(['connect 1']);
+    onCommand = () => {};
+    await connector.poll();
+    await vi.waitFor(() => expect(events).toEqual(['connect 1', 'end 1', 'connect 2']));
   });
 });

@@ -54,6 +54,7 @@ export class PollTimingRecorder {
   private lastPoll: PollTimings['lastPoll'] | null = null;
   private limitMs = 0;
   private lastWarningAt = -Infinity;
+  private readonly plannedReconnects: PollTimings['plannedReconnects'] = { count: 0, lastAt: null };
 
   /** `now` is for tests */
   constructor(private readonly machineId: string, private readonly now: () => number = Date.now) {}
@@ -96,6 +97,12 @@ export class PollTimingRecorder {
     return Math.max(lastMs, avgMs);
   }
 
+  /** The connector closed the connection on purpose, and opens it again */
+  recordPlannedReconnect(): void {
+    this.plannedReconnects.count++;
+    this.plannedReconnects.lastAt = new Date(this.now()).toISOString();
+  }
+
   /** The time of the slowest command of this poll so far. A machine that is slow now is slow for the next command too. */
   slowestInPollMs(): number {
     return Math.max(0, ...Object.values(this.current.commands));
@@ -125,6 +132,7 @@ export class PollTimingRecorder {
       poll: this.polls.stats(),
       commands: Object.fromEntries([...this.commands].map(([command, times]) => [command, times.stats()])),
       lastPoll: { ...this.lastPoll, commands: { ...this.lastPoll.commands }, skipped: [...this.lastPoll.skipped] },
+      plannedReconnects: { ...this.plannedReconnects },
     };
   }
 

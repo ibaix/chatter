@@ -109,6 +109,16 @@ describe('PollTimingRecorder', () => {
     expect(recorder.slowestInPollMs()).toBe(300);
   });
 
+  it('counts the planned reconnects, with the time of the last one', async () => {
+    await poll(recorder, clock, { PANEL: 10 });
+    expect(recorder.snapshot()!.plannedReconnects).toEqual({ count: 0, lastAt: null });
+
+    recorder.recordPlannedReconnect();
+    recorder.recordPlannedReconnect();
+
+    expect(recorder.snapshot()!.plannedReconnects).toEqual({ count: 2, lastAt: new Date(clock.now()).toISOString() });
+  });
+
   it('writes the times of each poll at debug level', async () => {
     await poll(recorder, clock, { PANEL: 120, MEM: 80 });
 
