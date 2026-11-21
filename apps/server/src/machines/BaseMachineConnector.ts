@@ -96,6 +96,14 @@ export abstract class BaseMachineConnector extends EventEmitter {
     this.errors.push(message);
   }
 
+  /**
+   * The poll ran out of time, and the scheduler disconnected the machine. The error tells why it is offline,
+   * because the poll itself has not ended yet and so has not given a reason.
+   */
+  reportPollTimeout(timeoutMs: number): void {
+    this.addError(`The machine did not answer all requests in ${Math.round(timeoutMs / 1000)} seconds. Chatter disconnected, and connects again.`);
+  }
+
   protected clearErrors(): void {
     this.errors = [];
   }
