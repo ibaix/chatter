@@ -168,6 +168,16 @@ describe('AlertRulesTab', () => {
     expect(screen.getByRole('textbox', { name: 'Query' })).toHaveValue('chatter_spindle_load{machine="$machine"} > 90');
   });
 
+  it('shows the query of an event rule, but cannot change it to a custom query', async () => {
+    await renderTab([{ ...HIGH_LOAD, subject: 'program-ended', limit: 0, forMinutes: 0 }]);
+
+    fireEvent.click(screen.getByText('Expert: show the query'));
+
+    expect(screen.getByText(/^chatter_program_ended\{machine="\$machine"\} == 1 and /)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Change to a custom query' })).not.toBeInTheDocument();
+    expect(screen.getByText(/An event rule cannot change to a custom query/)).toBeInTheDocument();
+  });
+
   it('copies the saved rules to the chosen machines', async () => {
     await renderTab();
     vi.mocked(copyAlertRules).mockResolvedValue({ copied: 2, notCopied: 0 });

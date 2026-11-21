@@ -76,11 +76,19 @@ export function removeRule(draft: DraftRule[], key: string): DraftRule[] {
 /** Turn a simple rule into a custom query that does the same check, so an expert can start from it */
 export function toCustomQuery(draft: DraftRule[], key: string): DraftRule[] {
   return draft.map(rule => {
-    if (rule.key !== key || rule.kind !== 'simple') return rule;
+    if (rule.key !== key || !canBeCustomQuery(rule)) return rule;
     const { key: ruleKey, id, enabled, forMinutes, severity } = rule;
     const query = ruleQuery({ ...rule, id: id ?? '' }, MACHINE_PLACEHOLDER);
     return { key: ruleKey, id, kind: 'query', enabled, name: ruleName(rule), query, forMinutes, severity };
   });
+}
+
+/**
+ * True for a simple rule that is not an event. A custom query has no event label,
+ * so a "program ended" query would send an "OK" message after each program end.
+ */
+export function canBeCustomQuery(rule: DraftRule): rule is Extract<DraftRule, { kind: 'simple' }> {
+  return rule.kind === 'simple' && !isEventSubject(rule.subject);
 }
 
 /** How many rules are new, changed or removed since the last save */

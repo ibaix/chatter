@@ -19,7 +19,7 @@ import { ChoiceMenu, type Choice } from '../../components/ui/ChoiceMenu';
 import { DocsLink } from '../../components/ui/DocsLink';
 import { Field, TextInput } from '../../components/ui/fields';
 import { TrashIcon } from '../../components/ui/icons';
-import { subjectPatch, type DraftRule, type RulePatch } from './alertRulesDraft';
+import { canBeCustomQuery, subjectPatch, type DraftRule, type RulePatch } from './alertRulesDraft';
 
 type SimpleDraft = Extract<DraftRule, { kind: 'simple' }>;
 type QueryDraft = Extract<DraftRule, { kind: 'query' }>;
@@ -156,7 +156,12 @@ function ExpertQuery({ rule, canChange, onMakeCustomQuery }: Pick<AlertRuleRowPr
       <summary className="w-fit cursor-pointer hover:text-zinc-100">Expert: show the query</summary>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <code className="rounded bg-zinc-950 px-2 py-1 font-mono text-zinc-100">{query}</code>
-        {canChange && <Button size="sm" variant="quiet" onClick={onMakeCustomQuery}>Change to a custom query</Button>}
+        {canChange && canBeCustomQuery(rule) && (
+          <Button size="sm" variant="quiet" onClick={onMakeCustomQuery}>Change to a custom query</Button>
+        )}
+        {canChange && !canBeCustomQuery(rule) && (
+          <span>An event rule cannot change to a custom query. A custom query sends an &quot;OK&quot; message after each event.</span>
+        )}
       </div>
     </details>
   );

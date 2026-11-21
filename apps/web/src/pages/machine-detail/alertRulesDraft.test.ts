@@ -59,6 +59,13 @@ describe('alert rules draft', () => {
     });
   });
 
+  it('keeps an event rule as it is, because a custom query has no event label and would send an "OK" message', () => {
+    const programEnded: SimpleAlertRule = { ...highLoad, subject: 'program-ended', limit: 0, forMinutes: 0 };
+    const draft = draftOf([programEnded]);
+
+    expect(toCustomQuery(draft, 'r1')).toEqual(draft);
+  });
+
   it('gives the save list without the keys', () => {
     const list = toSaveList(addRule(draftOf([highLoad]), 'simple'));
 
