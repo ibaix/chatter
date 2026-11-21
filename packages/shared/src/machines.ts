@@ -1,4 +1,5 @@
 import type { MachineData, MachinePath, MacroConfig, ToolTable } from './machineData.js';
+import type { PollTimings } from './pollTimings.js';
 
 // ============================================
 // Machine Type Definitions
@@ -27,6 +28,8 @@ export interface BaseMachine {
   /** Only whether an FTP password is saved. The server never sends the password itself. */
   hasFtpPassword?: boolean;
   macros?: MacroConfig[];
+  /** How long the polls take. Only connectors that measure their polls send it. */
+  pollTimings?: PollTimings;
 }
 
 // ============================================

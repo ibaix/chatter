@@ -13,3 +13,4 @@ export * from './alertRules.js';
 export * from './running.js';
 export * from './notifications.js';
 export * from './ignorePatterns.js';
+export * from './pollTimings.js';
