@@ -156,13 +156,23 @@ describe('AlertNotifier', () => {
       expect(outbox.takeDue(NOW)).toEqual([]);
     });
 
-    it('turns a waiting start into one ignored combined message when the combined text matches', () => {
+    it('checks only the start text for a combined message, so a pattern for end messages does not drop a waiting start', () => {
       channels = [channel('phones', { ignorePatterns: ['ended 9:03'] })];
       notifier.alertChanged(change('started'));
 
       notifier.alertChanged(change('ended'));
 
-      expect(statuses()).toEqual(['phones combined ignored: Ignored by the pattern "ended 9:03"']);
+      expect(statuses()).toEqual(['phones combined waiting: null']);
+    });
+
+    it('turns a waiting start into one ignored combined message when the start text matches a pattern added since', () => {
+      channels = [channel('phones')];
+      notifier.alertChanged(change('started'));
+      channels = [channel('phones', { ignorePatterns: ['In alarm'] })];
+
+      notifier.alertChanged(change('ended'));
+
+      expect(statuses()).toEqual(['phones combined ignored: Ignored by the pattern "In alarm"']);
       expect(outbox.takeDue(NOW)).toEqual([]);
     });
 

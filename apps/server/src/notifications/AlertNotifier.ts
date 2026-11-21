@@ -31,7 +31,7 @@ export interface NotifierOptions {
  * A channel that did not get the start message gets no end message, so nobody reads "OK" for an alert they never saw.
  *
  * A message whose text matches an ignore pattern of the channel stays in the list as "ignored", and the channel does not get it.
- * When the start of an alert was ignored, its end is ignored too.
+ * When the start of an alert was ignored, its end is ignored too. A combined message is checked with the start text only.
  *
  * An event alert, such as "program ended", gets only its start message. It clears by itself, so its end tells nothing,
  * and a start that still waits goes as it is, not as a combined message.
@@ -76,9 +76,10 @@ export class AlertNotifier implements AlertChangeListener {
         continue;
       }
       if (startStatus === 'waiting') {
-        const combined = message('combined');
-        const pattern = firstMatchingPattern(channel.ignorePatterns, combined.text);
-        if (outbox.combineWithWaitingStart(channel.id, alertId, combined, pattern === null ? undefined : ignoredBy(pattern))) continue;
+        // Only the start text: a pattern for the end messages, such as "ended", must not drop an alert that nobody saw
+        const pattern = firstMatchingPattern(channel.ignorePatterns, message('started').text);
+        const ignoredDetail = pattern === null ? undefined : ignoredBy(pattern);
+        if (outbox.combineWithWaitingStart(channel.id, alertId, message('combined'), ignoredDetail)) continue;
       }
       // The start went, failed, went in a "more" message, or is being sent now
       queueOrIgnore(message('ended'));
