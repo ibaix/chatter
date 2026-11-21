@@ -16,6 +16,7 @@ import { InfoCard } from '../../components/ui/InfoCard';
 import { Notice } from '../../components/ui/Notice';
 import { Panel } from '../../components/ui/Panel';
 import { formatSize } from '../../utils/formatters';
+import { HelperLogPanel } from './HelperLogPanel';
 import { ReportPending } from './ReportPending';
 import { isHelperWorking, UpdateStatusPanel, type UpdateChanges } from './UpdateStatusPanel';
 import { useServerReport } from './useServerReport';
@@ -46,6 +47,7 @@ export function UpdatesTab() {
         </>
       )}
       <GitHubCheckPanel report={report} changes={changes} />
+      {report.helper && <HelperLogPanel />}
     </>
   );
 }

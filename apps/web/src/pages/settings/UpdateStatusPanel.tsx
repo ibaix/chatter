@@ -76,7 +76,10 @@ function restartNotice(progress: BusyProgress): StatusNotice {
     details: (
       <span className="flex flex-col gap-1">
         <span>Make sure that the Pi has power and a network connection. This page continues to ask.</span>
-        <span>To see what the update helper did, connect to the Pi with SSH and run this command:</span>
+        <span>
+          When Chatter is back, the Update helper log on this page shows what the helper did. With an older card image,
+          connect to the Pi with SSH and run this command:
+        </span>
         <CommandLine command="journalctl -u chatter-update" />
       </span>
     ),

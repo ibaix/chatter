@@ -115,7 +115,8 @@ describe('UpdatesTab', () => {
 
     expect(screen.getByText('edge-1a2b3c4')).toBeInTheDocument();
     expect(screen.getByText('Development build: it cannot update from here')).toBeInTheDocument();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    // Only the helper log can be read: no update button
+    expect(screen.getAllByRole('button').map(button => button.textContent)).toEqual(['Show the log']);
   });
 
   it('shows why the report did not load', async () => {
