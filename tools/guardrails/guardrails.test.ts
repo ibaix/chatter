@@ -5,6 +5,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { portsOpened, type ComposePort } from './composePorts';
 import { anchorsOf, docsLinksIn, docsPageFile } from './docsLinks';
 
 const ROOT = join(import.meta.dirname, '../..');
@@ -13,7 +14,7 @@ const trackedFiles = () =>
   execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n').filter(Boolean);
 
 interface ComposeService {
-  ports?: (string | { published?: string | number; host_ip?: string })[];
+  ports?: ComposePort[];
   volumes?: string[];
 }
 interface ComposeFile {
@@ -62,7 +63,8 @@ describe('user data', () => {
 
 describe('closed ports', () => {
   // VictoriaMetrics (8428), vmalert (8880) and the alert port (3002) have no login.
-  const noLoginPorts = ['8428', '8880', '3002'];
+  const noLoginPorts = [8428, 8880, 3002];
+  const thisComputerOnly = ['127.0.0.1', 'localhost', '::1'];
   const composeFiles = trackedFiles().filter(file => /(^|\/)docker-compose[^/]*\.ya?ml$/.test(file));
 
   it('finds the compose files', () => {
@@ -78,10 +80,11 @@ describe('closed ports', () => {
   it.each(composeFiles)('publishes a port with no login in %s only to this computer', file => {
     const opened = Object.entries(compose(file).services ?? {}).flatMap(([service, { ports = [] }]) =>
       ports
-        .map(port => (typeof port === 'string' ? port : `${port.host_ip ?? ''}:${port.published ?? ''}`))
-        .filter(port => noLoginPorts.some(noLogin => port.split(':').includes(noLogin)))
-        .filter(port => !port.startsWith('127.0.0.1:'))
-        .map(port => `${service}: ${port}`),
+        .filter(port => {
+          const { hostIp, containerPorts } = portsOpened(port);
+          return !thisComputerOnly.includes(hostIp) && containerPorts.some(p => noLoginPorts.includes(p));
+        })
+        .map(port => `${service}: ${JSON.stringify(port)}`),
     );
     expect(opened).toEqual([]);
   });
