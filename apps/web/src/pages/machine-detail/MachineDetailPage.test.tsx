@@ -520,7 +520,7 @@ describe('MachineDetailPage', () => {
       renderPage({ onRemove });
       const dialog = await openDeleteDialog();
       const confirm = within(dialog).getByRole('button', { name: 'Delete the machine' });
-      const box = within(dialog).getByLabelText('Type delete to delete the machine');
+      const box = within(dialog).getByLabelText('Type DELETE, to enable machine removal');
 
       expect(confirm).toBeDisabled();
       fireEvent.change(box, { target: { value: 'remove' } });

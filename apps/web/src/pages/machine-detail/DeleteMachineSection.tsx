@@ -39,7 +39,7 @@ function DeleteMachineDialog({ machineName }: { machineName: string }) {
         Chatter stops reading this machine and deletes its spindle speed history. You cannot undo this.
       </Dialog.Message>
       <div className="flex flex-col gap-1.5 px-2 pb-2">
-        <label htmlFor={inputId} className="text-xs font-semibold text-zinc-200">Type {CONFIRM_WORD} to delete the machine</label>
+        <label htmlFor={inputId} className="text-xs font-semibold text-zinc-200">Type DELETE, to enable machine removal</label>
         <input
           id={inputId}
           value={typed}
