@@ -1,6 +1,7 @@
 import net from 'net';
 import { BaseMachineConnector } from '../BaseMachineConnector.js';
 import { PollTimingRecorder } from '../pollTimings.js';
+import { tuneMachineSocket } from '../machineSocket.js';
 import type {
   BrotherMachineConfig,
   BrotherMachineStatus,
@@ -244,6 +245,7 @@ export class BrotherConnector extends BaseMachineConnector {
       this.socket = socket;
       // The same time limit is for the connect and, in sendCommand, for each reply
       socket.setTimeout(this.timeout);
+      tuneMachineSocket(socket);
 
       // Only for the connect. After it, a timeout means that a command got no reply (see sendCommand).
       const onConnectTimeout = () => {

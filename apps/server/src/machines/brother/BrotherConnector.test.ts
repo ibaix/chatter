@@ -613,6 +613,22 @@ describe('Brother connection problems, with a real TCP connection', () => {
   });
 });
 
+describe('Brother socket options', () => {
+  it('turns on TCP keepalive and sends each command at once', async () => {
+    vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) { return this; });
+    const keepAlive = vi.spyOn(net.Socket.prototype, 'setKeepAlive');
+    const noDelay = vi.spyOn(net.Socket.prototype, 'setNoDelay');
+    const connector = newConnector({ id: 'b1', host: '127.0.0.1', timeout: 60_000 });
+    const connecting = connector.connect();
+
+    connector.disconnect();
+    await connecting.catch(() => {});
+
+    expect(keepAlive).toHaveBeenCalledWith(true, expect.any(Number));
+    expect(noDelay).toHaveBeenCalledWith(true);
+  });
+});
+
 describe('Brother command when the connection closes', () => {
   let server: net.Server | null = null;
   let connector: BrotherConnector;
