@@ -38,6 +38,15 @@ The **Alarm** column on the **Machines** page tells why Chatter cannot reach the
 
 A Pi on the network cannot see which other program is connected to the machine. To find it, look at each computer that can connect to the machine.
 
+### The tool table of a Brother
+
+The tool table of a Brother is a large read, so Chatter does not read it in each poll. Chatter reads it:
+
+- When the machine runs no program, and the last read is more than 10 minutes old. Chatter never reads it automatically while a program runs. If the control sends no run state, Chatter reads it only when the spindle is stopped.
+- When you click **Sync** in the **Tool table** tab of the machine. This also works while a program runs. Each user can click **Sync**, one time in 30 seconds for each machine.
+
+The tab shows the time of the last read (**Synced 10:42**), or **Not synced yet** before the first read. Until the next read, the tab shows the last values. If a read fails, the tab shows why.
+
 ## 3. Set up FTP on each machine
 
 Chatter uses FTP to show, send and download the program files on a machine. Do these steps for each machine:
