@@ -61,7 +61,8 @@ function renderPage({
   role = 'admin' as Role,
   machine = testMachine(),
   machines = [machine],
-}: { address?: string; role?: Role; machine?: Machine; machines?: Machine[] } = {}) {
+  onRemove = vi.fn(),
+}: { address?: string; role?: Role; machine?: Machine; machines?: Machine[]; onRemove?: (id: string) => Promise<boolean> } = {}) {
   const page = (shownMachines: Machine[]) => (
     <CurrentUserContext.Provider value={{ username: 'sam', role }}>
       <Dialog.Provider>
@@ -69,7 +70,7 @@ function renderPage({
           <Routes>
             <Route
               path="/machine/:id"
-              element={<MachineDetailPage machines={shownMachines} isLoaded onRemove={vi.fn()} onUpdate={vi.fn()} />}
+              element={<MachineDetailPage machines={shownMachines} isLoaded onRemove={onRemove} onUpdate={vi.fn()} />}
             />
           </Routes>
           <AddressSpy />
@@ -455,7 +456,7 @@ describe('MachineDetailPage', () => {
       }
     });
 
-    it('shows an admin the machine settings and the alert rules, with a menu to jump to each', async () => {
+    it('shows an admin three panels, Machine, Alert rules and Delete machine, with no side menu', async () => {
       vi.mocked(fetchAlertRules).mockResolvedValue([OFFLINE_RULE]);
       renderPage();
 
@@ -465,9 +466,9 @@ describe('MachineDetailPage', () => {
       expect(within(machineSection).getByRole('button', { name: 'Save changes' })).toBeInTheDocument();
       const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
       expect(await within(rulesSection).findByText(/Click a word in a rule to change it/)).toBeInTheDocument();
-      const menu = screen.getByRole('navigation', { name: 'Settings sections' });
-      expect(within(menu).getByRole('link', { name: 'Machine' })).toHaveAttribute('href', `#${machineSection.id}`);
-      expect(within(menu).getByRole('link', { name: 'Alert rules 1' })).toHaveAttribute('href', `#${rulesSection.id}`);
+      const panel = screen.getByRole('tabpanel', { name: 'Settings' });
+      expect(within(panel).getAllByRole('region').map(region => region.id)).toEqual([machineSection.id, rulesSection.id, 'settings-delete-machine']);
+      expect(screen.queryByRole('navigation', { name: 'Settings sections' })).not.toBeInTheDocument();
     });
 
     it('shows a viewer only the alert rules, and they cannot change them', async () => {
@@ -494,6 +495,61 @@ describe('MachineDetailPage', () => {
       expect(screen.queryByRole('button', { name: /Add rule/ })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Copy rules to other machines' })).not.toBeInTheDocument();
       expect(screen.queryByRole('navigation', { name: 'Settings sections' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('deleting the machine', () => {
+    const openDeleteDialog = () => {
+      fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+      const section = screen.getByRole('region', { name: 'Delete machine' });
+      fireEvent.click(within(section).getByRole('button', { name: 'Delete machine' }));
+      return screen.findByRole('alertdialog');
+    };
+
+    it('has its own panel, and is not in the machine form', () => {
+      renderPage();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+
+      expect(within(screen.getByRole('region', { name: 'Delete machine' })).getByRole('button', { name: 'Delete machine' })).toBeInTheDocument();
+      expect(within(screen.getByRole('region', { name: 'Machine' })).queryByRole('button', { name: 'Delete machine' })).not.toBeInTheDocument();
+    });
+
+    it('lets the admin delete the machine only after they type "delete"', async () => {
+      const onRemove = vi.fn().mockResolvedValue(true);
+      renderPage({ onRemove });
+      const dialog = await openDeleteDialog();
+      const confirm = within(dialog).getByRole('button', { name: 'Delete the machine' });
+      const box = within(dialog).getByLabelText('Type delete to delete the machine');
+
+      expect(confirm).toBeDisabled();
+      fireEvent.change(box, { target: { value: 'remove' } });
+      expect(confirm).toBeDisabled();
+      fireEvent.change(box, { target: { value: 'Delete' } });
+      expect(confirm).toBeEnabled();
+
+      fireEvent.click(confirm);
+      await waitFor(() => expect(onRemove).toHaveBeenCalledWith('m1'));
+    });
+
+    it('keeps the machine when the admin closes the box', async () => {
+      const onRemove = vi.fn().mockResolvedValue(true);
+      renderPage({ onRemove });
+      const dialog = await openDeleteDialog();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Keep the machine' }));
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+      expect(onRemove).not.toHaveBeenCalled();
+    });
+
+    it('is not there for a user who cannot manage machines', () => {
+      renderPage({ role: 'operator' });
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+
+      expect(screen.queryByRole('region', { name: 'Delete machine' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Delete machine' })).not.toBeInTheDocument();
     });
   });
 

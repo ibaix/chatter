@@ -1,4 +1,3 @@
-import { Dialog } from '@toolpath/ui';
 import { useState, type FormEvent } from 'react';
 import { Button } from '../../components/ui/Button';
 import { Notice } from '../../components/ui/Notice';
@@ -10,18 +9,16 @@ interface MachineSettingsSectionProps {
   machine: Machine;
   /** True when the server saved the update */
   onUpdate: (id: string, updates: MachineUpdate) => Promise<boolean>;
-  onRemove: () => Promise<void>;
 }
 
 /**
- * Change how ChatterBox reaches the machine, or remove the machine.
+ * Change how ChatterBox reaches the machine. DeleteMachineSection deletes it.
  * Give it a new key for each machine, so the form fills again.
  */
-export function MachineSettingsSection({ machine, onUpdate, onRemove }: MachineSettingsSectionProps) {
+export function MachineSettingsSection({ machine, onUpdate }: MachineSettingsSectionProps) {
   const [form, setForm] = useState(() => editFormFromMachine(machine));
   const [isSaving, setIsSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
-  const { confirm } = Dialog.useDialog();
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -40,20 +37,6 @@ export function MachineSettingsSection({ machine, onUpdate, onRemove }: MachineS
     setIsSaved(false);
   };
 
-  const remove = async () => {
-    const accepted = await confirm(
-      <Dialog variant="danger">
-        <Dialog.Title>Remove {machine.name}?</Dialog.Title>
-        <Dialog.Message>Chatter stops reading this machine and deletes its spindle speed history. You cannot undo this.</Dialog.Message>
-        <Dialog.Actions>
-          <Dialog.Dismiss>Keep the machine</Dialog.Dismiss>
-          <Dialog.Confirm>Remove the machine</Dialog.Confirm>
-        </Dialog.Actions>
-      </Dialog>,
-    );
-    if (accepted) await onRemove();
-  };
-
   return (
     <form onSubmit={save} className="flex flex-col gap-5 p-4">
       <EditMachineForm
@@ -67,13 +50,6 @@ export function MachineSettingsSection({ machine, onUpdate, onRemove }: MachineS
       <div className="flex justify-end gap-2">
         <Button onClick={undo} disabled={isSaving}>Undo changes</Button>
         <Button type="submit" variant="primary" disabled={isSaving}>{isSaving ? 'Saving…' : 'Save changes'}</Button>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800 pt-4">
-        <div>
-          <div className="font-bold">Remove this machine</div>
-          <div className="text-[0.8125rem] text-zinc-200">Chatter stops reading it and deletes its spindle speed history.</div>
-        </div>
-        <Button variant="danger" onClick={remove}>Remove machine</Button>
       </div>
     </form>
   );

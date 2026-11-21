@@ -15,7 +15,7 @@ import { useUploadMessages } from './useUploadMessages';
 
 const ID_PREFIX = 'machine-sections';
 /** The tabs that hold a list or a form. They share one card. Dashboard and Report hold cards of their own. */
-const CARD_TABS: readonly SectionId[] = ['files', 'tools', 'settings'];
+const CARD_TABS: readonly SectionId[] = ['files', 'tools'];
 
 /** Brother and Haas machines send their tool table. Only Brother tells which pocket holds each tool. */
 function toolTableOf(machine: Machine): { toolTable: ToolTable | undefined; hasPocketInfo: boolean } {
@@ -95,10 +95,10 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
             {shownTab === 'tools' && toolTable && (
               <ToolTableTab toolTable={toolTable} hasPocketInfo={hasPocketInfo} spindleTool={machine.data.toolNumber} />
             )}
-            {shownTab === 'settings' && (
-              <SettingsTab machine={machine} machines={machines} rules={alertRules} onUpdate={onUpdate} onRemove={onRemove} />
-            )}
           </div>
+        )}
+        {shownTab === 'settings' && (
+          <SettingsTab machine={machine} machines={machines} rules={alertRules} onUpdate={onUpdate} onRemove={onRemove} />
         )}
       </div>
     </>
