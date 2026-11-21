@@ -1,6 +1,6 @@
 import koffi from 'koffi';
 import { describe, expect, it } from 'vitest';
-import { EXEPRG_PATH, LOADELM, ODBACT, ODBACT2, ODBALMMSG_DATA, ODBEXEPRG, ODBM, ODBSPLOAD, ODBSPLOAD_ALL, ODBST, ODBSYS, toFocasMacro, toFocasStatus, toSpindleLoadPercent, toSpindles, toSystemInfo } from './focas.js';
+import { EXEPRG_PATH, Focas, LOADELM, ODBACT, ODBACT2, ODBALMMSG_DATA, ODBEXEPRG, ODBM, ODBSPLOAD, ODBSPLOAD_ALL, ODBST, ODBSYS, toFocasMacro, toFocasStatus, toSpindleLoadPercent, toSpindles, toSystemInfo } from './focas.js';
 
 describe('ODBST, the reply of cnc_statinfo', () => {
   // The layout of 0i, 16i/18i/21i, 30i/31i/32i and Power Mate i in fwlib32.h: 9 shorts.
@@ -198,5 +198,18 @@ describe('toSpindles', () => {
 
   it('gives no speed for a spindle that cnc_acts2 did not give', () => {
     expect(toSpindles([meter(1, 0, 0)], [])[0].speed).toBeUndefined();
+  });
+});
+
+describe('Focas.initialize', () => {
+  it('keeps the error of the library load as the cause', () => {
+    let thrown: unknown;
+    try {
+      Focas.initialize('/no/such/folder/libfwlib32.so', false);
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as Error).message).toMatch(/^Failed to initialize FOCAS library/);
+    expect((thrown as Error).cause).toBeInstanceOf(Error);
   });
 });

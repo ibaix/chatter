@@ -59,6 +59,16 @@ describe('ProxySettings', () => {
     expect(() => ProxySettings.inMemory('localhost')).toThrow(/TRUST_PROXY: "localhost"/);
   });
 
+  it('keeps the address error as the cause, so the log shows it too', () => {
+    let thrown: unknown;
+    try {
+      ProxySettings.inMemory('localhost');
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as Error).cause).toBeInstanceOf(ProxyAddressError);
+  });
+
   it('names the saved list when its value is bad', () => {
     const store = sqliteProxySettingStore(new SettingsTable(new Database(':memory:')));
     store.write('localhost');

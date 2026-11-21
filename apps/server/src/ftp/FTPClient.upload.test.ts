@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Readable } from 'stream';
+import { PassThrough, Readable } from 'stream';
 
 const mockAccess = vi.fn();
 const mockList = vi.fn();
@@ -198,6 +198,22 @@ describe('FTPClient upload behavior', () => {
           'already exists'
         );
       });
+    });
+  });
+
+  describe('errors', () => {
+    const refused = new Error('connect ECONNREFUSED 192.168.1.100:21');
+
+    it.each([
+      ['listFiles', (client: FTPClient) => client.listFiles()],
+      ['getFileTree', (client: FTPClient) => client.getFileTree()],
+      ['downloadFile', (client: FTPClient) => client.downloadFile('O0100.NC', new PassThrough())],
+      ['uploadFile', (client: FTPClient) => client.uploadFile('O0100.NC', 'content')],
+      ['deleteFile', (client: FTPClient) => client.deleteFile('O0100.NC')],
+    ])('%s keeps the FTP error as the cause', async (_name, call) => {
+      mockAccess.mockRejectedValue(refused);
+
+      await expect(call(ftpClient)).rejects.toMatchObject({ cause: refused });
     });
   });
 
