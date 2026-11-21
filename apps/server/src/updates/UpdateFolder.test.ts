@@ -37,6 +37,43 @@ describe('UpdateFolder', () => {
     });
   });
 
+  describe('network', () => {
+    it('reads the network facts that a newer helper wrote', async () => {
+      writeFileSync(path.join(root, 'network.json'), '{"hostname":"chatter","addresses":[],"ssh":false,"updatedAt":"2026-11-21T10:00:00Z"}');
+      expect(await folder.network()).toEqual({ hostname: 'chatter', addresses: [], ssh: false, updatedAt: '2026-11-21T10:00:00Z' });
+    });
+
+    it('gives null with an older helper, or a file that is too large', async () => {
+      expect(await folder.network()).toBeNull();
+      writeFileSync(path.join(root, 'network.json'), `{"x":"${'a'.repeat(70 * 1024)}"}`);
+      expect(await folder.network()).toBeNull();
+    });
+  });
+
+  describe('helperLog', () => {
+    it('gives the old file, then the current file', async () => {
+      writeFileSync(path.join(root, 'helper.log.1'), 'old\n');
+      writeFileSync(path.join(root, 'helper.log'), 'new\n');
+      expect(await folder.helperLog()).toBe('old\nnew\n');
+    });
+
+    it('gives only the end of a log that is larger than the limit', async () => {
+      writeFileSync(path.join(root, 'helper.log'), 'a'.repeat(100) + 'end');
+      expect(await folder.helperLog(10)).toBe('aaaaaaaend');
+    });
+
+    it('gives null with an older helper', async () => {
+      expect(await folder.helperLog()).toBeNull();
+    });
+  });
+
+  describe('a reboot request', () => {
+    it('is written as the text "reboot"', async () => {
+      await folder.writeRequest('reboot');
+      expect(readFileSync(path.join(inbox, 'request.json'), 'utf8')).toBe('reboot');
+    });
+  });
+
   describe('helper', () => {
     it('reads the processor type that the helper wrote', async () => {
       writeHelperInfo(ARMV7_HELPER_INFO);

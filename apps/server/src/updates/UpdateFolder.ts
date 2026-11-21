@@ -3,10 +3,12 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import {
   parseHelperInfo,
+  parseNetworkInfo,
   parseUpdateStatus,
   shownUpdateStatus,
   type HelperInfo,
-  type UpdateRequest,
+  type HelperRequest,
+  type NetworkInfo,
   type UpdateStatus,
 } from '@local-chatter/shared';
 
@@ -19,6 +21,13 @@ export const REQUEST_FILE_NAME = 'request.json';
 /** The helper writes these two next to the inbox */
 const HELPER_INFO_FILE_NAME = 'helper.json';
 const STATUS_FILE_NAME = 'status.json';
+/** A newer helper also writes these */
+const NETWORK_FILE_NAME = 'network.json';
+const HELPER_LOG_NAME = 'helper.log';
+/** The helper keeps 2 files of 256 KB. Chatter reads at most this much of them. */
+const HELPER_LOG_LIMIT_BYTES = 512 * 1024;
+/** The helper writes small JSON files. A larger file is not read. */
+const JSON_FILE_LIMIT_BYTES = 64 * 1024;
 const INBOX_FOLDER_NAME = 'inbox';
 
 /** Names that Chatter writes first, and renames when they are whole. The helper never reads them. */
@@ -60,8 +69,22 @@ export class UpdateFolder {
     return status && shownUpdateStatus(status, this.now());
   }
 
-  /** Ask the helper to check or install. The helper sees the request only when it is whole. */
-  async writeRequest(request: UpdateRequest): Promise<void> {
+  /** The network facts of the Pi, or null when the helper does not write them (an older card image) */
+  async network(): Promise<NetworkInfo | null> {
+    const text = await this.readHelperFile(NETWORK_FILE_NAME);
+    return text === null ? null : parseNetworkInfo(text);
+  }
+
+  /** The last lines of the helper log (the old file first), or null when there is none (an older card image) */
+  async helperLog(limitBytes = HELPER_LOG_LIMIT_BYTES): Promise<string | null> {
+    const parts = await Promise.all([`${HELPER_LOG_NAME}.1`, HELPER_LOG_NAME].map(name => readTail(path.join(this.folder, name), limitBytes)));
+    if (parts.every(part => part === null)) return null;
+    const text = parts.map(part => part ?? '').join('');
+    return text.length > limitBytes ? text.slice(text.length - limitBytes) : text;
+  }
+
+  /** Ask the helper to check, install, or restart the Pi. The helper sees the request only when it is whole. */
+  async writeRequest(request: HelperRequest): Promise<void> {
     const temporaryFile = this.hiddenName(REQUEST_PREFIX);
     try {
       await fs.writeFile(temporaryFile, request, { flag: CREATE_NEW_FILE_ONLY });
@@ -120,9 +143,27 @@ export class UpdateFolder {
     return path.join(this.inbox, prefix + randomBytes(HIDDEN_NAME_RANDOM_BYTES).toString('hex'));
   }
 
-  /** The text of a file that the helper wrote, or null when it is not there */
+  /** The text of a file that the helper wrote, or null when it is not there or too large */
   private async readHelperFile(name: string): Promise<string | null> {
-    return fs.readFile(path.join(this.folder, name), 'utf8').catch(() => null);
+    const file = path.join(this.folder, name);
+    const stats = await fs.stat(file).catch(() => null);
+    if (!stats?.isFile() || stats.size > JSON_FILE_LIMIT_BYTES) return null;
+    return fs.readFile(file, 'utf8').catch(() => null);
+  }
+}
+
+/** The last `limitBytes` of a file, so a large file never fills the memory. Null when the file is not there. */
+async function readTail(file: string, limitBytes: number): Promise<string | null> {
+  const handle = await fs.open(file, 'r').catch(() => null);
+  if (!handle) return null;
+  try {
+    const { size } = await handle.stat();
+    const length = Math.min(size, limitBytes);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, size - length);
+    return buffer.toString('utf8');
+  } finally {
+    await handle.close();
   }
 }
 

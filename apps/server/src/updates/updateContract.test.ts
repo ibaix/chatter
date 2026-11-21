@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   HELPER_SILENCE_LIMIT_MS,
   parseHelperInfo,
+  parseNetworkInfo,
   parseUpdateStatus,
   shownUpdateStatus,
   UPDATE_REQUESTS,
@@ -79,5 +80,36 @@ describe('parseHelperInfo', () => {
   it('gives nothing for an unknown processor type', () => {
     expect(parseHelperInfo('{"arch":"armhf"}')).toBeNull();
     expect(parseHelperInfo('[]')).toBeNull();
+  });
+
+  it('reads the capabilities of a newer helper, and drops an unknown one', () => {
+    expect(parseHelperInfo('{"arch":"arm64","capabilities":["reboot","network","log","fly"]}'))
+      .toEqual({ arch: 'arm64', capabilities: ['reboot', 'network', 'log'] });
+    expect(parseHelperInfo('{"arch":"arm64","capabilities":"reboot"}')).toEqual({ arch: 'arm64' });
+  });
+});
+
+describe('parseNetworkInfo', () => {
+  const NETWORK = {
+    hostname: 'chatter', localName: 'chatter.local', addresses: [{ interface: 'eth0', address: '192.168.1.20/24' }, { interface: 'eth0', address: 'fd00::20/64' }],
+    gateway: '192.168.1.1', ssh: true, updatedAt: '2026-11-21T10:00:00Z',
+  };
+
+  it('reads what the helper writes', () => {
+    expect(parseNetworkInfo(JSON.stringify(NETWORK))).toEqual(NETWORK);
+  });
+
+  it('drops each value with the wrong shape', () => {
+    const text = JSON.stringify({
+      ...NETWORK, hostname: 'bad name', localName: '<b>.local', gateway: '1.2.3.4.5',
+      addresses: [{ interface: 'eth0', address: '999.1.1.1/24' }, { interface: 'a b', address: '10.0.0.1/8' }, { interface: 'wlan0', address: '10.0.0.7/8', extra: 'x' }],
+    });
+    expect(parseNetworkInfo(text)).toEqual({ addresses: [{ interface: 'wlan0', address: '10.0.0.7/8' }], ssh: true, updatedAt: '2026-11-21T10:00:00Z' });
+  });
+
+  it('gives nothing for a file that is not network.json', () => {
+    expect(parseNetworkInfo('nonsense')).toBeNull();
+    expect(parseNetworkInfo('{"addresses":[],"ssh":"yes","updatedAt":"2026-11-21T10:00:00Z"}')).toBeNull();
+    expect(parseNetworkInfo('{"addresses":[],"ssh":true}')).toBeNull();
   });
 });

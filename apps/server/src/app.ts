@@ -39,6 +39,7 @@ import { ServerLog } from './logging/ServerLog.js';
 import { logRoutes } from './routes/logs.js';
 import { ConnectionLog } from './logging/ConnectionLog.js';
 import { machineHealthRoutes, type ConnectionHealthSource } from './routes/machineHealth.js';
+import { systemRoutes, type SystemOptions } from './routes/system.js';
 
 /** Every API address starts with this */
 export const API_PREFIX = '/api';
@@ -72,6 +73,8 @@ export interface AppParts {
   serverLog?: ServerLog;
   /** The connection changes of each machine, for its health panel. Without it, the panel shows none. */
   connections?: ConnectionHealthSource;
+  /** How Chatter restarts itself, and if it runs in Docker. Without it, the real process and computer. */
+  system?: Omit<SystemOptions, 'version'>;
 }
 
 /**
@@ -93,8 +96,7 @@ export function createApp({
   version = chatterVersion(),
   updates = new UpdateService(UpdateFolder.fromEnvironment(), version, new ReleaseWatcher({ repo: releasesRepo(), store: memoryCheckSettingStore() })),
   notifications = Notifications.inMemory(),
-  serverLog = new ServerLog(),
-  connections = new ConnectionLog(),
+  ...diagnostics
 }: AppParts) {
   const loginGuard = { auth, limiter: new LoginLimiter(), loginLog, proxySettings };
   const api = new Hono()
@@ -106,7 +108,6 @@ export function createApp({
     .use(requireLogin(loginGuard))
     .get('/status', c => c.json(poller.getStatus()))
     .route('/', machineRoutes(poller))
-    .route('/', machineHealthRoutes(poller, connections))
     .route('/', discoveryRoutes(poller))
     .route('/', machineFileRoutes(poller))
     .route('/', uploadHistoryRoutes())
@@ -121,13 +122,26 @@ export function createApp({
     .route('/', focasLibraryRoutes(focasLibrary))
     .route('/', updateRoutes(updates))
     .route('/', notificationRoutes(notifications))
-    .route('/', logRoutes(serverLog));
+    .route('/', diagnosticRoutes(poller, updates, version, diagnostics));
 
   // No CORS headers: only pages from this server can call the API from a browser
   return new Hono()
     .onError(errorReply)
     .notFound(c => c.json({ error: 'Not found' }, 404))
     .route(API_PREFIX, api);
+}
+
+/** Settings > Diagnostics and the health of the machines: the log, the restarts, the connection test */
+function diagnosticRoutes(
+  poller: HardwarePoller,
+  updates: UpdateService,
+  version: string,
+  { serverLog = new ServerLog(), connections = new ConnectionLog(), system = {} }: Pick<AppParts, 'serverLog' | 'connections' | 'system'>,
+) {
+  return new Hono()
+    .route('/', machineHealthRoutes(poller, connections))
+    .route('/', logRoutes(serverLog))
+    .route('/', systemRoutes(updates, { ...system, version }));
 }
 
 /** The routes and their types, for the typed web client (hono/client) */

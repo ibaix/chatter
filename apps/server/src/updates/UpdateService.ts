@@ -3,6 +3,7 @@ import {
   isReleaseVersion,
   UPDATE_FILE_LIMIT_BYTES,
   type HelperInfo,
+  type NetworkInfo,
   type UpdateArch,
   type UpdateRequest,
   type UpdateStatus,
@@ -69,6 +70,7 @@ const NO_FILE_TO_CHECK_MESSAGE = 'Upload or download an update file first.';
 const NOT_CHECKED_MESSAGE = 'Check an update file first.';
 const NEW_FILE_NOT_CHECKED_MESSAGE = 'A new update file is here. Check it before you install it.';
 const NO_NEWER_VERSION_MESSAGE = 'No newer version is on GitHub.';
+export const NO_REBOOT_MESSAGE = 'The update helper of this Pi cannot restart the Pi. A new card image is necessary for this.';
 export const LIMIT_MESSAGE = `The update file must be at most ${UPDATE_FILE_LIMIT_BYTES / MEGABYTE} MB.`;
 
 /**
@@ -166,6 +168,40 @@ export class UpdateService {
     await this.folder.writeRequest(request);
     log.info('Update helper asked', { user: username, request });
     return this.report();
+  }
+
+  /**
+   * Ask the helper to restart the Pi. Only a newer helper can (its helper.json says "reboot").
+   * The helper has its own guards: it restarts only when it does not work, and at most once in 15 minutes.
+   */
+  async requestReboot(username: string): Promise<void> {
+    const helper = await this.folder.helper();
+    if (!helper?.capabilities?.includes('reboot')) throw new UpdateRefusedError(NO_REBOOT_MESSAGE, CONFLICT);
+    this.refuseWhileReceiving();
+    if (await this.folder.hasRequest()) throw new UpdateRefusedError(PENDING_REQUEST_MESSAGE, CONFLICT);
+    await this.requireIdleHelper();
+    await this.folder.writeRequest('reboot');
+    log.warn('Restart of the Pi asked', { user: username });
+  }
+
+  /** What the helper wrote about this Pi, or null when there is no helper (a normal computer) */
+  helper(): Promise<HelperInfo | null> {
+    return this.folder.helper();
+  }
+
+  /** The network facts of the Pi, or null when the helper does not write them */
+  network(): Promise<NetworkInfo | null> {
+    return this.folder.network();
+  }
+
+  /** The last lines of the helper log, or null when the helper does not write it */
+  helperLog(): Promise<string | null> {
+    return this.folder.helperLog();
+  }
+
+  /** The last check or install, or null before the first one */
+  status(): Promise<UpdateStatus | null> {
+    return this.folder.status();
   }
 
   /** Refuses while the helper checks or installs. Gives the status. */
