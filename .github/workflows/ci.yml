@@ -3,8 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
+  # Each pull request, also one in a stack that targets another branch. GitHub does not start
+  # a new run when it moves a stacked pull request to main, so the checks must run from the first push.
   pull_request:
-    branches: [main]
+
+# A new push to a pull request stops the run of the push before it. Runs on main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
