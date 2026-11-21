@@ -111,3 +111,40 @@ A rule is one of these:
 **Copy** takes `{ machineIds }`. Each machine gets a copy of each saved rule, but not a rule that it already has. A machine gets no more than 50 rules. The reply is `{ copied, notCopied, vmalertReloaded }`, where `notCopied` is the number of rules left out because of that limit. An unknown machine id gives `400`.
 
 **Test** takes `{ machineId, query }`. The reply is `{ ok: true, resultCount, firstValue }`, or `{ ok: false, error }` for a query with an error.
+
+## Back up and restore the history of a machine
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/machine/:id/history-backup` | Read the history of the machine into a file. Needs `manage-machines`. |
+| GET | `/api/machine/:id/history-backup/:backupId` | Download the file (`.tar.gz`). Needs `manage-machines`. |
+| POST | `/api/machine/:id/history-restore` | Send a file and check it. Nothing is written yet. Needs `manage-chatter` (Admin). |
+| POST | `/api/machine/:id/history-restore/:restoreId` | Write the checked file into the machine. Needs `manage-chatter`. |
+| DELETE | `/api/machine/:id/history-restore/:restoreId` | Delete the checked file without a restore. Needs `manage-chatter`. |
+
+See [Back up and restore the history of a machine](../guide/get-started.md#back-up-and-restore-the-history-of-a-machine).
+
+**Back up** takes `{ from, to, averagesOnly }`. Each one is optional. `from` and `to` are milliseconds since 1970. With no `from`, the file has all the history. With no `to`, it ends now. With `averagesOnly: true`, the file has only the 1-minute and 1-hour averages. The reply is `{ id, fileName, parts, data }`. `parts` gives the size, sha256 and count of each part, and `data` gives the first and last time in the file.
+Then **GET** the file with the `id`, one time. Chatter deletes the file after the download, or after 30 minutes.
+
+The file is a `.tar.gz` with these entries:
+- `manifest.json`: `{ format: "chatter-machine-history", formatVersion, chatterVersion, createdAt, machine: { id, name, type }, range, averagesOnly, data, parts }`. Each part has `{ bytes, sha256, count }`.
+- `history/raw.jsonl.gz`: the values of each poll, as the lines of the VictoriaMetrics `/api/v1/export` (one series block on each line)
+- `history/averages.jsonl.gz`: the series `chatter_*:avg1m` and `chatter_*:avg1h`
+- `state-periods.jsonl.gz`: one period on each line, `{ kind, value, start, end }`
+- `alert-rules.json`: `{ rules }`, with no `id`
+
+**Restore** takes the file as the raw body, with `Content-Type: application/octet-stream` and a `Content-Length`. Chatter checks all of the file before it writes anything:
+- The file has only the entries above, each one time. The format is known, and it is not newer than this Chatter.
+- The size, sha256 and count of each part are the ones in `manifest.json`.
+- The file is at most 2 GB. One line is at most 1 MB.
+- Each series is a `chatter_*` value of the same machine type as this machine.
+- No time is in the future. Chatter leaves out the history that is older than 1 year.
+
+The reply is the preview: `{ id, source, chatterVersion, createdAt, range, data, averagesOnly, counts, tooOld, sameMachine }`. `counts` is `{ rawSamples, averageSamples, periods, alertRules }`. `tooOld` is `{ samples, periods }`: the history that Chatter leaves out.
+Then **POST** `{ alertRules }` to `/api/machine/:id/history-restore/:restoreId`, with the `id` of the preview. Chatter changes only the `machine` label of each series to this machine. It adds each state period that the machine does not have yet (the same kind and start). With `alertRules: true`, the rules of the file replace the rules of the machine. Chatter writes the periods and the rules in one transaction. The reply is `{ samples, periodsAdded, periodsKnown, alertRules }`. `alertRules` is null when Chatter did not restore the rules.
+
+A restore of the same file two times does not add a value or a period two times. VictoriaMetrics keeps one sample for each time (`-dedup.minScrapeInterval=1ms` in `docker-compose.yml`).
+Chatter keeps one received file. A new upload replaces it. Chatter deletes it after the restore, or after 30 minutes.
+
+A refused file gives `400` with `{ error }`. Another backup or restore that runs gives `409`. A file that is too large gives `413`. A disk that is too full gives `507`. A history database that does not answer gives `503`.

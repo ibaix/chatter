@@ -69,10 +69,44 @@ You can send at most 32 MB of program files at one time. A Raspberry Pi has litt
 ### Delete a machine
 
 An **Admin** can delete a machine from Chatter. Chatter then stops reading the machine and deletes its spindle speed history. You cannot undo this.
+To keep the history, back it up first (see [Back up and restore the history of a machine](#back-up-and-restore-the-history-of-a-machine)).
 
 1. Click the **Settings** tab of the machine.
 2. In the **Delete machine** panel at the bottom, click **Delete machine**.
 3. In the box, type `DELETE`. Then click **Delete the machine**.
+
+### Back up and restore the history of a machine
+
+You can keep the history of one machine in a file, and put it back later. For example, back up the history before you delete a machine. Then restore the file when you add the machine again. The new machine gets a new id, but it gets the old history.
+
+The file has these parts:
+- The machine values (for example spindle speed, running, and part count), and their 1-minute and 1-hour averages
+- The state periods: program, alarm, mode, run state, and tool
+- The alert rules of the machine
+
+The file does not have the machine settings: no address, port, user name, password, or macro. It does not have the program files, the upload history, the alerts, or the notification messages.
+
+**Back up** (an **Admin**):
+1. Click the **Settings** tab of the machine. Open **Advanced**.
+2. Optional: choose the days in **From** and **To**. Empty boxes back up all the history.
+3. Optional: select **1-minute averages only**. The file is much smaller. The charts, and the time online and running in the report, stay. The values of each poll and the part count of the report are not in the file.
+4. Click **Back up history**. The browser downloads `chatter-history-<name>-<date>.tar.gz`.
+
+**Restore** (an **Admin**):
+1. Add the machine again, if it is not in Chatter. It must be the same machine type (for example Brother).
+2. Click the **Settings** tab of the machine. Open **Advanced**.
+3. Click **Restore history**, and choose the file.
+4. Chatter checks all of the file. Then it shows the machine, the time range, and what the file has. Chatter writes nothing yet.
+5. Choose if Chatter also restores the alert rules. Then the rules of the file replace the rules of the machine. This is on by default.
+6. Click **Restore into** *machine name*.
+
+You can restore the same file two times, or restore it into the machine that it came from. Chatter does not add a value or a period two times.
+
+Some limits:
+- Chatter keeps the history for 1 year. It does not restore history that is older than 1 year. The preview tells how much it leaves out.
+- The file can be at most 2 GB.
+- Only one backup or restore runs at a time.
+- A backup of a long time can take some minutes on a Raspberry Pi. Chatter writes the file to its disk first, so the disk must have free space for it.
 
 ## 4. Add users and give them roles
 
