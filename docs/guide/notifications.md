@@ -73,8 +73,19 @@ Chatter does not send an ignored message. It shows the message in the message li
 
 :::tip The limit of 10 messages in 10 minutes
 A channel gets at most 10 alert messages in 10 minutes. When more alerts come, Chatter puts them in one "And N more alerts" message.
-A **Program ended** message does not count in this limit. It always goes alone, and it never goes in an "And N more alerts" message. So the program ends of a busy shop do not stop the alarm messages.
+A **Program ended** message counts in this limit too. See [Limits for each channel](#limits-for-each-channel).
 :::
+
+## Limits for each channel
+
+Chatter limits the messages of each channel. A service such as `ntfy.sh` stops a sender that sends too many messages.
+
+- **10 messages in 10 minutes.** When more alerts come, Chatter puts them in one "And N more alerts" message.
+- **One event message in 15 minutes.** A channel gets at most one **Program ended** message for each machine in 15 minutes. Chatter keeps the other program ends of that machine for the next message. That message tells the count, for example "This happened 20 times since 9:02 AM." A program that runs for 15 minutes or longer still gets one message for each end. The other messages of the channel do not wait for it.
+- **A service that asks Chatter to wait.** Some services answer "too many requests" (429) or "busy" (503) with a time to wait. Chatter then sends no message to the channel until that time, for at most 24 hours. Without a time, Chatter uses its usual waits. See [How it works](#how-it-works).
+- **No flood after a wait.** When a channel can send again and more than 4 messages wait, Chatter sends one summary message and then only the newest 3 messages. The summary tells how many alerts Chatter could not send, for each alert and machine, for example "Chatter could not send 14 alerts while the channel was blocked: Program ended on Haas ST-10 (12), In alarm on Haas VF-2 (2)."
+
+The message list shows each message that Chatter did not send alone as **Grouped**, with the reason.
 
 ## Change, turn off, or delete a channel
 
@@ -122,7 +133,7 @@ A webhook channel sends each message as JSON to a web address, with `POST`:
 }
 ```
 
-- `state` is `started`, `ended`, `combined` (started and ended), `more` (an "And 7 more alerts" message), or `test`.
+- `state` is `started`, `ended`, `combined` (started and ended), `more` (an "And 7 more alerts" message, or a summary after the channel was blocked), or `test`.
 - `level` is `warning`, `critical`, or `null` (for `more`, `test`, and an alert with an unknown level).
 - `machine`, `alert`, `summary`, `startedAt`, `endedAt`, and `link` can be `null`.
 
@@ -274,6 +285,10 @@ The message has the same text as a text message.
 On `ntfy.sh`, a topic has no login. Each person who knows the topic name can read your alerts and send messages to it. Use a name that is hard to guess, or use an access token on a reserved topic or on your own server.
 :::
 
+::: warning The daily limit of ntfy.sh
+Without an account, `ntfy.sh` takes about 250 messages each day from one network (one public IP address). All the computers of the shop network use the same limit, also a second Chatter and the **Send test** button. The limit resets one time each day, at a time that `ntfy.sh` sets. When the limit is used, Chatter shows "The limit is used" and waits until the reset. For more messages, use an access token of an `ntfy.sh` account, or your own ntfy server.
+:::
+
 The **Notification sound** sets the ntfy priority of each message of the channel, also of a test. The level of the alert does not change it.
 
 | Notification sound | ntfy priority | On the phone |
@@ -305,9 +320,9 @@ The panel shows the newest 10 messages. To see 10 more, click **Show more** at t
 | Result | Meaning |
 | --- | --- |
 | **Sent** | The service took the message. Under it is the answer of the service, for example "Sent to 2 phones". Twilio can still fail to deliver a text after that. |
-| **Waiting** | Chatter sends it soon, or tries again soon. |
+| **Waiting** | Chatter sends it soon, or tries again soon. After a failed try, under it is the reason, for example a limit of the service. |
 | **Failed** | Chatter did not send it. Under it is the reason. |
-| **In an "And more alerts" message** | The channel got too many messages, so this alert went in an "And N more alerts" message. |
+| **Grouped** | Chatter did not send it alone. It went in an "And N more alerts" message, in a summary after the channel was blocked, or in the next message about the same event. Under it is the reason. See [Limits for each channel](#limits-for-each-channel). |
 | **Ignored** | Chatter did not send it, because its text has an ignore pattern of the channel. Under it is the pattern. See [Ignore some messages](#ignore-some-messages). |
 
 ## Check
@@ -336,13 +351,17 @@ The panel shows the newest 10 messages. To see 10 more, click **Show more** at t
 | **Failed:** The bot cannot write to the chat | Send a message to the bot, or add the bot to the group or channel. For a channel, make the bot an admin. |
 | **Failed:** ntfy refused the access | The access token is wrong, or it cannot write to the topic. Make a new token in ntfy. |
 | **Failed:** ntfy answered 404 | The **Server** address is wrong. Do not put the topic in it. |
+| **Waiting** or **Failed:** ntfy.sh allows 250 messages each day | The daily limit of `ntfy.sh` for your network is used. Chatter waits until the reset, and then sends a summary. Other computers on the same network, for example a second Chatter, use the same limit. Use an access token of an `ntfy.sh` account, or your own ntfy server. See [The daily limit of ntfy.sh](#ntfy-app). |
+| **Waiting:** Too many requests to ntfy | Chatter sent too many requests in a short time. Chatter waits the time that ntfy tells, and tries again. After **Send test**, wait for that time. |
 | The ntfy app gets no message, but Chatter shows **Sent** | The app subscribes to another topic or another server. Check the topic name in the app. |
 | **Failed:** Chatter could not reach Apprise | Apprise API is not running, or the address is wrong. Chatter tries again for 24 hours. |
 | **Waiting:** Apprise did not answer in time | Apprise needs more than 60 seconds to send to your services. Look in the Apprise log for a slow service. Chatter tries again later. |
 | **Waiting:** Apprise answered 500 (or 502, 503, 429) | Apprise or one of its parts has a problem, or is busy. Look in the Apprise log. Chatter tries again for 24 hours. |
 | Apprise API does not start on the Chatter Raspberry Pi card | The Apprise image is only for 64-bit processors. The Pi card is 32-bit. Run Apprise API on another computer. See [Apprise](#apprise). |
 | **Waiting** for a long time | The service does not answer, or answers with an error that can go away. Chatter tries again for 24 hours, then the message fails. |
-| An "And 7 more alerts" message | A channel gets at most 10 alert messages in 10 minutes. Chatter puts the other alerts in one message. A **Program ended** message does not count. Make fewer alerts fire, or select **Critical only**. |
+| An "And 7 more alerts" message | A channel gets at most 10 alert messages in 10 minutes. Chatter puts the other alerts in one message. A **Program ended** message counts too. Make fewer alerts fire, or select **Critical only**. |
+| "This happened 20 times since 9:02 AM" | A channel gets at most one **Program ended** message for each machine in 15 minutes. The message tells the program ends since the last message. See [Limits for each channel](#limits-for-each-channel). |
+| "Chatter could not send 14 alerts while the channel was blocked" | The service did not take messages for a time, for example because of its limit. After that, Chatter sent this summary and the newest 3 messages. Open the message list to see each alert. |
 | The times are in UTC | Set the **Time zone** in **Message settings**. |
 | The messages have no link | Set **Chatter address for links** in **Message settings**. |
 
@@ -354,11 +373,14 @@ After a restart or a power cut, the message is still in the queue, and Chatter s
 If the end of an alert comes before Chatter sent its start, Chatter sends one message for both.
 When the text of a message has an ignore pattern of the channel, Chatter keeps the message in the list as **Ignored**, and does not send it.
 A channel that did not get the start of an alert gets no end message for it, for example a channel that you add while the alert is on.
-A **Program ended** alert gets only its start message. Chatter sends no end message and no combined message for it. The message goes also when the channel is at its limit. See [Program ended](./alerts.md#program-ended).
+A **Program ended** alert gets only its start message. Chatter sends no end message and no combined message for it. It counts in the limit of the channel. See [Program ended](./alerts.md#program-ended) and [Limits for each channel](#limits-for-each-channel).
 
 Sometimes the service does not answer, or answers that it is busy. Then Chatter tries the message again.
 The waits are 30 seconds, 1 minute, 2 minutes, and 5 minutes, then 10 minutes each time. After 24 hours, the message fails.
+When the service tells a longer wait (the `Retry-After` header), Chatter uses that wait, for at most 24 hours.
+While Chatter waits, the channel gets no other message. So Chatter does not send more requests to a service that refused one.
 It does not try again when the service refuses the message, for example for a wrong login, because the next try fails too.
+**Send test** sends one time only. It does not try again.
 
 Chatter keeps the Twilio auth token, the webhook secret, the Discord webhook address, the Telegram bot token, the ntfy access token, and the Apprise password in `chatter.db` as plain text, because it must send them to the service. It also keeps the ntfy topic there. The topic is not secret in the form, but each person who knows it can read the messages. See [Keep chatter.db private](../security.md#keep-chatter-db-private).
 
