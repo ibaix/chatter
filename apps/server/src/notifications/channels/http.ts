@@ -156,7 +156,8 @@ async function jsonOf(response: Response): Promise<JsonObject | undefined> {
   }
 }
 
-async function textUpTo(response: Response, maxBytes: number): Promise<string | undefined> {
+/** The text of the answer, or undefined when it is larger than maxBytes or stops before its end */
+export async function textUpTo(response: Response, maxBytes: number): Promise<string | undefined> {
   if (!response.body) return '';
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];

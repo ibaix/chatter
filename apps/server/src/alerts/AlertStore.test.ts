@@ -1,7 +1,7 @@
 import { ALERT_END_GRACE_MS, EVENT_LABEL } from '@local-chatter/shared';
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { type Alert, AlertStore, KEEP_ALERTS_MS } from './AlertStore.js';
+import { type Alert, AlertStore, KEEP_ALERTS_MS, VMALERT_LEASE_MS, type VmalertState } from './AlertStore.js';
 
 const NOW = Date.UTC(2026, 10, 9, 9, 0);
 const MINUTE_MS = 60_000;
@@ -145,6 +145,67 @@ describe('AlertStore', () => {
       new AlertStore(db, NOW + 10 * MINUTE_MS);
 
       expect(new AlertStore(db, NOW).read(firingAlertsQuery).map(found => found.name)).toEqual(['Firing']);
+    });
+  });
+
+  describe('updateFromVmalert', () => {
+    const labels = { alertgroup: 'machine-m1', alertname: 'In alarm', machine: 'm1' };
+    /** The alert was sent last at NOW - 2 minutes, so its end time passed */
+    const lapsed = anAlert({ name: 'In alarm', labels, startsAt: NOW - 5 * MINUTE_MS, endsAt: NOW - 2 * MINUTE_MS + VMALERT_LEASE_MS });
+    const checkedAfterLastSend = new Map([['machine-m1\nIn alarm', NOW - 10_000]]);
+
+    function state(values: Partial<VmalertState> = {}): VmalertState {
+      return { firing: [], lastChecks: new Map(), ...values };
+    }
+
+    it('gives a new end time to an alert that still fires in vmalert, with the labels in any order', () => {
+      store.save([lapsed], NOW - 2 * MINUTE_MS);
+
+      const result = store.updateFromVmalert(state({ firing: [{ labels: { machine: 'm1', alertname: 'In alarm', alertgroup: 'machine-m1' } }] }), NOW);
+
+      expect(result).toEqual({ renewed: 1, ended: 0 });
+      expect(store.read(allAlertsQuery)).toMatchObject([{ endsAt: NOW + VMALERT_LEASE_MS, resolved: false }]);
+    });
+
+    it('does not make the end time of a firing alert earlier', () => {
+      store.save([anAlert({ labels, endsAt: NOW + 2 * VMALERT_LEASE_MS })], NOW);
+
+      store.updateFromVmalert(state({ firing: [{ labels }] }), NOW);
+
+      expect(store.read(allAlertsQuery)).toMatchObject([{ endsAt: NOW + 2 * VMALERT_LEASE_MS }]);
+    });
+
+    it('resolves an alert that vmalert checked after the last send and does not have any more', () => {
+      store.save([lapsed], NOW - 2 * MINUTE_MS);
+
+      const result = store.updateFromVmalert(state({ lastChecks: checkedAfterLastSend }), NOW);
+
+      expect(result).toEqual({ renewed: 0, ended: 1 });
+      expect(store.read(allAlertsQuery)).toMatchObject([{ endsAt: lapsed.endsAt, resolved: true }]);
+    });
+
+    it('resolves a gone alert with an end time in the future at the time of the update', () => {
+      store.save([anAlert({ labels, endsAt: NOW + 30_000 })], NOW - 30_000);
+
+      store.updateFromVmalert(state({ lastChecks: new Map([['machine-m1\nIn alarm', NOW - 5_000]]) }), NOW);
+
+      expect(store.read(allAlertsQuery)).toMatchObject([{ endsAt: NOW, resolved: true }]);
+    });
+
+    it('changes nothing when vmalert did not check the rule after the last send, for example just after a restart of vmalert', () => {
+      store.save([lapsed], NOW - 2 * MINUTE_MS);
+      const checkedBeforeLastSend = new Map([['machine-m1\nIn alarm', lapsed.endsAt - VMALERT_LEASE_MS]]);
+
+      expect(store.updateFromVmalert(state({ lastChecks: checkedBeforeLastSend }), NOW)).toEqual({ renewed: 0, ended: 0 });
+      expect(store.updateFromVmalert(state(), NOW)).toEqual({ renewed: 0, ended: 0 });
+      expect(store.read(allAlertsQuery)).toMatchObject([{ resolved: false }]);
+    });
+
+    it('changes no alert that already ended', () => {
+      store.save([anAlert({ labels, endsAt: NOW - MINUTE_MS, resolved: true })], NOW);
+
+      expect(store.updateFromVmalert(state({ firing: [{ labels }] }), NOW)).toEqual({ renewed: 0, ended: 0 });
+      expect(store.read(allAlertsQuery)).toMatchObject([{ endsAt: NOW - MINUTE_MS, resolved: true }]);
     });
   });
 });

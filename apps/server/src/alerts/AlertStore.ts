@@ -37,6 +37,20 @@ export const ALERT_COLUMNS = 'name, machine_id, labels, annotations, starts_at, 
  */
 export const FIRING_UNTIL_SQL = `(CASE WHEN resolved THEN ends_at ELSE ends_at + ${ALERT_END_GRACE_MS} END)`;
 
+/**
+ * vmalert gives a firing alert an end time 4 checks ahead of each send: 1 minute, because the rules file checks every
+ * 15 seconds. So the last send of an alert was this long before its end time.
+ */
+export const VMALERT_LEASE_MS = 60_000;
+
+/** What vmalert has now: GET /api/v1/rules (see VmalertAlertSync) */
+export interface VmalertState {
+  /** The alerts that fire now */
+  firing: { labels: Record<string, string> }[];
+  /** The time of the last check of each alert rule, by `group name\nrule name` */
+  lastChecks: Map<string, number>;
+}
+
 /** One row of the "alerts" table */
 export interface AlertRow {
   name: string;
@@ -136,6 +150,39 @@ export class AlertStore {
     return rows.map(toAlert);
   }
 
+  /**
+   * Make the firing alerts match what vmalert has now. vmalert does not send again what it could not send,
+   * for example a resolve while Chatter restarted.
+   * An alert that vmalert still fires gets a new end time. An alert that vmalert does not have any more is resolved,
+   * but only when vmalert checked its rule after the last send. Else vmalert could still be at its first check.
+   * It adds no alert: vmalert sends each firing alert at each check, with its real start time.
+   */
+  updateFromVmalert({ firing, lastChecks }: VmalertState, now: number): { renewed: number; ended: number } {
+    const firingLabels = new Set(firing.map(alert => labelsText(alert.labels)));
+    const openRows = this.db.prepare(`
+      SELECT id, labels, ends_at FROM alerts WHERE NOT resolved AND ${FIRING_UNTIL_SQL} > ?
+    `);
+    const renew = this.db.prepare('UPDATE alerts SET ends_at = MAX(ends_at, @endsAt) WHERE id = @id');
+    const resolve = this.db.prepare('UPDATE alerts SET ends_at = MIN(ends_at, @now), resolved = 1 WHERE id = @id');
+    const result = { renewed: 0, ended: 0 };
+    this.db.transaction(() => {
+      for (const row of openRows.all(now) as { id: number; labels: string; ends_at: number }[]) {
+        if (firingLabels.has(row.labels)) {
+          renew.run({ id: row.id, endsAt: now + VMALERT_LEASE_MS });
+          result.renewed++;
+          continue;
+        }
+        const labels = parseTextRecord(row.labels);
+        const lastCheck = lastChecks.get(`${labels.alertgroup}\n${labels.alertname}`);
+        if (lastCheck !== undefined && lastCheck > row.ends_at - VMALERT_LEASE_MS) {
+          resolve.run({ id: row.id, now });
+          result.ended++;
+        }
+      }
+    })();
+    return result;
+  }
+
   removeMachine(machineId: string): void {
     this.db.prepare('DELETE FROM alerts WHERE machine_id = ?').run(machineId);
   }
@@ -149,8 +196,7 @@ function toSqlParameters(alert: Alert) {
   return {
     name: alert.name,
     machineId: alert.machineId ?? null,
-    // The labels are sorted, so the same labels in another order are the same alert
-    labels: JSON.stringify(sortedLabels(alert.labels)),
+    labels: labelsText(alert.labels),
     annotations: JSON.stringify(alert.annotations),
     startsAt: alert.startsAt,
     endsAt: alert.endsAt,
@@ -172,6 +218,11 @@ export function toAlert(row: AlertRow): Alert {
 
 function parseTextRecord(json: string): Record<string, string> {
   return JSON.parse(json) as Record<string, string>;
+}
+
+/** The labels are sorted, so the same labels in another order are the same alert */
+function labelsText(labels: Record<string, string>): string {
+  return JSON.stringify(sortedLabels(labels));
 }
 
 function sortedLabels(labels: Record<string, string>): Record<string, string> {

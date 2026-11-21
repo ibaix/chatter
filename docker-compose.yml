@@ -34,7 +34,7 @@ services:
       ALERT_HOST: "0.0.0.0"
       # ChatterBox writes the alert rules of each machine (the Alert rules tab) to this folder, and vmalert reads them.
       ALERT_RULES_DIR: "/app/alert-rules"
-      # ChatterBox asks vmalert here to read the rules again after a change.
+      # ChatterBox asks vmalert here to read the rules again after a change, and reads the alerts of vmalert every 2 minutes.
       VMALERT_URL: "http://vmalert:8880"
       # TRUST_PROXY: "172.18.0.1"   # an example only: use the address from Settings > HTTPS and proxy
     volumes:
