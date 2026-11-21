@@ -73,6 +73,21 @@ describe('Notifications', () => {
       expect(notifications.outbox.list({ channelId: id })).toEqual([expect.objectContaining({ kind: 'test', status: 'sent' })]);
     });
 
+    it('tells why ntfy.sh refused a test, and does not say that Chatter tries again, because a test goes one time only', async () => {
+      const quota = JSON.stringify({ code: 42908, http: 429, error: 'limit reached: daily message quota reached' });
+      const fetch = async () => new Response(quota, { status: 429, headers: { 'retry-after': '3600' } });
+      const withQuota = new Notifications({
+        db, settingsTable: new SettingsTable(db), machineName: () => null, now: () => NOW, fetch: fetch as typeof globalThis.fetch,
+      });
+      const ntfy: ChannelInput = { ...slack, type: 'ntfy', name: 'Phones', values: { topic: 'chatter-test' } };
+
+      expect(await withQuota.sendTest(ntfy)).toEqual({
+        ok: false,
+        error: 'ntfy.sh allows 250 messages each day for each network (IP address). The limit is used. '
+          + 'It resets in 60 minutes. Use an access token or your own ntfy server.',
+      });
+    });
+
     it('gives the first problem of the form and sends nothing', async () => {
       expect(await notifications.sendTest({ ...slack, values: { url: 'not an address' } })).toEqual({ ok: false, error: expect.any(String) });
       expect(requests).toEqual([]);

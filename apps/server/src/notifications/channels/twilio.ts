@@ -151,7 +151,7 @@ function combined(results: PhoneResult[]): SendResult {
     };
   }
   const retry = failures.some(failure => failure.retry);
-  return { ok: false, retry, error: retry ? `${causes} Chatter tries again later.` : causes };
+  return { ok: false, retry, error: causes };
 }
 
 function phones(count: number): string {

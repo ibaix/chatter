@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defineChannelType } from './ChannelType.js';
 import { telegramChannel } from './telegram.js';
-import { fakeFetch, textOf, WARNING_MESSAGE as MESSAGE } from './testSupport.js';
+import { BUSY, fakeFetch, textOf, WARNING_MESSAGE as MESSAGE, TOO_MANY } from './testSupport.js';
 
 const TOKEN = '123456789:AAH-token_for_tests';
 const settings = { token: TOKEN, chatId: '-1001234567890', sound: 'normal' as const };
@@ -164,8 +164,8 @@ describe('telegramChannel', () => {
     });
   });
 
-  it.each([408, 429, 500, 502])('tries again later when Telegram answers %i (busy or a problem)', async status => {
-    expect(await resultFor(status)).toEqual({ ok: false, retry: true, error: `Telegram answered ${status}. Chatter tries again later.` });
+  it.each([[408, BUSY], [429, TOO_MANY], [500, BUSY], [502, BUSY]])('tries again later when Telegram answers %i (busy or a problem)', async (status, ending) => {
+    expect(await resultFor(status)).toEqual({ ok: false, retry: true, error: `Telegram answered ${status}${ending}` });
   });
 
   it('stops at once when Telegram answers 409', async () => {

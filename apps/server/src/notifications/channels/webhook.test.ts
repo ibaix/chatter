@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { webhookChannel } from './webhook.js';
-import { fakeFetch, WARNING_MESSAGE as MESSAGE } from './testSupport.js';
+import { BUSY, fakeFetch, WARNING_MESSAGE as MESSAGE, TOO_MANY } from './testSupport.js';
 
 const settings = { url: 'https://hooks.slack.com/services/T0/B0/x', secret: '' };
 
@@ -63,10 +63,10 @@ describe('webhookChannel', () => {
     expect(service.requests[0].init.signal).toBe(context.signal);
   });
 
-  it.each([408, 429, 500, 503])('tries again later when the address answers %i (busy or a problem)', async status => {
+  it.each([[408, BUSY], [429, TOO_MANY], [500, BUSY], [503, BUSY]])('tries again later when the address answers %i (busy or a problem)', async (status, ending) => {
     const result = await webhookChannel.send(settings, MESSAGE, fakeFetch(() => new Response(null, { status })).context());
 
-    expect(result).toEqual({ ok: false, retry: true, error: `The address answered ${status}. Chatter tries again later.` });
+    expect(result).toEqual({ ok: false, retry: true, error: `The address answered ${status}${ending}` });
   });
 
   it('stops at once when the address refuses the message, and tells what to check', async () => {

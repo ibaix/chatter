@@ -125,7 +125,7 @@ describe('twilioChannel', () => {
     const twilio = fakeTwilio(() => twilioError(status, code));
 
     expect(await twilioChannel.send({ ...settings, to: ['+15559870001'] }, MESSAGE, twilio.context()))
-      .toEqual({ ok: false, retry: true, error: `Twilio answered ${status}. Chatter tries again later.` });
+      .toEqual({ ok: false, retry: true, error: `Twilio answered ${status}.` });
   });
 
   it('tells the problem one time when it is the same for each phone', async () => {
@@ -142,7 +142,7 @@ describe('twilioChannel', () => {
 
     expect(result).toEqual({
       ok: false, retry: true,
-      error: 'Twilio answered 503. +15559870002 is not a phone number that Twilio can send to. Check the number. Chatter tries again later.',
+      error: 'Twilio answered 503. +15559870002 is not a phone number that Twilio can send to. Check the number.',
     });
   });
 
@@ -192,9 +192,9 @@ describe('twilioChannel', () => {
     const onePhone = { ...settings, to: ['+15559870001'] };
 
     expect(await twilioChannel.send(onePhone, MESSAGE, offline.context()))
-      .toEqual({ ok: false, retry: true, error: 'Chatter could not reach Twilio (ENOTFOUND). Chatter tries again later.' });
+      .toEqual({ ok: false, retry: true, error: 'Chatter could not reach Twilio (ENOTFOUND).' });
     expect(await twilioChannel.send(onePhone, MESSAGE, slow.context()))
-      .toEqual({ ok: false, retry: true, error: 'Twilio did not answer in time. Chatter tries again later.' });
+      .toEqual({ ok: false, retry: true, error: 'Twilio did not answer in time.' });
   });
 
   describe('settings', () => {

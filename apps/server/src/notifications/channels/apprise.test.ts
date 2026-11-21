@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { appriseChannel } from './apprise.js';
 import type { OutgoingMessage } from './ChannelType.js';
-import { fakeFetch } from './testSupport.js';
+import { BUSY, fakeFetch, TOO_MANY } from './testSupport.js';
 
 const MESSAGE: OutgoingMessage = {
   kind: 'started',
@@ -149,8 +149,8 @@ describe('appriseChannel', () => {
       .toEqual({ ok: false, retry: false, error: 'Apprise answered 302 and points to another address. Use the new address.' });
   });
 
-  it.each([408, 429, 500, 503])('tries again later when Apprise answers %i (busy or a problem)', async status => {
-    expect(await resultFor(status)).toEqual({ ok: false, retry: true, error: `Apprise answered ${status}. Chatter tries again later.` });
+  it.each([[408, BUSY], [429, TOO_MANY], [500, BUSY], [503, BUSY]])('tries again later when Apprise answers %i (busy or a problem)', async (status, ending) => {
+    expect(await resultFor(status)).toEqual({ ok: false, retry: true, error: `Apprise answered ${status}${ending}` });
   });
 
   it('tries again later when Chatter cannot reach Apprise', async () => {

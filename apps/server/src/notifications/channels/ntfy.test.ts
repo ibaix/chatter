@@ -184,8 +184,52 @@ describe('ntfyChannel', () => {
     expect(await resultFor(404)).toEqual({ ok: false, retry: false, error: 'ntfy answered 404. Check the server address.' });
   });
 
-  it.each([408, 429, 500, 507])('tries again later when ntfy answers %i', async status => {
-    expect(await resultFor(status)).toEqual({ ok: false, retry: true, error: `ntfy answered ${status}. Chatter tries again later.` });
+  it.each([408, 500, 507])('tries again later when ntfy answers %i', async status => {
+    expect(await resultFor(status)).toEqual({ ok: false, retry: true, error: `ntfy answered ${status}. The service is busy or has a problem.` });
+  });
+
+  describe('429', () => {
+    /** The answer of ntfy when a limit is used: https://github.com/binwiederhier/ntfy/blob/main/server/errors.go */
+    const QUOTA = { code: 42908, http: 429, error: 'limit reached: daily message quota reached' };
+    const REQUESTS = { code: 42901, http: 429, error: 'limit reached: too many requests' };
+
+    async function limited(answer: unknown, retryAfter: string | null, values: Parameters<typeof ntfyChannel.send>[0] = settings) {
+      const headers: Record<string, string> = retryAfter === null ? {} : { 'retry-after': retryAfter };
+      const service = fakeFetch(() => new Response(answer === null ? null : JSON.stringify(answer), { status: 429, headers }));
+      return ntfyChannel.send(values, MESSAGE, service.context());
+    }
+
+    it('tells that the daily limit of ntfy.sh is used, and when it resets, and holds the channel until then', async () => {
+      expect(await limited(QUOTA, String(7 * 3600 + 12 * 60))).toEqual({
+        ok: false, retry: true, retryAfterMs: (7 * 3600 + 12 * 60) * 1000,
+        error: 'ntfy.sh allows 250 messages each day for each network (IP address). The limit is used. '
+          + 'It resets in 7 hours and 12 minutes. Use an access token or your own ntfy server.',
+      });
+    });
+
+    it('does not tell a reset time that ntfy did not give, and waits one hour before the next try', async () => {
+      expect(await limited(QUOTA, null)).toEqual({
+        ok: false, retry: true, retryAfterMs: 60 * 60_000,
+        error: 'ntfy.sh allows 250 messages each day for each network (IP address). The limit is used. Use an access token or your own ntfy server.',
+      });
+    });
+
+    it('does not give the limit of an anonymous sender when the channel has an access token, or another server', async () => {
+      const text = 'The daily message limit of the ntfy server is used. It resets in 2 hours.';
+
+      expect(await limited(QUOTA, '7200', { ...settings, token: TOKEN })).toEqual({ ok: false, retry: true, retryAfterMs: 7_200_000, error: text });
+      expect(await limited(QUOTA, '7200', { ...settings, url: 'https://ntfy.example.com' }))
+        .toEqual({ ok: false, retry: true, retryAfterMs: 7_200_000, error: text });
+    });
+
+    it('tells to wait for the request limit, with the wait of ntfy', async () => {
+      expect(await limited(REQUESTS, '5')).toEqual({ ok: false, retry: true, retryAfterMs: 5000, error: 'Too many requests to ntfy. Wait 5 seconds.' });
+    });
+
+    it('tells only that there were too many requests, when ntfy gives no wait and no code', async () => {
+      expect(await limited(null, null)).toEqual({ ok: false, retry: true, error: 'Too many requests to ntfy.' });
+      expect(await limited(REQUESTS, null)).toEqual({ ok: false, retry: true, error: 'Too many requests to ntfy.' });
+    });
   });
 
   it('stops at once for a redirect', async () => {
