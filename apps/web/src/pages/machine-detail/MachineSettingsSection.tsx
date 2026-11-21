@@ -6,7 +6,7 @@ import type { Machine, MachineUpdate } from '../../types';
 import { editFormFromMachine, editFormToUpdate, withoutPasswordChange } from './editForm';
 import EditMachineForm from './EditMachineForm';
 
-interface MachineSettingsTabProps {
+interface MachineSettingsSectionProps {
   machine: Machine;
   /** True when the server saved the update */
   onUpdate: (id: string, updates: MachineUpdate) => Promise<boolean>;
@@ -17,7 +17,7 @@ interface MachineSettingsTabProps {
  * Change how ChatterBox reaches the machine, or remove the machine.
  * Give it a new key for each machine, so the form fills again.
  */
-export function MachineSettingsTab({ machine, onUpdate, onRemove }: MachineSettingsTabProps) {
+export function MachineSettingsSection({ machine, onUpdate, onRemove }: MachineSettingsSectionProps) {
   const [form, setForm] = useState(() => editFormFromMachine(machine));
   const [isSaving, setIsSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);

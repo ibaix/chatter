@@ -2,8 +2,8 @@ import { useEffect, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useCan } from '../../components/CurrentUser';
 import type { Machine, MachineUpdate } from '../../types';
-import { AlertRulesTab } from './AlertRulesTab';
-import { MachineSettingsTab } from './MachineSettingsTab';
+import { AlertRulesSection } from './AlertRulesSection';
+import { MachineSettingsSection } from './MachineSettingsSection';
 import type { AlertRules } from './useAlertRules';
 
 /** The id of each section. A link to `?tab=settings#<id>` opens the Settings tab at that section. */
@@ -28,7 +28,7 @@ export function SettingsTab({ machine, machines, rules, onUpdate, onRemove }: Se
 
   const alertRules = (
     <SettingsSection id={SETTINGS_SECTION_IDS.alertRules} title="Alert rules">
-      <AlertRulesTab machineId={machine.id} otherMachines={machines.filter(other => other.id !== machine.id)} rules={rules} />
+      <AlertRulesSection machineId={machine.id} otherMachines={machines.filter(other => other.id !== machine.id)} rules={rules} />
     </SettingsSection>
   );
   if (!canManageMachines) return alertRules;
@@ -44,7 +44,7 @@ export function SettingsTab({ machine, machines, rules, onUpdate, onRemove }: Se
       </nav>
       <div className="flex min-w-0 flex-[999_1_30rem] flex-col">
         <SettingsSection id={SETTINGS_SECTION_IDS.machine} title="Machine">
-          <MachineSettingsTab machine={machine} onUpdate={onUpdate} onRemove={onRemove} />
+          <MachineSettingsSection machine={machine} onUpdate={onUpdate} onRemove={onRemove} />
         </SettingsSection>
         <div className="border-t border-zinc-800">{alertRules}</div>
       </div>

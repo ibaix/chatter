@@ -4,9 +4,9 @@ import { Button } from '../../components/ui/Button';
 import { UploadIcon } from '../../components/ui/icons';
 import { Notice } from '../../components/ui/Notice';
 import { SegmentedButtons } from '../../components/ui/SegmentedButtons';
-import { FilesTab } from './FilesTab';
+import { FilesOnMachine } from './FilesOnMachine';
 import FileUploadPanel from './FileUploadPanel';
-import { UploadHistoryTab } from './UploadHistoryTab';
+import { UploadHistoryList } from './UploadHistoryList';
 import type { MachineFiles } from './useMachineFiles';
 import type { UploadHistory } from './useUploadHistory';
 import type { UploadMessages } from './useUploadMessages';
@@ -70,9 +70,9 @@ export function FilesSection({ machineId, machineName, files, history, messages,
         </div>
       )}
       {view === 'machine' ? (
-        <FilesTab machineId={machineId} files={files} messages={messages} now={now} />
+        <FilesOnMachine machineId={machineId} files={files} messages={messages} now={now} />
       ) : (
-        <UploadHistoryTab machineId={machineId} machineName={machineName} history={history} messages={messages} onUploaded={onUploaded} />
+        <UploadHistoryList machineId={machineId} machineName={machineName} history={history} messages={messages} onUploaded={onUploaded} />
       )}
     </>
   );

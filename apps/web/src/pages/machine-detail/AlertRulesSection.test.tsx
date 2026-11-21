@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { copyAlertRules, fetchAlertRules, RuleSaveError, saveAlertRules, testAlertQuery } from '../../api/alertRules';
 import { CurrentUserContext } from '../../components/CurrentUser';
-import { AlertRulesTab } from './AlertRulesTab';
+import { AlertRulesSection } from './AlertRulesSection';
 import { useAlertRules } from './useAlertRules';
 
 vi.mock('../../api/alertRules', async importOriginal => ({
@@ -25,16 +25,16 @@ const HIGH_LOAD: AlertRule = {
 };
 const OTHER_MACHINES = [{ id: 'm2', name: 'Brother 2' }, { id: 'm3', name: 'Haas 3' }];
 
-function Tab() {
+function Section() {
   const rules = useAlertRules('m1');
-  return <AlertRulesTab machineId="m1" otherMachines={OTHER_MACHINES} rules={rules} />;
+  return <AlertRulesSection machineId="m1" otherMachines={OTHER_MACHINES} rules={rules} />;
 }
 
-async function renderTab(rules: AlertRule[] = [OFFLINE, HIGH_LOAD], role: Role = 'admin') {
+async function renderSection(rules: AlertRule[] = [OFFLINE, HIGH_LOAD], role: Role = 'admin') {
   vi.mocked(fetchAlertRules).mockResolvedValue(rules);
   render(
     <CurrentUserContext.Provider value={{ username: 'sam', role }}>
-      <Tab />
+      <Section />
     </CurrentUserContext.Provider>,
   );
   await screen.findByText(/Chatter checks these rules/);
@@ -42,7 +42,7 @@ async function renderTab(rules: AlertRule[] = [OFFLINE, HIGH_LOAD], role: Role =
 
 const limitBox = () => screen.getByRole('spinbutton', { name: 'Limit' });
 
-describe('AlertRulesTab', () => {
+describe('AlertRulesSection', () => {
   beforeEach(() => {
     vi.mocked(saveAlertRules).mockReset();
     vi.mocked(copyAlertRules).mockReset();
@@ -50,7 +50,7 @@ describe('AlertRulesTab', () => {
   });
 
   it('shows each rule as a sentence', async () => {
-    await renderTab();
+    await renderSection();
 
     const rows = within(screen.getByRole('list', { name: 'Alert rules' })).getAllByRole('listitem');
     expect(rows).toHaveLength(2);
@@ -61,14 +61,14 @@ describe('AlertRulesTab', () => {
   });
 
   it('puts a space between "min," and "raise a"', async () => {
-    await renderTab();
+    await renderSection();
 
     const rows = within(screen.getByRole('list', { name: 'Alert rules' })).getAllByRole('listitem');
     for (const row of rows) expect(row.textContent).toContain('min, raise a');
   });
 
   it('shows "program ended" as an event, with no limit and no minutes', async () => {
-    await renderTab([{ id: 'r3', kind: 'simple', enabled: true, subject: 'program-ended', check: 'above', limit: 0, forMinutes: 0, severity: 'warning' }]);
+    await renderSection([{ id: 'r3', kind: 'simple', enabled: true, subject: 'program-ended', check: 'above', limit: 0, forMinutes: 0, severity: 'warning' }]);
 
     const [row] = within(screen.getByRole('list', { name: 'Alert rules' })).getAllByRole('listitem');
     expect(row).toHaveTextContent('When this machine reports');
@@ -80,21 +80,21 @@ describe('AlertRulesTab', () => {
   });
 
   it('links to the alerts docs', async () => {
-    await renderTab();
+    await renderSection();
 
     expect(screen.getByRole('link', { name: 'How alert rules work' }))
       .toHaveAttribute('href', expect.stringMatching(/\/guide\/alerts$/));
   });
 
   it('links a custom query to the docs page with the examples', async () => {
-    await renderTab([{ id: 'q1', kind: 'query', enabled: true, name: 'Slow', query: 'chatter_running{machine="$machine"} == 0', forMinutes: 2, severity: 'warning' }]);
+    await renderSection([{ id: 'q1', kind: 'query', enabled: true, name: 'Slow', query: 'chatter_running{machine="$machine"} == 0', forMinutes: 2, severity: 'warning' }]);
 
     expect(screen.getByRole('link', { name: 'How to write a query, with examples' }))
       .toHaveAttribute('href', expect.stringMatching(/\/guide\/custom-alert-queries$/));
   });
 
   it('counts a change, and saves the whole list', async () => {
-    await renderTab();
+    await renderSection();
     vi.mocked(saveAlertRules).mockResolvedValue({ rules: [OFFLINE, { ...HIGH_LOAD, limit: 80 }], vmalertReloaded: true });
 
     fireEvent.change(limitBox(), { target: { value: '80' } });
@@ -107,7 +107,7 @@ describe('AlertRulesTab', () => {
   });
 
   it('puts the words back on Undo changes', async () => {
-    await renderTab();
+    await renderSection();
 
     fireEvent.change(limitBox(), { target: { value: '80' } });
     fireEvent.click(screen.getByRole('button', { name: 'Undo changes' }));
@@ -117,7 +117,7 @@ describe('AlertRulesTab', () => {
   });
 
   it('removes a rule and turns a rule off', async () => {
-    await renderTab();
+    await renderSection();
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove the rule Not connected' }));
     fireEvent.click(screen.getByRole('switch', { name: 'Spindle load above 90%' }));
@@ -128,7 +128,7 @@ describe('AlertRulesTab', () => {
   });
 
   it('does not save an empty limit, and tells which rule is wrong', async () => {
-    await renderTab();
+    await renderSection();
 
     fireEvent.change(limitBox(), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -138,7 +138,7 @@ describe('AlertRulesTab', () => {
   });
 
   it('shows the reason when the server refuses a custom query', async () => {
-    await renderTab([]);
+    await renderSection([]);
     vi.mocked(saveAlertRules).mockRejectedValue(new RuleSaveError('VictoriaMetrics refused the query: bad syntax', 0));
 
     fireEvent.click(screen.getByRole('button', { name: /Add rule/ }));
@@ -149,7 +149,7 @@ describe('AlertRulesTab', () => {
   });
 
   it('tests a custom query and tells what came back', async () => {
-    await renderTab([{ id: 'q1', kind: 'query', enabled: true, name: 'Slow', query: 'chatter_spindle_speed{machine="$machine"} < 500', forMinutes: 2, severity: 'critical' }]);
+    await renderSection([{ id: 'q1', kind: 'query', enabled: true, name: 'Slow', query: 'chatter_spindle_speed{machine="$machine"} < 500', forMinutes: 2, severity: 'critical' }]);
     vi.mocked(testAlertQuery).mockResolvedValue({ ok: true, resultCount: 1, firstValue: 120 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Test' }));
@@ -159,7 +159,7 @@ describe('AlertRulesTab', () => {
   });
 
   it('turns a simple rule into a custom query with the same check', async () => {
-    await renderTab([HIGH_LOAD]);
+    await renderSection([HIGH_LOAD]);
 
     fireEvent.click(screen.getByText('Expert: show the query'));
     expect(screen.getByText('chatter_spindle_load{machine="$machine"} > 90')).toBeInTheDocument();
@@ -169,7 +169,7 @@ describe('AlertRulesTab', () => {
   });
 
   it('shows the query of an event rule, but cannot change it to a custom query', async () => {
-    await renderTab([{ ...HIGH_LOAD, subject: 'program-ended', limit: 0, forMinutes: 0 }]);
+    await renderSection([{ ...HIGH_LOAD, subject: 'program-ended', limit: 0, forMinutes: 0 }]);
 
     fireEvent.click(screen.getByText('Expert: show the query'));
 
@@ -179,7 +179,7 @@ describe('AlertRulesTab', () => {
   });
 
   it('copies the saved rules to the chosen machines', async () => {
-    await renderTab();
+    await renderSection();
     vi.mocked(copyAlertRules).mockResolvedValue({ copied: 2, notCopied: 0 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy rules to other machines' }));
@@ -192,7 +192,7 @@ describe('AlertRulesTab', () => {
   });
 
   it('tells how many rules were not copied because a machine was full', async () => {
-    await renderTab();
+    await renderSection();
     vi.mocked(copyAlertRules).mockResolvedValue({ copied: 1, notCopied: 2 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy rules to other machines' }));
@@ -206,7 +206,7 @@ describe('AlertRulesTab', () => {
   });
 
   it('shows a viewer the rules, with nothing to change', async () => {
-    await renderTab(undefined, 'viewer');
+    await renderSection(undefined, 'viewer');
 
     expect(screen.getByText(/Only an admin can change them/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Add rule/ })).not.toBeInTheDocument();
@@ -218,7 +218,7 @@ describe('AlertRulesTab', () => {
     vi.mocked(fetchAlertRules).mockRejectedValueOnce(new Error('down')).mockResolvedValueOnce([OFFLINE]);
     render(
       <CurrentUserContext.Provider value={{ username: 'sam', role: 'admin' }}>
-        <Tab />
+        <Section />
       </CurrentUserContext.Provider>,
     );
 

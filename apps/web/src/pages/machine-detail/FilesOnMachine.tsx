@@ -19,7 +19,7 @@ const FILE_ROW = cn(ROW, 'transition-colors hover:bg-primary/20 focus-within:bg-
 const FOLDER_BUTTON_CLASS =
   'flex min-h-9 w-full items-center gap-2 rounded-md border-0 bg-transparent px-2 text-left font-mono text-[0.8125rem] text-zinc-50 hover:bg-zinc-800';
 
-interface FilesTabProps {
+interface FilesOnMachineProps {
   machineId: string;
   files: MachineFiles;
   messages: UploadMessages;
@@ -27,7 +27,7 @@ interface FilesTabProps {
 }
 
 /** The files on the machine, by folder. Read, download and delete the files there. */
-export function FilesTab({ machineId, files, messages, now }: FilesTabProps) {
+export function FilesOnMachine({ machineId, files, messages, now }: FilesOnMachineProps) {
   const canSendFiles = useCan('send-files');
   const { openFile, showFile, closeFile } = useFileViewer(files.currentPath);
   const { confirm } = Dialog.useDialog();

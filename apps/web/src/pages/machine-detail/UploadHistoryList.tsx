@@ -11,7 +11,7 @@ import { errorMessageOf } from '../../utils/errorMessage';
 import type { UploadHistory } from './useUploadHistory';
 import type { UploadMessages } from './useUploadMessages';
 
-interface UploadHistoryTabProps {
+interface UploadHistoryListProps {
   machineId: string;
   machineName: string;
   history: UploadHistory;
@@ -21,7 +21,7 @@ interface UploadHistoryTabProps {
 }
 
 /** Every file sent to the machine from ChatterBox. Pick one to see its versions and send one again. */
-export function UploadHistoryTab({ machineId, machineName, history, messages, onUploaded }: UploadHistoryTabProps) {
+export function UploadHistoryList({ machineId, machineName, history, messages, onUploaded }: UploadHistoryListProps) {
   const [searchText, setSearchText] = useState('');
   const { confirm } = Dialog.useDialog();
   const matchingFiles = filesMatching(history.historyFiles, searchText);
