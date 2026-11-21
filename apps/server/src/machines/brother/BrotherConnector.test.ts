@@ -1,5 +1,6 @@
+import net from 'net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { BrotherConnector, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
+import { BrotherConnector, NO_REPLY_ERROR, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
 import type { BrotherMachineConfig, DataItemTransform } from '../../types/index.js';
 
 /**
@@ -459,5 +460,123 @@ describe('Brother run state from a poll', () => {
     await connector.poll();
 
     expect(connector.getDataSnapshot().execution).toBeUndefined();
+  });
+});
+
+/** A short timeout, so that a test does not wait long for a machine that does not answer */
+const SHORT_TIMEOUT_MS = 150;
+
+/** The open connections of each test server, so that closeServer can end them */
+const serverSockets = new WeakMap<net.Server, Set<net.Socket>>();
+
+/** A TCP server on a free port of this computer. `onSocket` gets each connection. */
+function startServer(onSocket: (socket: net.Socket) => void): Promise<net.Server> {
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer(socket => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.on('error', () => {});
+    onSocket(socket);
+  });
+  serverSockets.set(server, sockets);
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+function portOf(server: net.Server): number {
+  return (server.address() as net.AddressInfo).port;
+}
+
+function closeServer(server: net.Server): Promise<void> {
+  for (const socket of serverSockets.get(server) ?? []) socket.destroy();
+  return new Promise(resolve => server.close(() => resolve()));
+}
+
+/** Answers each command the way a Brother control does. A command that it does not know gets an empty reply. */
+function answerLikeABrother(socket: net.Socket): void {
+  socket.on('data', chunk => {
+    const command = /CLOD\s+(\S+)/.exec(chunk.toString('ascii'))?.[1] ?? '';
+    socket.write('%' + (MOCK_RESPONSES[command] ?? `RLOD    ${command.padEnd(8)}01\r\n\r\n00%`));
+  });
+}
+
+describe('Brother connection problems, with a real TCP connection', () => {
+  let server: net.Server | null = null;
+  let connector: BrotherConnector;
+
+  function connectorFor(port: number): BrotherConnector {
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: port, timeout: SHORT_TIMEOUT_MS });
+    return connector;
+  }
+
+  afterEach(async () => {
+    connector?.disconnect();
+    if (server) await closeServer(server);
+    server = null;
+  });
+
+  it('tells that another program can hold the connection when the machine accepts it but does not answer', async () => {
+    server = await startServer(() => { /* accepts the connection, and never answers */ });
+
+    const status = await connectorFor(portOf(server)).poll();
+
+    expect(status.connected).toBe(false);
+    expect(status.errors).toEqual([NO_REPLY_ERROR]);
+    expect(NO_REPLY_ERROR).toContain('Another program');
+  });
+
+  it('connects again on the next poll after a machine did not answer', async () => {
+    let connections = 0;
+    server = await startServer(() => { connections++; });
+    const silent = connectorFor(portOf(server));
+    await silent.poll();
+
+    await silent.poll();
+
+    expect(connections).toBe(2);
+  });
+
+  it('gives a socket error, not the no-answer message, when nothing listens on the port', async () => {
+    server = await startServer(() => {});
+    const port = portOf(server);
+    await closeServer(server);
+    server = null;
+
+    const status = await connectorFor(port).poll();
+
+    expect(status.connected).toBe(false);
+    expect(status.errors[0]).toMatch(/^Socket error: connect ECONNREFUSED/);
+    expect(status.errors).not.toContain(NO_REPLY_ERROR);
+  });
+
+  it('gives "Connection timeout" when the connection does not open in time', async () => {
+    // The connect never ends, as with a machine that is off behind a router
+    vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) { return this; });
+
+    const status = await connectorFor(10000).poll();
+
+    expect(status.connected).toBe(false);
+    expect(status.errors[0]).toBe('Connection timeout');
+    expect(status.errors).not.toContain(NO_REPLY_ERROR);
+  });
+
+  it('gives no error when the machine answers each command', async () => {
+    server = await startServer(answerLikeABrother);
+
+    const status = await connectorFor(portOf(server)).poll();
+
+    expect(status.errors).toEqual([]);
+    expect(status.connected).toBe(true);
+    expect(status.data.partCount).toBe(78);
+  });
+
+  it('stays connected with no error when the time between two polls is longer than the timeout', async () => {
+    server = await startServer(answerLikeABrother);
+    const answering = connectorFor(portOf(server));
+    await answering.poll();
+
+    await new Promise(resolve => setTimeout(resolve, SHORT_TIMEOUT_MS * 2));
+
+    expect(answering.getStatus().errors).toEqual([]);
+    expect(answering.connected).toBe(true);
   });
 });
