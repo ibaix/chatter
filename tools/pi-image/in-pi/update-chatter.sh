@@ -395,6 +395,7 @@ run_check() {
   check_free_space_for_install
   extract_and_check_files
   check_unchanged_images
+  remove_copy
   mark_ready
 }
 
@@ -623,10 +624,14 @@ check_manifest_fits_this_pi() {
 }
 
 # Space for the extracted files, the loaded images, a backup of the data, and the reserve.
+# The extracted files come next to the copy now. The check deletes the copy at its end,
+# so the install gets the space of the copy back.
 check_free_space_for_install() {
-  local needed
+  local needed extracted
   needed="$(space_for_install)" || refuse "$R_NO_SIZE"
-  has_free_space $((needed + $(extracted_bytes))) || refuse "$R_NO_SPACE"
+  extracted="$(extracted_bytes)"
+  has_free_space $((extracted + RESERVE_BYTES)) || refuse "$R_NO_SPACE"
+  has_free_space $((needed + extracted - $(file_size "$COPY"))) || refuse "$R_NO_SPACE"
 }
 
 extracted_bytes() {
@@ -650,14 +655,20 @@ space_for_install() {
 }
 
 extract_and_check_files() {
-  local member
   extract_members "${!signed_sha256[@]}" || refuse "$R_BAD_FILE"
-  for member in "${!signed_sha256[@]}"; do
-    [ "$(file_size "$FILES/$member")" = "${signed_size[$member]}" ] || refuse "$R_BAD_CHECKSUM"
-    [ "$(file_sha256 "$FILES/$member")" = "${signed_sha256[$member]}" ] || refuse "$R_BAD_CHECKSUM"
-  done
+  files_match_manifest || refuse "$R_BAD_CHECKSUM"
   log "Each file has its signed size and checksum."
   new_compose_names_the_version || refuse "$R_BAD_FILE"
+}
+
+# Each "file" of the signed manifest is in $FILES, with its signed size and sha256.
+files_match_manifest() {
+  local member
+  for member in "${!signed_sha256[@]}"; do
+    is_plain_file "$FILES/$member" || return 1
+    [ "$(file_size "$FILES/$member")" = "${signed_size[$member]}" ] || return 1
+    [ "$(file_sha256 "$FILES/$member")" = "${signed_sha256[$member]}" ] || return 1
+  done
 }
 
 # A roll back finds the old Chatter image by its tag. If the new compose file used "latest" (or another version),
@@ -673,8 +684,16 @@ check_unchanged_images() {
   done
 }
 
+# The install uses the checked files in $FILES only, so the copy is not needed after the check.
+# Then a ready update holds about the size of the update file on the card, not two times that size.
+remove_copy() {
+  rm -f -- "$COPY"
+}
+
+# The state keeps the sha256 of the signed manifest. The install reads the manifest again from $FILES,
+# and checks each file against it.
 mark_ready() {
-  write_state "phase=ready" "version=$manifest_version" "sha256=$(file_sha256 "$COPY")" \
+  write_state "phase=ready" "version=$manifest_version" "manifest_sha256=$(file_sha256 "$FILES/manifest.txt")" \
     "checked_at=$(date +%s)" "boot_id=$(boot_id)"
   log "Ready to install version $manifest_version."
   finish_with ready "$manifest_version"
@@ -707,9 +726,11 @@ run_install() {
 check_ready_file() {
   is_ready || refuse "$R_NOT_READY"
   is_fresh_check || refuse "$R_TOO_OLD"
-  is_unchanged_copy || refuse "$R_CHANGED"
+  is_unchanged_manifest || refuse "$R_CHANGED"
   old_version="$(installed_version)" || refuse "$R_NOT_RELEASE"
   is_newer "$known_version" "$old_version" || refuse "$R_NOT_NEWER"
+  files_match_manifest || refuse "$R_CHANGED"
+  log "Each checked file still has its signed size and checksum."
   log "Installing version $known_version over version $old_version."
 }
 
@@ -726,9 +747,15 @@ is_fresh_check() {
   [ "$age" -ge 0 ] && [ "$age" -le "$READY_MAX_AGE_SECONDS" ]
 }
 
-is_unchanged_copy() {
-  [ -f "$COPY" ] || return 1
-  [ "$(file_sha256 "$COPY")" = "$(state_value sha256)" ] || return 1
+# The manifest is the one that the check found with a correct signature, and it has the version of the state.
+# The copy of the update file is gone after the check. The install loads the files in $FILES,
+# so check_ready_file checks each of them against this manifest (files_match_manifest).
+is_unchanged_manifest() {
+  local checked_sha256
+  checked_sha256="$(state_value manifest_sha256)"
+  [[ $checked_sha256 =~ ^[0-9a-f]{64}$ ]] || return 1
+  is_plain_file "$FILES/manifest.txt" || return 1
+  [ "$(file_sha256 "$FILES/manifest.txt")" = "$checked_sha256" ] || return 1
   read_manifest "$FILES/manifest.txt" || return 1
   [ "$manifest_version" = "$known_version" ]
 }

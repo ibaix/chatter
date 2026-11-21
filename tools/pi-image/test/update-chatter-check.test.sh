@@ -23,7 +23,9 @@ test_a_correct_update_file_is_ready() {
   check "the request is moved out of the inbox" test ! -e "$inbox/request.json"
   check "the helper does not delete other inbox entries" test -e "$inbox/.partial-abc"
   check "the state file says ready" test "$(state_value phase)" = ready
-  check "the helper keeps its own copy of the update file" test -f "$state_dir/update.tar"
+  check "the copy of the update file is deleted after the check" test ! -e "$state_dir/update.tar"
+  check "the checked files stay for the install" test -f "$state_dir/files/chatter.tar.gz"
+  check "the checked files are in the root-only folder" test "$(stat --format %a "$state_dir")" = 700
   check "the moved file is deleted after the copy" test -z "$(ls -A "$state_dir/incoming")"
   check "the check does not change the installed version" test "$(cat "$state_dir/installed-version")" = "$OLD_VERSION"
 }
@@ -473,7 +475,7 @@ EOF
   done
 }
 
-# Each read of the update file takes minutes on a Pi. tar lists it one time, and stops after the manifest.
+# Each read of the update file takes minutes on a Pi. The check reads it fully only to copy it and to extract it.
 test_the_check_reads_the_update_file_few_times() {
   set_up
   put_update_file > /dev/null
@@ -485,6 +487,9 @@ test_the_check_reads_the_update_file_few_times() {
     grep -q -- '--extract --occurrence=1 .* manifest.txt manifest.txt.sig < .*update.tar' "$fake/tar.log"
   check "read count: tar runs 3 times on the copy (list, manifest, files)" \
     test "$(grep -c 'update.tar$' "$fake/tar.log")" -eq 3
+  check "read count: no sha256 of the whole copy" bash -c "! grep -q update.tar '$fake/sha256sum.log'"
+  check "read count: one sha256 for each of the 5 files, and one for the manifest" \
+    test "$(grep -c 'files/' "$fake/sha256sum.log")" -eq 6
 }
 
 test_unchanged_images_must_be_on_the_pi() {
