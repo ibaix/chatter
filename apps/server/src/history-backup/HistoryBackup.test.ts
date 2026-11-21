@@ -319,10 +319,17 @@ describe('HistoryBackup', () => {
       expect(filesLeft()).toEqual([]);
     });
 
-    it('refuses when the disk does not have room for the file and its parts', async () => {
+    it('refuses when the disk does not have room for the file, or for its parts, which are larger', async () => {
       const archive = await backUp();
-      freeBytes = ARCHIVE_LIMITS.freeSpaceReserveBytes + archive.length;
-      expect((await refusalOf(archive)).status).toBe(507);
+      const raw = (await unpack(archive)).get('history/raw.jsonl.gz')!;
+      // The files of the backup go a moment after the download
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(raw.length).toBeGreaterThan(archive.length);
+      for (const free of [archive.length - 1, raw.length - 1]) {
+        freeBytes = ARCHIVE_LIMITS.freeSpaceReserveBytes + free;
+        expect((await refusalOf(archive)).status).toBe(507);
+        expect(filesLeft()).toEqual([]);
+      }
     });
 
     it('deletes the files of a refused file, of a cancelled restore, and of a restore that ends', async () => {

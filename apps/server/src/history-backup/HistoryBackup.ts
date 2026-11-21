@@ -176,7 +176,6 @@ export class HistoryBackup {
     const abort = new AbortController();
     try {
       await mkdir(folder, { recursive: true });
-      await this.requireFreeBytes(0);
       const budget = new ByteBudget(ARCHIVE_LIMITS.archiveBytes, () => new BackupRefusedError(
         `The backup is larger than ${gigabytes(ARCHIVE_LIMITS.archiveBytes)}. Choose a shorter time range, or 1-minute averages only.`, 413,
       ));
@@ -207,8 +206,9 @@ export class HistoryBackup {
       { name: MANIFEST_NAME, text: `${JSON.stringify(prepared.manifest, null, 2)}\n` },
       ...Object.keys(prepared.manifest.parts).map(name => ({ name, filePath: path.join(prepared.folder, localName(name)) })),
     ];
-    // The parts are gzip already, so the fastest level is enough for the tar around them
-    const source = Readable.from(tarBytes(entries, new Date(this.now()))).pipe(createGzip({ level: 1 }));
+    // The parts are gzip already, but gzip of the exported lines stays very repetitive (long runs of 0, and times
+    // 2 seconds apart). A second gzip makes the file about 8 times smaller.
+    const source = Readable.from(tarBytes(entries, new Date(this.now()))).pipe(createGzip());
     let idleTimer: NodeJS.Timeout | undefined;
     const restartIdle = () => {
       clearTimeout(idleTimer);
@@ -238,11 +238,11 @@ export class HistoryBackup {
     try {
       await this.dropPending();
       await mkdir(folder, { recursive: true });
-      // The upload, and then its parts next to it
-      await this.requireFreeBytes(2 * size);
+      await this.requireFreeBytes(size);
       const upload = path.join(folder, 'upload.tar.gz');
       await receiveUpload(body, upload);
-      const parts = await extractParts(upload, folder);
+      // The parts can be much larger than the upload, so the free space is checked again before each one
+      const parts = await extractParts(upload, folder, bytes => this.requireFreeBytes(bytes));
       await rm(upload, { force: true });
       const manifest = await checkParts(parts);
       if (manifest.machine.type !== target.type) {
@@ -335,6 +335,7 @@ export class HistoryBackup {
       ? [['history/averages.jsonl.gz', AVERAGE_SERIES]]
       : [['history/raw.jsonl.gz', RAW_SERIES], ['history/averages.jsonl.gz', AVERAGE_SERIES]];
     for (const [name, pattern] of series) {
+      await this.requireFreeBytes(0);
       const exported = await this.history.exportSeries(machine.id, pattern, range, signal);
       parts[name] = await writeGzipPart(path.join(folder, localName(name)), countedSeries(exported, span), budget);
     }
@@ -618,7 +619,7 @@ function entryLimit(name: string): number {
 }
 
 /** Unpack the tar.gz into the folder. Only the known entries, each once and within its size limit. */
-async function extractParts(upload: string, folder: string): Promise<ReceivedParts> {
+async function extractParts(upload: string, folder: string, requireFreeBytes: (bytes: number) => Promise<void>): Promise<ReceivedParts> {
   const parts: ReceivedParts = new Map();
   const budget = new ByteBudget(ARCHIVE_LIMITS.archiveBytes, () => new BackupRefusedError(tooLargeMessage(), 413));
   const open = new Set<WriteStream>();
@@ -631,6 +632,7 @@ async function extractParts(upload: string, folder: string): Promise<ReceivedPar
         if (parts.has(name)) throw new ArchiveError(`The file has the entry ${name} two times.`);
         if (size > entryLimit(name)) throw new ArchiveError(`The entry ${name} of the file is too large.`);
         budget.take(size);
+        await requireFreeBytes(size);
         const file = path.join(folder, localName(name));
         const out = createWriteStream(file, { flags: 'wx' });
         open.add(out);
