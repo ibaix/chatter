@@ -201,7 +201,7 @@ export class FTPClient {
         path: joinRemotePath(path, item.name)
       }));
     } catch (err) {
-      throw new Error(ftpErrorMessage(err, this.host, this.port));
+      throw new Error(ftpErrorMessage(err, this.host, this.port), { cause: err });
     }
   }
 
@@ -212,7 +212,7 @@ export class FTPClient {
     try {
       return await this.withConnection({ verbose: false }, client => this.buildTree(client, path, depth));
     } catch (err) {
-      throw new Error(ftpErrorMessage(err, this.host, this.port));
+      throw new Error(ftpErrorMessage(err, this.host, this.port), { cause: err });
     }
   }
 
@@ -228,7 +228,7 @@ export class FTPClient {
         }
       });
     } catch (err) {
-      throw new Error(`FTP download error: ${errorText(err)}`);
+      throw new Error(`FTP download error: ${errorText(err)}`, { cause: err });
     }
   }
 
@@ -252,7 +252,7 @@ export class FTPClient {
       if (err instanceof Error && err.message.includes(ALREADY_EXISTS_MARKER)) {
         throw err;
       }
-      throw new Error(`FTP upload error: ${errorText(err)}`);
+      throw new Error(`FTP upload error: ${errorText(err)}`, { cause: err });
     }
   }
 
@@ -270,7 +270,7 @@ export class FTPClient {
         }
       });
     } catch (err) {
-      throw new Error(`FTP connection error: ${errorText(err)}`);
+      throw new Error(`FTP connection error: ${errorText(err)}`, { cause: err });
     }
 
     return results;
@@ -281,7 +281,7 @@ export class FTPClient {
     try {
       await this.withConnection({ verbose: true }, client => client.remove(relativePath));
     } catch (err) {
-      throw new Error(`FTP delete error: ${errorText(err)}`);
+      throw new Error(`FTP delete error: ${errorText(err)}`, { cause: err });
     }
   }
 

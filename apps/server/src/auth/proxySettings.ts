@@ -85,7 +85,7 @@ function trustFrom(setting: string | undefined, settingName: string): ProxyTrust
   try {
     return ProxyTrust.fromSetting(setting);
   } catch (error) {
-    if (error instanceof ProxyAddressError) throw new Error(`${settingName}: ${error.message}`);
+    if (error instanceof ProxyAddressError) throw new Error(`${settingName}: ${error.message}`, { cause: error });
     throw error;
   }
 }

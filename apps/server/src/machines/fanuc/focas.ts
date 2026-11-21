@@ -635,7 +635,7 @@ export class Focas {
       if (error instanceof Error && error.message.includes('macOS')) {
         throw error;
       }
-      throw new Error(`Failed to initialize FOCAS library: ${error}`);
+      throw new Error(`Failed to initialize FOCAS library: ${error}`, { cause: error });
     }
   }
 
