@@ -1,3 +1,4 @@
+import type { PollClock } from '@local-chatter/shared';
 import { createLogger } from '../logging/logger.js';
 import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
 
@@ -32,6 +33,12 @@ const CONNECTING_TIME_MS = 30000;
  * Each connector ends its requests on a timeout or a closed socket, so a working poll is never this slow.
  */
 const STUCK_POLL_MS = 60000;
+/** "Not polled for N min" shows after this many intervals with no poll result, and never before this time */
+const OVERDUE_INTERVALS = 3;
+const MIN_OVERDUE_MS = 60_000;
+
+/** What a reconnect did: a new poll started, or a poll that has not ended stops a new one, or the machine is not polled */
+export type ReconnectResult = 'started' | 'poll-in-progress' | 'not-polled';
 
 /**
  * A machine that fails often is polled less often, so it does not slow the server.
@@ -58,6 +65,11 @@ export class PollScheduler {
   /** The machines that are connecting, each with the timer that ends its connecting time */
   private readonly connectingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+  /** When the polling of each machine started, and when its last poll ended */
+  private readonly startTimes = new Map<string, number>();
+  private readonly endTimes = new Map<string, number>();
+  private readonly pollStartTimes = new Map<string, number>();
+
   private readonly pollTimeoutMs: number;
   private readonly stuckPollMs: number;
 
@@ -68,6 +80,32 @@ export class PollScheduler {
   ) {
     this.pollTimeoutMs = limits.pollTimeoutMs ?? POLL_TIMEOUT_MS;
     this.stuckPollMs = limits.stuckPollMs ?? STUCK_POLL_MS;
+  }
+
+  /** The poll times of a machine that is polled, else null */
+  pollClock(id: string): PollClock | null {
+    const startedAt = this.startTimes.get(id);
+    if (startedAt === undefined) return null;
+    const inProgressSince = this.pollStartTimes.get(id);
+    return {
+      lastEndedAt: new Date(this.endTimes.get(id) ?? startedAt).toISOString(),
+      overdueAfterMs: Math.max(OVERDUE_INTERVALS * this.nextIntervalMs(id), MIN_OVERDUE_MS),
+      inProgressSince: inProgressSince === undefined ? null : new Date(inProgressSince).toISOString(),
+    };
+  }
+
+  /**
+   * Disconnect the machine and poll it now, as after a start. A poll that has not ended yet
+   * (for example a machine that never answers) stops a second poll: two polls at once would talk over each other.
+   */
+  reconnect(connector: BaseMachineConnector): ReconnectResult {
+    if (!this.activeIds.has(connector.id)) return 'not-polled';
+    disconnectQuietly(connector);
+    if (this.pollsInProgress.has(connector.id)) return 'poll-in-progress';
+    clearTimeout(this.timers.get(connector.id));
+    this.failureCounts.set(connector.id, 0);
+    void this.pollNow(connector);
+    return 'started';
   }
 
   get intervalMs(): number {
@@ -89,6 +127,8 @@ export class PollScheduler {
     this.activeIds.add(connector.id);
     this.failureCounts.set(connector.id, 0);
     connector.pollTimeLimitMs = this.pollTimeoutMs;
+    this.startTimes.set(connector.id, Date.now());
+    this.endTimes.delete(connector.id);
     this.startConnecting(connector);
     // Do not wait: pollNow sets the next timer when it ends
     void this.pollNow(connector);
@@ -100,6 +140,8 @@ export class PollScheduler {
     this.timers.delete(id);
     this.activeIds.delete(id);
     this.failureCounts.delete(id);
+    this.startTimes.delete(id);
+    this.endTimes.delete(id);
     this.endConnecting(id);
   }
 
@@ -119,6 +161,7 @@ export class PollScheduler {
     if (!this.activeIds.has(connector.id)) return;
 
     this.recordResult(connector.id, succeeded);
+    this.endTimes.set(connector.id, Date.now());
     // Before afterPoll, so the status it sends already says that the machine is connected
     if (succeeded) this.endConnecting(connector.id);
     this.hooks.afterPoll(connector);
@@ -138,6 +181,7 @@ export class PollScheduler {
     const token = Symbol(id);
     this.pollsInProgress.set(id, token);
     const stuckTimer = setTimeout(() => this.abandonStuckPoll(connector, token), this.stuckPollMs);
+    this.pollStartTimes.set(id, Date.now());
     // Promise.resolve().then also catches an error that poll() throws before it gives a promise
     const poll = Promise.resolve()
       .then(() => connector.poll())
@@ -146,6 +190,7 @@ export class PollScheduler {
         // A poll that was left behind must not end or disconnect the poll that came after it
         if (this.pollsInProgress.get(id) !== token) return;
         this.pollsInProgress.delete(id);
+        this.pollStartTimes.delete(id);
         if (timedOut) disconnectQuietly(connector);
       });
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
@@ -177,6 +222,7 @@ export class PollScheduler {
   private abandonStuckPoll(connector: BaseMachineConnector, token: symbol): void {
     if (this.pollsInProgress.get(connector.id) !== token) return;
     this.pollsInProgress.delete(connector.id);
+    this.pollStartTimes.delete(connector.id);
     disconnectQuietly(connector);
     log.warn('A poll did not end, so the next poll starts without it', { machine: connector.id, waitedMs: this.stuckPollMs });
   }

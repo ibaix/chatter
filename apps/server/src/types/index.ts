@@ -7,6 +7,7 @@ import type {
   MacroConfig,
   MTConnectMachineData,
   OpcUaSecurity,
+  PollClock,
   PollTimings,
   SiemensMachineData,
 } from '@local-chatter/shared';
@@ -128,6 +129,8 @@ export interface BaseMachineStatus {
   macros?: MacroConfig[];
   /** How long the polls take. Only connectors that measure their polls send it. */
   pollTimings?: PollTimings;
+  /** When Chatter last had a poll result. The poller sets it while it polls the machine. */
+  pollClock?: PollClock;
 }
 
 export interface BrotherMachineStatus extends BaseMachineStatus {

@@ -83,7 +83,8 @@ async function start(): Promise<void> {
     metrics.start();
     log.info('Machine history saved in VictoriaMetrics', { url: VICTORIA_METRICS_URL });
     // One log line when a machine connects, goes offline, comes back, or reports a new problem
-    poller.addRecorder(new ConnectionLog(undefined, undefined, id => poller.isConnecting(id)));
+    const connections = new ConnectionLog(undefined, undefined, id => poller.isConnecting(id));
+    poller.addRecorder(connections);
     // The program, alarm, mode, run state and tool are text, so they are saved in SQLite
     const statePeriods = new StatePeriodStore(getDb());
     const stateRecorder = new StatePeriodRecorder(statePeriods);
@@ -134,7 +135,7 @@ async function start(): Promise<void> {
     const updates = new UpdateService(updateFolder, version, releases);
     const app = createApp({
       poller, auth, accounts, history, statePeriods, alerts, alertRules, proxySettings, loginLog: new LoginLog(getDb()), version, updates,
-      notifications, serverLog,
+      notifications, serverLog, connections,
     });
     if (WEB_DIR) app.route('/', webAppRoutes(WEB_DIR));
     // serve() makes a plain HTTP/1 server, because no HTTP/2 option is given.

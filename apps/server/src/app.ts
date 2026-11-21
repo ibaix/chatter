@@ -37,6 +37,8 @@ import { Notifications } from './notifications/Notifications.js';
 import { notificationRoutes } from './routes/notifications.js';
 import { ServerLog } from './logging/ServerLog.js';
 import { logRoutes } from './routes/logs.js';
+import { ConnectionLog } from './logging/ConnectionLog.js';
+import { machineHealthRoutes, type ConnectionHealthSource } from './routes/machineHealth.js';
 
 /** Every API address starts with this */
 export const API_PREFIX = '/api';
@@ -68,6 +70,8 @@ export interface AppParts {
   notifications?: Notifications;
   /** The last lines of the server log, for Settings > Diagnostics. Without it, the lines are not kept. */
   serverLog?: ServerLog;
+  /** The connection changes of each machine, for its health panel. Without it, the panel shows none. */
+  connections?: ConnectionHealthSource;
 }
 
 /**
@@ -90,6 +94,7 @@ export function createApp({
   updates = new UpdateService(UpdateFolder.fromEnvironment(), version, new ReleaseWatcher({ repo: releasesRepo(), store: memoryCheckSettingStore() })),
   notifications = Notifications.inMemory(),
   serverLog = new ServerLog(),
+  connections = new ConnectionLog(),
 }: AppParts) {
   const loginGuard = { auth, limiter: new LoginLimiter(), loginLog, proxySettings };
   const api = new Hono()
@@ -101,6 +106,7 @@ export function createApp({
     .use(requireLogin(loginGuard))
     .get('/status', c => c.json(poller.getStatus()))
     .route('/', machineRoutes(poller))
+    .route('/', machineHealthRoutes(poller, connections))
     .route('/', discoveryRoutes(poller))
     .route('/', machineFileRoutes(poller))
     .route('/', uploadHistoryRoutes())
