@@ -191,8 +191,18 @@ export type ToolSyncResult =
   | ToolSyncRefusal
   | { outcome: 'not-connected' };
 
-/** A valid ATC reply has M## keys */
-function isValidAtcResponse(response: ParsedResponse): boolean {
+/** The key of the reply status in a parsed reply. No data key of a Brother starts with @. */
+export const REPLY_STATUS_KEY = '@status';
+/** The header line of a reply: "RLOD", the command, and a status of 2 digits */
+const REPLY_HEADER = /^RLOD\s+\S+?\s*(\d{2})$/;
+
+/**
+ * The control knows the ATC command: the reply status is 00, also with no pots (an empty magazine).
+ * A reply with no status line counts as known only when it has pots (M## keys).
+ */
+function isKnownAtcReply(response: ParsedResponse): boolean {
+  const status = response[REPLY_STATUS_KEY]?.[0];
+  if (status !== undefined) return status === '00';
   return Object.keys(response).some(key => /^M\d{2}$/.test(key));
 }
 
@@ -219,6 +229,11 @@ export class BrotherConnector extends BaseMachineConnector {
   private hasPocketInfo = false;
   private controlType: ControlType | null = null;
   private atcCommand: AtcCommand | null = null;
+  /**
+   * True after the first tool read found the ATC command, or found that the control knows neither. It stays for the
+   * life of the connector, also after a reconnect, so Chatter never sends a command that the control does not know.
+   */
+  private atcDetectionDone = false;
   private toolDataCommand: string;
   private macroCommand: string;
   private dataItems: DataItem[];
@@ -376,7 +391,11 @@ export class BrotherConnector extends BaseMachineConnector {
     });
   }
 
-  /** Each reply line is "KEY,value,value,..."; lines with no comma are headers */
+  /**
+   * Each reply line is "KEY,value,value,..."; lines with no comma are headers. The status of the header line
+   * "RLOD    <command>  00" is under REPLY_STATUS_KEY: 00 is good, another value (for example 08) means that the
+   * control does not know the command.
+   */
   parseResponse(response: string): ParsedResponse {
     const result: ParsedResponse = {};
     for (const line of response.split('\r\n')) {
@@ -384,6 +403,8 @@ export class BrotherConnector extends BaseMachineConnector {
       if (parts.length > 1) {
         result[parts[0]] = parts.slice(1).map(s => s.trim());
       }
+      const status = REPLY_HEADER.exec(line)?.[1];
+      if (status !== undefined) result[REPLY_STATUS_KEY] = [status];
     }
     return result;
   }
@@ -396,9 +417,10 @@ export class BrotherConnector extends BaseMachineConnector {
     for (const { command, controlType } of ATC_COMMANDS) {
       try {
         const response = await this.send(command);
-        if (isValidAtcResponse(response)) {
+        if (isKnownAtcReply(response)) {
           this.atcCommand = command;
           this.controlType = controlType;
+          this.atcDetectionDone = true;
           return response;
         }
       } catch (err) {
@@ -406,6 +428,8 @@ export class BrotherConnector extends BaseMachineConnector {
         if (err instanceof NoReplyError || !this.connected) throw err;
       }
     }
+    // The control knows neither command. Ask neither again: an unknown command adds a CM entry to its alarm list.
+    this.atcDetectionDone = true;
     return null;
   }
 
@@ -521,7 +545,7 @@ export class BrotherConnector extends BaseMachineConnector {
 
   /** Read the tool table and the tool data. The first time, find the control type: its reply is also the tool table. */
   private async readTools(): Promise<void> {
-    const atcResponse = this.atcCommand ? await this.send(this.atcCommand) : await this.detectControlType();
+    const atcResponse = this.atcCommand ? await this.send(this.atcCommand) : this.atcDetectionDone ? null : await this.detectControlType();
     if (atcResponse && this.atcCommand) this.updatePotTools(atcResponse);
     const toolDataResponse = await this.send(this.toolDataCommand);
     this.updateToolOffsets(toolDataResponse);
