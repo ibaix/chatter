@@ -56,13 +56,19 @@ export function alertReceiverApp(store: AlertStore, { isKnownMachine, afterSave 
   );
 }
 
+/**
+ * vmalert sends a firing alert with an end time in the future. It sends an ended alert one time, with its real end time,
+ * which is in the past (vmalert checks 30 seconds back in time). That send is the "resolved" flag.
+ */
 function toAlert({ labels, annotations, startsAt, endsAt }: z.output<typeof sentAlert>, receivedAt: number): Alert {
+  const end = Date.parse(endsAt);
   return {
     name: labels.alertname,
     machineId: labels.machine,
     labels,
     annotations: annotations ?? {},
     startsAt: Date.parse(startsAt),
-    endsAt: Math.min(Date.parse(endsAt), receivedAt + MAX_FIRING_AHEAD_MS),
+    endsAt: Math.min(end, receivedAt + MAX_FIRING_AHEAD_MS),
+    resolved: end <= receivedAt,
   };
 }

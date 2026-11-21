@@ -14,6 +14,7 @@ const alert: Alert = {
   annotations: { summary: 'Spindle load is 92%' },
   startsAt: STARTED,
   endsAt: ENDED,
+  resolved: true,
 };
 
 describe('alertOutgoingMessage', () => {

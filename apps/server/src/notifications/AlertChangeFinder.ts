@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { ALERT_COLUMNS, type Alert, type AlertRow, toAlert } from '../alerts/AlertStore.js';
+import { ALERT_COLUMNS, type Alert, type AlertRow, FIRING_UNTIL_SQL, toAlert } from '../alerts/AlertStore.js';
 
 /** A change older than this sends no message, for example after Chatter was off for a long time */
 export const SILENT_AFTER_MS = 24 * 60 * 60_000;
@@ -73,20 +73,21 @@ export class AlertChangeFinder {
     if (isFirstStart) {
       this.db.prepare(`
         INSERT INTO alert_notices (alert_id, kind)
-        SELECT id, 'started' FROM alerts UNION ALL SELECT id, 'ended' FROM alerts WHERE ends_at <= ?
+        SELECT id, 'started' FROM alerts UNION ALL SELECT id, 'ended' FROM alerts WHERE ${FIRING_UNTIL_SQL} <= ?
       `).run(now);
     }
   }
 
   /**
-   * vmalert can send an alert again after its end time passed, for example when a request is late.
+   * vmalert can send an alert again after it was reported as ended, for example after a pause longer than the grace time.
    * Then the alert fires again, so all its notes go. The next look reports the start again, and later the real end.
+   * A send within the grace time (see isAlertFiring) keeps the alert firing, so it is reported neither as ended nor as started again.
    */
   private forgetNotesOfAlertsThatFireAgain(now: number): void {
     this.db.prepare(`
       DELETE FROM alert_notices WHERE alert_id IN (
         SELECT alerts.id FROM alerts
-        WHERE alerts.ends_at > ?
+        WHERE ${FIRING_UNTIL_SQL} > ?
           AND EXISTS (SELECT 1 FROM alert_notices AS ended WHERE ended.alert_id = alerts.id AND ended.kind = 'ended')
       )
     `).run(now);
@@ -108,7 +109,7 @@ export class AlertChangeFinder {
   private endedAlertsWithoutEndNote(now: number): StoredAlertRow[] {
     return this.db.prepare(`
       SELECT id, ${ALERT_COLUMNS} FROM alerts
-      WHERE ends_at <= ?
+      WHERE ${FIRING_UNTIL_SQL} <= ?
         AND NOT EXISTS (SELECT 1 FROM alert_notices WHERE alert_id = alerts.id AND kind = 'ended')
     `).all(now) as StoredAlertRow[];
   }

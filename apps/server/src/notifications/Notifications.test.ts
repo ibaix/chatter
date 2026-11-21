@@ -15,7 +15,7 @@ const slack: ChannelInput = {
 
 const alert: Alert = {
   name: 'In alarm', machineId: 'haas-vf2', labels: { alertname: 'In alarm', machine: 'haas-vf2', severity: 'critical' },
-  annotations: {}, startsAt: NOW, endsAt: NOW + 60_000,
+  annotations: {}, startsAt: NOW, endsAt: NOW + 60_000, resolved: false,
 };
 
 describe('Notifications', () => {
@@ -201,7 +201,7 @@ describe('Notifications', () => {
     expect(sent).toHaveLength(4);
     expect(sent[0]).toMatch(/^Chatter could not send 5 alerts while the channel was blocked: /);
     expect(sent.slice(1)).toEqual([
-      expect.stringContaining('Alarm 5 '), expect.stringContaining('Alarm 6 '), expect.stringContaining('Alarm 7 '),
+      expect.stringContaining('Alarm 5'), expect.stringContaining('Alarm 6'), expect.stringContaining('Alarm 7'),
     ]);
   });
 

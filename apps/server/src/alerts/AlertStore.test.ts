@@ -1,3 +1,5 @@
+import { ALERT_END_GRACE_MS } from '@local-chatter/shared';
+import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type Alert, AlertStore, KEEP_ALERTS_MS } from './AlertStore.js';
 
@@ -12,6 +14,7 @@ function anAlert(values: Partial<Alert> = {}): Alert {
     annotations: { summary: 'Spindle speed is 9000' },
     startsAt: NOW - MINUTE_MS,
     endsAt: NOW + MINUTE_MS,
+    resolved: false,
     ...values,
   };
 }
@@ -42,9 +45,18 @@ describe('AlertStore', () => {
   });
 
   it('gives only the alerts that fire now, when asked', () => {
-    store.save([anAlert({ name: 'Ended', endsAt: NOW - 1 }), anAlert({ name: 'Firing', labels: { alertname: 'Firing' } })], NOW);
+    store.save([anAlert({ name: 'Ended', endsAt: NOW - 1, resolved: true }), anAlert({ name: 'Firing', labels: { alertname: 'Firing' } })], NOW);
 
     expect(store.read(firingAlertsQuery).map(found => found.name)).toEqual(['Firing']);
+  });
+
+  it('keeps an alert with a passed end time as firing for the grace time, because vmalert can send it late', () => {
+    store.save([
+      anAlert({ name: 'Late', labels: { alertname: 'Late' }, endsAt: NOW - ALERT_END_GRACE_MS + 1 }),
+      anAlert({ name: 'Gone', labels: { alertname: 'Gone' }, endsAt: NOW - ALERT_END_GRACE_MS }),
+    ], NOW);
+
+    expect(store.read(firingAlertsQuery).map(found => found.name)).toEqual(['Late']);
   });
 
   it('gives the alerts of one machine, when asked', () => {
@@ -54,7 +66,7 @@ describe('AlertStore', () => {
   });
 
   it('leaves out alerts that ended before the asked time', () => {
-    store.save([anAlert({ endsAt: NOW - 60 * MINUTE_MS })], NOW);
+    store.save([anAlert({ endsAt: NOW - 60 * MINUTE_MS, resolved: true })], NOW);
 
     expect(store.read({ ...allAlertsQuery, endedAfter: NOW - MINUTE_MS })).toEqual([]);
   });
@@ -73,5 +85,38 @@ describe('AlertStore', () => {
     store.removeMachine('m1');
 
     expect(store.read(allAlertsQuery)).toEqual([]);
+  });
+
+  describe('the update that adds the resolved flag', () => {
+    function oldDatabase(): Database.Database {
+      const db = new Database(':memory:');
+      db.exec(`
+        CREATE TABLE alerts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, machine_id TEXT, labels TEXT NOT NULL,
+          annotations TEXT NOT NULL, starts_at INTEGER NOT NULL, ends_at INTEGER NOT NULL, UNIQUE (labels, starts_at)
+        );
+        INSERT INTO alerts (name, labels, annotations, starts_at, ends_at)
+        VALUES ('Ended', '{}', '{}', ${NOW - 5 * MINUTE_MS}, ${NOW - MINUTE_MS}),
+               ('Firing', '{}', '{}', ${NOW - 5 * MINUTE_MS + 1}, ${NOW + MINUTE_MS});
+      `);
+      return db;
+    }
+
+    it('marks the alerts that ended before the update as resolved, so they do not fire again for the grace time', () => {
+      const updated = new AlertStore(oldDatabase(), NOW);
+
+      expect(updated.read(allAlertsQuery).map(({ name, resolved }) => ({ name, resolved }))).toEqual([
+        { name: 'Firing', resolved: false },
+        { name: 'Ended', resolved: true },
+      ]);
+    });
+
+    it('changes nothing at the next start', () => {
+      const db = oldDatabase();
+      new AlertStore(db, NOW);
+      new AlertStore(db, NOW + 10 * MINUTE_MS);
+
+      expect(new AlertStore(db, NOW).read(firingAlertsQuery).map(found => found.name)).toEqual(['Firing']);
+    });
   });
 });

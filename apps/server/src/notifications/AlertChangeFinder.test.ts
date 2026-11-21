@@ -1,3 +1,4 @@
+import { ALERT_END_GRACE_MS } from '@local-chatter/shared';
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type Alert, AlertStore } from '../alerts/AlertStore.js';
@@ -14,8 +15,14 @@ function anAlert(values: Partial<Alert> = {}): Alert {
     annotations: { summary: 'Spindle load is 92%' },
     startsAt: NOW - MINUTE_MS,
     endsAt: NOW + MINUTE_MS,
+    resolved: false,
     ...values,
   };
+}
+
+/** An alert that vmalert sent as ended, with its real end time */
+function anEndedAlert(values: Partial<Alert> = {}): Alert {
+  return anAlert({ resolved: true, ...values });
 }
 
 /** Keeps each change that the finder reports */
@@ -55,28 +62,56 @@ describe('AlertChangeFinder', () => {
     expect(found.changes[0].alertId).toEqual(expect.any(Number));
   });
 
-  it('reports an alert one time as ended when its end time is in the past', () => {
+  it('reports an alert one time as ended when vmalert says that it ended, with the end time of vmalert', () => {
     alerts.save([anAlert()], NOW);
     finder.findChanges(NOW);
+    alerts.save([anEndedAlert({ endsAt: NOW + 30_000 })], NOW + MINUTE_MS);
     finder.findChanges(NOW + MINUTE_MS);
     finder.findChanges(NOW + 2 * MINUTE_MS);
 
     expect(found.kinds()).toEqual(['started SpindleLoadHigh', 'ended SpindleLoadHigh']);
-    expect(found.changes[1]).toMatchObject({ kind: 'ended', at: NOW + MINUTE_MS, alertId: found.changes[0].alertId });
+    expect(found.changes[1]).toMatchObject({ kind: 'ended', at: NOW + 30_000, alertId: found.changes[0].alertId });
   });
 
-  it('reports a start and an end again when vmalert sends an alert after its end time passed', () => {
+  it('reports an alert that vmalert stops sending as ended only after the grace time', () => {
     alerts.save([anAlert()], NOW);
     finder.findChanges(NOW);
-    finder.findChanges(NOW + MINUTE_MS);
+    finder.findChanges(NOW + MINUTE_MS + ALERT_END_GRACE_MS - 1);
+
+    expect(found.kinds()).toEqual(['started SpindleLoadHigh']);
+
+    finder.findChanges(NOW + MINUTE_MS + ALERT_END_GRACE_MS);
+
+    expect(found.kinds()).toEqual(['started SpindleLoadHigh', 'ended SpindleLoadHigh']);
+    expect(found.changes[1]).toMatchObject({ kind: 'ended', at: NOW + MINUTE_MS });
+  });
+
+  it('reports neither an end nor a second start when vmalert sends a firing alert again after a short pause', () => {
+    // For example, Chatter restarted, and the end time passed before vmalert could send the alert again
+    alerts.save([anAlert()], NOW);
+    finder.findChanges(NOW);
+    finder.findChanges(NOW + 2 * MINUTE_MS);
     alerts.save([anAlert({ endsAt: NOW + 3 * MINUTE_MS })], NOW + 2 * MINUTE_MS);
     finder.findChanges(NOW + 2 * MINUTE_MS);
     finder.findChanges(NOW + 3 * MINUTE_MS);
 
+    expect(found.kinds()).toEqual(['started SpindleLoadHigh']);
+  });
+
+  it('reports a start and an end again when vmalert sends an alert after it was reported as ended', () => {
+    const afterGrace = NOW + MINUTE_MS + ALERT_END_GRACE_MS;
+    alerts.save([anAlert()], NOW);
+    finder.findChanges(NOW);
+    finder.findChanges(afterGrace);
+    alerts.save([anAlert({ endsAt: afterGrace + MINUTE_MS })], afterGrace);
+    finder.findChanges(afterGrace);
+    alerts.save([anEndedAlert({ endsAt: afterGrace + 30_000 })], afterGrace + MINUTE_MS);
+    finder.findChanges(afterGrace + MINUTE_MS);
+
     expect(found.kinds()).toEqual([
       'started SpindleLoadHigh', 'ended SpindleLoadHigh', 'started SpindleLoadHigh', 'ended SpindleLoadHigh',
     ]);
-    expect(found.changes.map(change => change.at)).toEqual([NOW - MINUTE_MS, NOW + MINUTE_MS, NOW - MINUTE_MS, NOW + 3 * MINUTE_MS]);
+    expect(found.changes.map(change => change.at)).toEqual([NOW - MINUTE_MS, NOW + MINUTE_MS, NOW - MINUTE_MS, afterGrace + 30_000]);
     expect(new Set(found.changes.map(change => change.alertId)).size).toBe(1);
   });
 
@@ -88,7 +123,7 @@ describe('AlertChangeFinder', () => {
   });
 
   it('reports the start before the end of an alert that started and ended between two looks', () => {
-    alerts.save([anAlert({ startsAt: NOW - 5 * MINUTE_MS, endsAt: NOW - 2 * MINUTE_MS })], NOW);
+    alerts.save([anEndedAlert({ startsAt: NOW - 5 * MINUTE_MS, endsAt: NOW - 2 * MINUTE_MS })], NOW);
     finder.findChanges(NOW);
 
     expect(found.kinds()).toEqual(['started SpindleLoadHigh', 'ended SpindleLoadHigh']);
@@ -97,7 +132,7 @@ describe('AlertChangeFinder', () => {
   it('reports the changes of different alerts in time order', () => {
     alerts.save([
       anAlert({ name: 'Late', labels: { alertname: 'Late' }, startsAt: NOW - MINUTE_MS }),
-      anAlert({ name: 'Early', labels: { alertname: 'Early' }, startsAt: NOW - 9 * MINUTE_MS, endsAt: NOW - 3 * MINUTE_MS }),
+      anEndedAlert({ name: 'Early', labels: { alertname: 'Early' }, startsAt: NOW - 9 * MINUTE_MS, endsAt: NOW - 3 * MINUTE_MS }),
     ], NOW);
     finder.findChanges(NOW);
 
@@ -106,7 +141,7 @@ describe('AlertChangeFinder', () => {
 
   it('reports nothing for a change that is older than the silent limit, for example after Chatter was off', () => {
     const longAgo = NOW - SILENT_AFTER_MS - MINUTE_MS;
-    alerts.save([anAlert({ startsAt: longAgo - MINUTE_MS, endsAt: longAgo })], NOW);
+    alerts.save([anEndedAlert({ startsAt: longAgo - MINUTE_MS, endsAt: longAgo })], NOW);
     finder.findChanges(NOW);
     finder.findChanges(NOW + MINUTE_MS);
 
@@ -114,7 +149,7 @@ describe('AlertChangeFinder', () => {
   });
 
   it('reports the end of a long alert, also when its start is older than the silent limit', () => {
-    alerts.save([anAlert({ startsAt: NOW - 2 * SILENT_AFTER_MS, endsAt: NOW - MINUTE_MS })], NOW);
+    alerts.save([anEndedAlert({ startsAt: NOW - 2 * SILENT_AFTER_MS, endsAt: NOW - MINUTE_MS })], NOW);
     finder.findChanges(NOW);
 
     expect(found.kinds()).toEqual(['ended SpindleLoadHigh']);
@@ -123,11 +158,12 @@ describe('AlertChangeFinder', () => {
   it('reports only the later end of the alerts that were saved before the first start of the finder', () => {
     const olderDb = new Database(':memory:');
     const olderAlerts = new AlertStore(olderDb);
-    olderAlerts.save([anAlert(), anAlert({ name: 'Ended', labels: { alertname: 'Ended' }, endsAt: NOW - MINUTE_MS })], NOW);
+    olderAlerts.save([anAlert(), anEndedAlert({ name: 'Ended', labels: { alertname: 'Ended' }, endsAt: NOW - MINUTE_MS })], NOW);
     const afterUpdate = new ChangeList();
     const updatedFinder = new AlertChangeFinder(olderDb, afterUpdate, NOW);
 
     updatedFinder.findChanges(NOW);
+    olderAlerts.save([anEndedAlert()], NOW + MINUTE_MS);
     updatedFinder.findChanges(NOW + 2 * MINUTE_MS);
 
     expect(afterUpdate.kinds()).toEqual(['ended SpindleLoadHigh']);

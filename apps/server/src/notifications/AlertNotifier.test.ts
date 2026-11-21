@@ -13,7 +13,7 @@ const OPTIONS = { timeZone: 'America/Chicago', linkBaseUrl: null };
 function anAlert(values: Partial<Alert> = {}): Alert {
   return {
     name: 'In alarm', machineId: 'haas-vf2', labels: { alertname: 'In alarm', machine: 'haas-vf2', severity: 'critical' },
-    annotations: {}, startsAt: NOW, endsAt: NOW + 60_000, ...values,
+    annotations: {}, startsAt: NOW, endsAt: NOW + 60_000, resolved: false, ...values,
   };
 }
 

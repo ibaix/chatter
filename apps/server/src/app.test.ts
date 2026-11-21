@@ -570,16 +570,16 @@ describe('API Routes', () => {
       const now = Date.now();
       return {
         name: 'SpindleTooFast', machineId: 'm1', labels: { alertname: 'SpindleTooFast', machine: 'm1' },
-        annotations: { summary: 'Spindle speed is 9000' }, startsAt: now - 60_000, endsAt: now + 60_000, ...values,
+        annotations: { summary: 'Spindle speed is 9000' }, startsAt: now - 60_000, endsAt: now + 60_000, resolved: false, ...values,
       };
     }
 
     it('returns the alerts of the last week, newest first, and no end time for an alert that fires', async () => {
       const now = Date.now();
       alerts.save([
-        alert({ startsAt: now - 3_600_000, endsAt: now - 1_800_000 }),
+        alert({ startsAt: now - 3_600_000, endsAt: now - 1_800_000, resolved: true }),
         alert({ startsAt: now - 60_000, endsAt: now + 60_000 }),
-        alert({ startsAt: now - 9 * 86_400_000, endsAt: now - 8 * 86_400_000 }),
+        alert({ startsAt: now - 9 * 86_400_000, endsAt: now - 8 * 86_400_000, resolved: true }),
       ], now);
 
       const res = await call('GET', '/api/alerts');
@@ -600,7 +600,7 @@ describe('API Routes', () => {
     it('returns only the alerts that fire, of one machine, when asked', async () => {
       const now = Date.now();
       alerts.save([
-        alert({ name: 'Ended', endsAt: now - 1000, labels: { alertname: 'Ended' } }),
+        alert({ name: 'Ended', endsAt: now - 1000, resolved: true, labels: { alertname: 'Ended' } }),
         alert({ name: 'Other machine', machineId: 'm2', labels: { alertname: 'Other machine' } }),
         alert({ name: 'Firing', labels: { alertname: 'Firing' } }),
       ], now);
@@ -608,6 +608,17 @@ describe('API Routes', () => {
       const res = await call('GET', '/api/alerts?state=firing&machine=m1');
 
       expect(res.body.data.map((found: { name: string }) => found.name)).toEqual(['Firing']);
+    });
+
+    it('shows an alert as firing in the grace time after its end time, like the messages, until vmalert says that it ended', async () => {
+      const now = Date.now();
+      alerts.save([alert({ name: 'Late', startsAt: now - 120_000, endsAt: now - 60_000, labels: { alertname: 'Late' } })], now);
+      expect((await call('GET', '/api/alerts')).body.data).toMatchObject([{ name: 'Late', firing: true, end: null }]);
+
+      alerts.save([alert({ name: 'Late', startsAt: now - 120_000, endsAt: now - 30_000, resolved: true, labels: { alertname: 'Late' } })], now);
+      expect((await call('GET', '/api/alerts')).body.data).toMatchObject([
+        { name: 'Late', firing: false, end: new Date(now - 30_000).toISOString() },
+      ]);
     });
 
     it('returns 400 for an unknown state', async () => {
