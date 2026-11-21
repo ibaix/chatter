@@ -116,8 +116,7 @@ export class Outbox implements MachineRemovalListener {
    * the sender never takes it, it does not count in the limit, and it never goes into a "more" message.
    */
   keepIgnored(item: QueuedMessage, detail: string, now: number): void {
-    const id = this.insert(item, null, now);
-    this.db.prepare("UPDATE notification_messages SET status = 'ignored', detail = ? WHERE id = ?").run(detail, id);
+    this.insert(item, null, now, { status: 'ignored', detail });
   }
 
   /**
@@ -298,15 +297,22 @@ export class Outbox implements MachineRemovalListener {
     return { id, channelId, message, attempts: 0, createdAt: now };
   }
 
-  /** `alertCount` is the number of alerts in a "more" message, and null for each other message */
-  private insert({ channelId, alertId, message, event }: QueuedMessage, alertCount: number | null, now: number): number {
+  /**
+   * `alertCount` is the number of alerts in a "more" message, and null for each other message.
+   * A message is "waiting", unless `finished` gives another status and its detail.
+   */
+  private insert(
+    { channelId, alertId, message, event }: QueuedMessage, alertCount: number | null, now: number,
+    finished: { status: MessageStatus; detail: string } | null = null,
+  ): number {
     return Number(this.db.prepare(`
       INSERT INTO notification_messages (
-        channel_id, alert_id, kind, machine_id, payload, alert_count, is_event, status, next_try_at, created_at
+        channel_id, alert_id, kind, machine_id, payload, alert_count, is_event, status, detail, next_try_at, created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'waiting', ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      channelId, alertId, message.kind, message.machine?.id ?? null, JSON.stringify(message), alertCount, event ? 1 : 0, now, now,
+      channelId, alertId, message.kind, message.machine?.id ?? null, JSON.stringify(message), alertCount, event ? 1 : 0,
+      finished?.status ?? 'waiting', finished?.detail ?? null, now, now,
     ).lastInsertRowid);
   }
 }

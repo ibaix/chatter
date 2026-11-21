@@ -110,7 +110,6 @@ function hasTopicPath(url: string, topic: string): boolean {
   return pathname.replace(/\/$/, '').endsWith(`/${topic}`);
 }
 
-
 function resultOf({ status, json }: Answer, settings: NtfySettings): SendResult {
   return statusResult(status, {
     answered: `ntfy answered ${status}`,

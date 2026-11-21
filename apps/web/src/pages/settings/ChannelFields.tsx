@@ -144,21 +144,18 @@ function SecretField({ field, value, isSaved, isCleared, onChange, onClearChange
   const canClear = isSaved && !field.required;
   return (
     <Field id={idOf(field)} label={field.label} hint={field.hint}>
-      <div className="flex items-center gap-2">
-        <TextInput
-          id={idOf(field)}
-          type="password"
-          mono={field.mono}
-          className="flex-1"
-          value={value}
-          placeholder={isSaved && !isCleared ? SAVED_SECRET_PLACEHOLDER : undefined}
-          onChange={event => onChange(event.target.value)}
-          aria-describedby={hintIdOf(field)}
-          // new-password stops a browser from filling in a saved login
-          autoComplete="new-password"
-          spellCheck={false}
-        />
-      </div>
+      <TextInput
+        id={idOf(field)}
+        type="password"
+        mono={field.mono}
+        value={value}
+        placeholder={isSaved && !isCleared ? SAVED_SECRET_PLACEHOLDER : undefined}
+        onChange={event => onChange(event.target.value)}
+        aria-describedby={hintIdOf(field)}
+        // new-password stops a browser from filling in a saved login
+        autoComplete="new-password"
+        spellCheck={false}
+      />
       {canClear && (
         <label className="flex items-center gap-2 text-xs text-zinc-200">
           <input
