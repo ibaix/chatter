@@ -10,6 +10,7 @@ Run these from the repo root before you say a change is done:
 ```bash
 npm run build:shared   # after each pull, and after each change in packages/shared
 npm run typecheck
+npm run lint
 npm test
 ```
 
