@@ -50,10 +50,11 @@ describe('user data', () => {
     expect(main.name).toBeUndefined();
   });
 
-  it('keeps the folder name "chatter" in the Docker package', () => {
-    const script = read('tools/release/make-docker-package.sh');
-    expect(script).toContain('package_dir="$work_dir/chatter"');
-    expect(script).toMatch(/zip [^\n]* chatter\)/);
+  it('keeps one folder, "chatter", in the zip of the Docker package', () => {
+    // The last word of the zip command is the folder that goes into the zip
+    const zipCommands = [...read('tools/release/make-docker-package.sh').matchAll(/\bzip\s+-[^\n]*/g)].map(([line]) => line);
+    expect(zipCommands).toHaveLength(1);
+    expect(zipCommands[0].replace(/[)\s]+$/, '').split(/\s+/).at(-1)).toBe('chatter');
   });
 
   it('keeps the folder /opt/chatter on the Pi card', () => {
@@ -69,6 +70,13 @@ describe('closed ports', () => {
 
   it('finds the compose files', () => {
     expect(composeFiles).toContain('docker-compose.yml');
+  });
+
+  it.each(composeFiles)('uses no variable in a port of %s, so that this test can read each port', file => {
+    const withVariable = Object.values(compose(file).services ?? {})
+      .flatMap(({ ports = [] }) => ports)
+      .filter(port => JSON.stringify(port).includes('$'));
+    expect(withVariable).toEqual([]);
   });
 
   it('publishes no port of VictoriaMetrics or vmalert in docker-compose.yml', () => {
@@ -116,5 +124,25 @@ describe('docs links', () => {
     const file = docsPageFile(page);
     expect(existsSync(join(ROOT, 'docs', file)), `docs/${file}`).toBe(true);
     if (anchor) expect(anchorsOf(read(join('docs', file)))).toContain(anchor);
+  });
+});
+
+describe('test runs', () => {
+  // npm test runs each tools folder with test:tools. npm run coverage runs the projects of vitest.config.ts.
+  // A tools folder with tests must be in both, or one of the two runs skips it.
+  const toolsWithTests = readdirSync(join(ROOT, 'tools')).filter(name =>
+    statSync(join(ROOT, 'tools', name)).isDirectory() &&
+    readdirSync(join(ROOT, 'tools', name)).some(file => /\.test\.ts$/.test(file)),
+  );
+  const testTools = (JSON.parse(read('package.json')) as { scripts: Record<string, string> }).scripts['test:tools'];
+  const projects = /projects:\s*\[([^\]]*)\]/.exec(read('vitest.config.ts'))?.[1] ?? '';
+
+  it('finds the tools folders with tests', () => {
+    expect(toolsWithTests).toContain('guardrails');
+  });
+
+  it.each(toolsWithTests)('runs tools/%s in npm test and in npm run coverage', name => {
+    expect(testTools).toContain(`--root tools/${name}`);
+    expect(projects).toContain(`'tools/${name}'`);
   });
 });
