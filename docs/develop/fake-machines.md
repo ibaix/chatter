@@ -62,7 +62,7 @@ Press Ctrl+C to stop. The machines stay in Chatter and show as **Offline**.
 
 Each machine also runs a small FTP server, so the Files tab and uploads work.
 Real machines use FTP port 21. The fakes share one computer, so each one has its own port (see the table).
-If you add a fake machine with **Find machines**, set its FTP port in **Machine settings**. `--add` sets it for you.
+If you add a fake machine with **Find machines**, set its FTP port in **Settings > Machine** on the machine page. `--add` sets it for you.
 
 The FTP server takes any username and password. Use it only on this computer, or with `--lan` on a network that you trust.
 On the first start, each machine gets two sample programs in `tools/fake-machines/.ftp-files/<machine>/`.

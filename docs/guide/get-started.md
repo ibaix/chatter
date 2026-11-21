@@ -31,11 +31,11 @@ When you add a machine, it shows on the **Machines** page. It shows **Connecting
 Chatter uses FTP to show, send and download the program files on a machine. Do these steps for each machine:
 
 1. On the **Machines** page, click the machine.
-2. Click the **Machine settings** tab.
+2. Click the **Settings** tab. The **Machine** section is at the top.
 3. Under **FTP login**, type the FTP port, username and password that the machine uses. Most machines use port `21`.
 4. Click **Save changes**.
 
-![Machine settings: the FTP login with port, username and password](../images/chatter-machine-ftp.png)
+![Settings > Machine: the FTP login with port, username and password](../images/chatter-machine-ftp.png)
 
 Chatter never shows a saved password again. To keep it, leave the password box empty.
 

@@ -1,9 +1,9 @@
 # Alerts
 
 An alert rule is a check that Chatter does on one machine every 15 seconds, for example "the spindle load is above 90% for 1 minute".
-When the check stays true for the time in the rule, the alert fires. Chatter shows it in the **Alerts** panel of the machine page.
+When the check stays true for the time in the rule, the alert fires. Chatter shows it in the **Alerts** panel, in the **Dashboard** tab of the machine page.
 
-Each machine has its own rules. You set them in the **Alert rules** tab of the machine page.
+Each machine has its own rules. You set them in **Settings > Alert rules** on the machine page.
 
 ## The starter rules
 
@@ -22,11 +22,14 @@ A machine that you added before keeps its rules. Chatter does not change them.
 ## Open the rules
 
 1. On the **Machines** page, click the machine.
-2. Click the **Alert rules** tab. The number next to the name is how many rules the machine has.
+2. Click the **Settings** tab. The **Alert rules** section is under the **Machine** section.
+   An Admin can click **Alert rules** in the menu at the left to go to it. The number next to the name is how many rules the machine has.
 
-![The Alert rules tab: rules as sentences, and a custom query](../images/chatter-alert-rules-tab.png)
+![Settings > Alert rules: rules as sentences, and a custom query](../images/chatter-alert-rules-tab.png)
 
-Each user can see the rules. Only an **Admin** can change them.
+Each user can see the rules. Only an **Admin** can change them. A user who is not an Admin sees only the **Alert rules** section.
+
+When the machine has no alerts, the **Alerts** panel has a link to **Settings › Alert rules**.
 
 ## Change a rule
 
@@ -99,7 +102,16 @@ Copy uses the saved rules. If you changed rules, click **Save changes** first.
 
 ## What Chatter shows
 
-The **Alerts** panel shows the alerts of the last 7 days. The alerts that fire now come first, with **Firing now**.
+When alerts fire, the machine page shows the number of firing alerts in two places:
+
+- A red badge next to the machine name, for example **1 alert firing**. Click it to open the **Dashboard** tab.
+- A red number on the **Dashboard** tab.
+
+When no alert fires, the badge and the number do not show.
+
+![The machine page: the badge 1 alert firing, and the number on the Dashboard tab](../images/chatter-machine-tabs.png)
+
+The **Alerts** panel is in the **Dashboard** tab. It shows the alerts of the last 7 days. The alerts that fire now come first, with **Firing now**.
 The panel always shows all the alerts that fire now.
 It shows the newest 10 past alerts. To see 10 more, click **Show more** at the bottom of the list.
 While the page is open, Chatter loads the alerts again every 30 seconds.
