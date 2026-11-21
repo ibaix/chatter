@@ -4,6 +4,13 @@ import { ALERT_COLUMNS, type Alert, type AlertRow, FIRING_UNTIL_SQL, toAlert } f
 /** A change older than this sends no message, for example after Chatter was off for a long time */
 export const SILENT_AFTER_MS = 24 * 60 * 60_000;
 
+/**
+ * After a start of Chatter, an alert with a passed end time and no resolve does not end before this time.
+ * vmalert could not send the alert while Chatter was off. It sends each firing alert again at each check (every 15 seconds),
+ * also after its own restart, so this waits 8 checks. A resolve ends an alert at once.
+ */
+export const STARTUP_WAIT_MS = 2 * 60_000;
+
 export type AlertChangeKind = 'started' | 'ended';
 
 export interface AlertChange {
@@ -34,14 +41,15 @@ interface StoredAlertRow extends AlertRow {
 export class AlertChangeFinder {
   /**
    * Make the AlertStore first, because the finder reads its "alerts" table.
-   * `now` is the start time of Chatter. Only the first start after the update uses it, to mark the old alerts.
+   * `now` is the start time of Chatter. The first start after the update uses it to mark the old alerts, and
+   * each start uses it for STARTUP_WAIT_MS.
    */
   constructor(
     private readonly db: Database.Database,
     private readonly listener: AlertChangeListener,
-    now: number,
+    private readonly startedAt: number,
   ) {
-    this.db.transaction(() => this.createNoticeTable(now))();
+    this.db.transaction(() => this.createNoticeTable(startedAt))();
   }
 
   /** Reports the new changes, in time order. If the listener fails, no note is kept, and the next look tries again. */
@@ -107,11 +115,12 @@ export class AlertChangeFinder {
   }
 
   private endedAlertsWithoutEndNote(now: number): StoredAlertRow[] {
+    const isAfterStartupWait = now - this.startedAt >= STARTUP_WAIT_MS;
     return this.db.prepare(`
       SELECT id, ${ALERT_COLUMNS} FROM alerts
-      WHERE ${FIRING_UNTIL_SQL} <= ?
+      WHERE ${FIRING_UNTIL_SQL} <= @now AND (resolved OR @isAfterStartupWait)
         AND NOT EXISTS (SELECT 1 FROM alert_notices WHERE alert_id = alerts.id AND kind = 'ended')
-    `).all(now) as StoredAlertRow[];
+    `).all({ now, isAfterStartupWait: isAfterStartupWait ? 1 : 0 }) as StoredAlertRow[];
   }
 
   private keepNote(change: AlertChange): void {

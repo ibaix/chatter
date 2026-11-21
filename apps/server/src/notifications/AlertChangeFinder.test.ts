@@ -2,7 +2,7 @@ import { ALERT_END_GRACE_MS } from '@local-chatter/shared';
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type Alert, AlertStore } from '../alerts/AlertStore.js';
-import { type AlertChange, AlertChangeFinder, SILENT_AFTER_MS } from './AlertChangeFinder.js';
+import { type AlertChange, AlertChangeFinder, SILENT_AFTER_MS, STARTUP_WAIT_MS } from './AlertChangeFinder.js';
 
 const NOW = Date.UTC(2026, 10, 13, 9, 0);
 const MINUTE_MS = 60_000;
@@ -96,6 +96,26 @@ describe('AlertChangeFinder', () => {
     finder.findChanges(NOW + 3 * MINUTE_MS);
 
     expect(found.kinds()).toEqual(['started SpindleLoadHigh']);
+  });
+
+  it('waits after a start of Chatter before an end time with no resolve counts, because vmalert could not send while Chatter was off', () => {
+    alerts.save([anAlert({ startsAt: NOW - 12 * MINUTE_MS, endsAt: NOW - 10 * MINUTE_MS })], NOW - 11 * MINUTE_MS);
+    const afterRestart = new ChangeList();
+    const restarted = new AlertChangeFinder(db, afterRestart, NOW);
+
+    restarted.findChanges(NOW + STARTUP_WAIT_MS - 1);
+    expect(afterRestart.kinds()).toEqual(['started SpindleLoadHigh']);
+
+    restarted.findChanges(NOW + STARTUP_WAIT_MS);
+    expect(afterRestart.kinds()).toEqual(['started SpindleLoadHigh', 'ended SpindleLoadHigh']);
+  });
+
+  it('reports a resolve at once after a start of Chatter', () => {
+    alerts.save([anEndedAlert({ startsAt: NOW - 12 * MINUTE_MS, endsAt: NOW - 10 * MINUTE_MS })], NOW - 11 * MINUTE_MS);
+    const afterRestart = new ChangeList();
+    new AlertChangeFinder(db, afterRestart, NOW).findChanges(NOW);
+
+    expect(afterRestart.kinds()).toEqual(['started SpindleLoadHigh', 'ended SpindleLoadHigh']);
   });
 
   it('reports a start and an end again when vmalert sends an alert after it was reported as ended', () => {
