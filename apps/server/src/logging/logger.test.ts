@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { configureLogging, createLogger, logFormatFrom, logLevelFrom, type LogLevel } from './logger.js';
+import { addLogListener, configureLogging, createLogger, logFormatFrom, logLevelFrom, type LogEntry, type LogLevel } from './logger.js';
 
 const TIME = new Date('2026-11-12T10:00:00.000Z');
 
@@ -134,5 +134,39 @@ describe('logLevelFrom and logFormatFrom', () => {
     expect(logFormatFrom('JSON')).toBe('json');
     expect(logFormatFrom('pretty')).toBe('text');
     expect(logFormatFrom(undefined)).toBe('text');
+  });
+});
+
+describe('the secrets in the log', () => {
+  it('never writes a password, a token or a secret, also to a listener', () => {
+    const written: string[] = [];
+    const heard: string[] = [];
+    const old = configureLogging({ level: 'info', format: 'text', sink: (_level, text) => written.push(text) });
+    const stop = addLogListener(entry => heard.push(entry.text));
+    try {
+      createLogger('notifications').warn('Send failed', {
+        machine: 'm1', password: 'hunter2', url: 'https://x.test/hook?token=abc', error: new Error('POST http://u:pw@h/x failed'),
+      });
+    } finally {
+      stop();
+      configureLogging(old);
+    }
+    for (const text of [...written, ...heard]) {
+      expect(text).not.toMatch(/hunter2|abc|u:pw/);
+      expect(text).toContain('[hidden]');
+    }
+    expect(heard).toHaveLength(1);
+  });
+
+  it('gives a listener the level, part, machine and text of each line', () => {
+    const heard: LogEntry[] = [];
+    const old = configureLogging({ level: 'info', now: () => TIME, sink: () => {} });
+    const stop = addLogListener(entry => heard.push(entry));
+    createLogger('machines').child({ machine: 'm7' }).info('Machine connected');
+    createLogger('server').debug('not written');
+    stop();
+    createLogger('server').info('after the stop');
+    configureLogging(old);
+    expect(heard).toEqual([{ time: TIME, level: 'info', component: 'machines', machine: 'm7', text: expect.stringContaining('Machine connected') }]);
   });
 });

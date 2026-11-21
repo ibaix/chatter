@@ -35,6 +35,8 @@ import { memoryCheckSettingStore, ReleaseWatcher, releasesRepo } from './updates
 import { updateRoutes } from './routes/updates.js';
 import { Notifications } from './notifications/Notifications.js';
 import { notificationRoutes } from './routes/notifications.js';
+import { ServerLog } from './logging/ServerLog.js';
+import { logRoutes } from './routes/logs.js';
 
 /** Every API address starts with this */
 export const API_PREFIX = '/api';
@@ -64,6 +66,8 @@ export interface AppParts {
   updates?: UpdateService;
   /** The messages that go out when an alert starts or ends. Without it, the channels are kept in memory only. */
   notifications?: Notifications;
+  /** The last lines of the server log, for Settings > Diagnostics. Without it, the lines are not kept. */
+  serverLog?: ServerLog;
 }
 
 /**
@@ -85,6 +89,7 @@ export function createApp({
   version = chatterVersion(),
   updates = new UpdateService(UpdateFolder.fromEnvironment(), version, new ReleaseWatcher({ repo: releasesRepo(), store: memoryCheckSettingStore() })),
   notifications = Notifications.inMemory(),
+  serverLog = new ServerLog(),
 }: AppParts) {
   const loginGuard = { auth, limiter: new LoginLimiter(), loginLog, proxySettings };
   const api = new Hono()
@@ -109,7 +114,8 @@ export function createApp({
     .route('/', userSettingsRoutes(accounts))
     .route('/', focasLibraryRoutes(focasLibrary))
     .route('/', updateRoutes(updates))
-    .route('/', notificationRoutes(notifications));
+    .route('/', notificationRoutes(notifications))
+    .route('/', logRoutes(serverLog));
 
   // No CORS headers: only pages from this server can call the API from a browser
   return new Hono()

@@ -37,6 +37,7 @@ import { chatterVersion } from './updates/chatterVersion.js';
 import { ReleaseWatcher, releasesRepo, sqliteCheckSettingStore } from './updates/ReleaseWatcher.js';
 import { createLogger } from './logging/logger.js';
 import { ConnectionLog } from './logging/ConnectionLog.js';
+import { ServerLog } from './logging/ServerLog.js';
 
 const log = createLogger('server');
 
@@ -60,6 +61,10 @@ const ALERT_HOST = process.env.ALERT_HOST || '127.0.0.1';
 const ALERT_RULES_DIR = process.env.ALERT_RULES_DIR || path.join(dataFolder(), 'alert-rules');
 /** Chatter asks vmalert here to read the rules file again. vmalert has no login, so it must stay on the inside network. */
 const VMALERT_URL = process.env.VMALERT_URL || 'http://localhost:8880';
+
+/** The last lines of the log, in memory and in data/logs, for Settings > Diagnostics */
+const serverLog = ServerLog.forDataFolder(dataFolder());
+serverLog.listen();
 
 async function start(): Promise<void> {
   try {
@@ -129,7 +134,7 @@ async function start(): Promise<void> {
     const updates = new UpdateService(updateFolder, version, releases);
     const app = createApp({
       poller, auth, accounts, history, statePeriods, alerts, alertRules, proxySettings, loginLog: new LoginLog(getDb()), version, updates,
-      notifications,
+      notifications, serverLog,
     });
     if (WEB_DIR) app.route('/', webAppRoutes(WEB_DIR));
     // serve() makes a plain HTTP/1 server, because no HTTP/2 option is given.
@@ -168,6 +173,7 @@ async function start(): Promise<void> {
       }
       await focasStopped;
       await closeDatabase();
+      await serverLog.file?.close();
       server.close(() => process.exit(0));
       // The live event streams stay open until they are closed
       server.closeAllConnections();
