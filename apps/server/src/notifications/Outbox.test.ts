@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { OutgoingMessage } from './channels/ChannelType.js';
-import { MAX_KEPT_MESSAGES, Outbox, type OutboxEntry, SEND_LIMIT, SEND_LIMIT_WINDOW_MS } from './Outbox.js';
+import { BACKLOG_SEND, MAX_KEPT_MESSAGES, Outbox, type OutboxEntry, SEND_LIMIT, SEND_LIMIT_WINDOW_MS } from './Outbox.js';
 
 const NOW = Date.UTC(2026, 10, 13, 9, 0);
 const MINUTE = 60_000;
@@ -173,6 +173,85 @@ describe('Outbox', () => {
       outbox.removeChannel('phones');
 
       expect(db.prepare('SELECT COUNT(*) AS count FROM notification_channel_holds').get()).toEqual({ count: 0 });
+    });
+  });
+
+  describe('the messages that waited while the channel was held', () => {
+    function named(alertName: string, machineName: string, kind: 'started' | 'ended' = 'started'): OutgoingMessage {
+      return { ...alertMessage(kind, machineName.toLowerCase()), alertName, machine: { id: machineName.toLowerCase(), name: machineName }, text: `${kind} ${alertName}` };
+    }
+
+    /** The first message fails and holds the channel for one hour. Then `waiting` more messages come. */
+    function holdWith(waiting: OutgoingMessage[]): number {
+      const first = queue('phones', 1, named('In alarm', 'Haas VF-2'));
+      outbox.takeDue(NOW);
+      outbox.markRetry(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      waiting.forEach((message, index) => queue('phones', 10 + index, message, NOW + index * MINUTE));
+      return first;
+    }
+
+    function status(id: number) {
+      return outbox.list({}).find(message => message.id === id);
+    }
+
+    it(`sends one summary message and then only the newest ${BACKLOG_SEND}, when the hold ends`, () => {
+      const first = holdWith([
+        named('Program ended', 'Haas ST-10'), named('Program ended', 'Haas ST-10'), named('Program ended', 'Haas ST-10'),
+        named('In alarm', 'Haas VF-2'), named('Idle', 'Haas VF-2'), named('Idle', 'Haas ST-10'), named('Spindle load', 'Haas VF-2'),
+      ]);
+
+      const [summary] = outbox.takeDue(NOW + 60 * MINUTE);
+
+      expect(summary.message).toMatchObject({ kind: 'more', machine: null });
+      expect(summary.message.text).toBe(
+        'Chatter could not send 5 alerts while the channel was blocked: Program ended on Haas ST-10 (3), In alarm on Haas VF-2 (2). Open Chatter to see them.',
+      );
+      expect(status(first)).toMatchObject({
+        status: 'grouped', lastError: 'ntfy: the limit is used.',
+        detail: 'In one summary message, because the service did not take messages for a time.',
+      });
+      outbox.markSent(summary.id, 'ntfy sent it', NOW + 60 * MINUTE);
+      const sent: string[] = [];
+      for (let entry = outbox.takeDue(NOW + 60 * MINUTE)[0]; entry; entry = outbox.takeDue(NOW + 60 * MINUTE)[0]) {
+        sent.push(entry.message.text);
+        outbox.markSent(entry.id, 'ntfy sent it', NOW + 60 * MINUTE);
+      }
+      expect(sent).toEqual(['started Idle', 'started Idle', 'started Spindle load']);
+      expect(outbox.list({}).filter(message => message.status === 'grouped')).toHaveLength(5);
+    });
+
+    it('counts the start and the end of one alert one time, and adds the alerts of a "more" message', () => {
+      const more = moreAlerts(4);
+      holdWith([named('Idle', 'Haas VF-2'), more, named('A', 'M'), named('B', 'M'), named('C', 'M')]);
+      queue('phones', 1, named('In alarm', 'Haas VF-2', 'ended'), NOW + 30 * MINUTE);
+      db.prepare("UPDATE notification_messages SET alert_count = 4 WHERE kind = 'more'").run();
+
+      // Kept: B, C and the end of alert 1. The summary has alert 1 (its start), Idle, the 4 alerts of "more", and A.
+      expect(outbox.takeDue(NOW + 60 * MINUTE)[0].message.text).toBe(
+        'Chatter could not send 7 alerts while the channel was blocked: A on M (1), Idle on Haas VF-2 (1), In alarm on Haas VF-2 (1), other alerts (4). '
+        + 'Open Chatter to see them.',
+      );
+    });
+
+    it(`sends each message, when no more than ${BACKLOG_SEND + 1} wait after the hold`, () => {
+      holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M')]);
+
+      expect(texts(outbox.takeDue(NOW + 60 * MINUTE))).toEqual(['started In alarm']);
+    });
+
+    it('makes no summary message for a channel that was not held', () => {
+      Array.from({ length: 8 }, (_, index) => queue('phones', index, named(`Alarm ${index}`, 'M')));
+
+      expect(texts(outbox.takeDue(NOW))).toEqual(['started Alarm 0']);
+    });
+
+    it('does not put a test message in the summary message', () => {
+      const test = queue('phones', null, { ...moreAlerts(0), kind: 'test', text: 'Test from Chatter.' }, NOW);
+      holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M'), named('E', 'M')]);
+
+      outbox.takeDue(NOW + 60 * MINUTE);
+
+      expect(status(test)?.status).toBe('waiting');
     });
   });
 

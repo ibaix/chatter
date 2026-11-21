@@ -49,7 +49,7 @@ export class Notifications implements MachineRemovalListener {
     this.fetch = fetch;
     this.settings = new NotificationSettingsStore(settingsTable);
     this.channels = new ChannelStore(db);
-    this.outbox = new Outbox(db, count => moreAlertsMessage(count, this.textOptions()));
+    this.outbox = new Outbox(db, count => moreAlertsMessage(count, this.textOptions()), () => this.textOptions());
     const notifier = new AlertNotifier({
       channels: this.channels, outbox: this.outbox, machineName, textOptions: () => this.textOptions(), now,
     });

@@ -120,6 +120,50 @@ describe('Notifications', () => {
     });
   });
 
+  it('holds an ntfy channel until its daily limit resets, and then sends a summary and the newest messages, not each one', async () => {
+    let now = NOW;
+    const sent: string[] = [];
+    let limited = true;
+    const fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      if (limited) {
+        return new Response(JSON.stringify({ code: 42908, http: 429, error: 'limit reached: daily message quota reached' }), {
+          status: 429, headers: { 'retry-after': String(6 * 3600) },
+        });
+      }
+      sent.push((JSON.parse(String(init?.body)) as { message: string }).message);
+      return new Response('{"id":"x"}', { status: 200 });
+    };
+    const ntfy = new Notifications({
+      db, settingsTable: new SettingsTable(db), machineName: () => 'Haas VF-2', now: () => now, fetch: fetch as typeof globalThis.fetch,
+    });
+    const added = ntfy.channels.add({ ...slack, type: 'ntfy', name: 'Phones', values: { topic: 'chatter-test' } }, NOW);
+    if (!added.ok) throw new Error(added.error);
+    const alarms = Array.from({ length: 12 }, (_, index) => ({
+      ...alert, name: `Alarm ${index}`, labels: { ...alert.labels, alertname: `Alarm ${index}` },
+    }));
+
+    alerts.save(alarms.slice(0, 1), now);
+    ntfy.findAlertChanges();
+    await ntfy.sendDue();
+    for (let hour = 1; hour < 6; hour += 1) {
+      now = NOW + hour * 3_600_000;
+      alerts.save(alarms.slice(0, hour * 2 + 2), now);
+      ntfy.findAlertChanges();
+      await ntfy.sendDue();
+    }
+    expect(sent).toEqual([]);
+
+    limited = false;
+    now = NOW + 6 * 3_600_000;
+    for (let round = 0; round < 20; round += 1) await ntfy.sendDue();
+
+    expect(sent).toHaveLength(4);
+    expect(sent[0]).toMatch(/^Chatter could not send 9 alerts while the channel was blocked: /);
+    expect(sent.slice(1)).toEqual([
+      expect.stringContaining('Alarm 9 '), expect.stringContaining('Alarm 10 '), expect.stringContaining('Alarm 11 '),
+    ]);
+  });
+
   it('deletes the waiting messages of a removed channel', () => {
     const id = addChannel(slack);
     alerts.save([alert], NOW);

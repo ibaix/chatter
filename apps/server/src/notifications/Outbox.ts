@@ -4,12 +4,27 @@ import {
 import type Database from 'better-sqlite3';
 import type { MachineRemovalListener } from '../polling/poller.js';
 import type { OutgoingMessage } from './channels/ChannelType.js';
+import type { AlertGroup, TextOptions } from './messageText.js';
+import { backlogMessage } from './outgoingMessages.js';
 
 /** A channel gets at most this many messages in SEND_LIMIT_WINDOW_MS */
 export const SEND_LIMIT = 10;
 export const SEND_LIMIT_WINDOW_MS = 10 * 60_000;
 /** The message list keeps at most this many sent, failed, grouped and ignored messages */
 export const MAX_KEPT_MESSAGES = 1000;
+
+/**
+ * When the hold of a channel ends, the channel gets one summary message for the messages that waited, and then only
+ * the newest BACKLOG_SEND of them. Three tell the current state of the shop. With the summary, that is 4 requests:
+ * less than the burst limit of each service (ntfy.sh takes 60 at once, Discord 5 in 2 seconds), and less than
+ * SEND_LIMIT, so a new alarm still has room. Without this, a day of messages went to the service at once when it
+ * took messages again, and used its limit again. With BACKLOG_SEND + 1 messages or fewer, a summary saves no request,
+ * so each message goes.
+ */
+export const BACKLOG_SEND = 3;
+const BACKLOG_DETAIL = 'In one summary message, because the service did not take messages for a time.';
+
+const NO_TEXT_OPTIONS: TextOptions = { timeZone: null, linkBaseUrl: null };
 
 const KEEP_MS = NOTIFICATION_MESSAGE_DAYS * 24 * 60 * 60_000;
 
@@ -57,6 +72,8 @@ interface MessageRow {
   kind: NotificationKind;
   machine_id: string | null;
   payload: string;
+  /** The number of alerts in a "more" message, and null for each other message */
+  alert_count: number | null;
   status: MessageStatus;
   /** 1 for the message of an event alert */
   is_event: number;
@@ -76,6 +93,8 @@ export class Outbox implements MachineRemovalListener {
   constructor(
     private readonly db: Database.Database,
     private readonly moreAlerts: MoreAlertsMessage,
+    /** The time zone and the link of the summary message */
+    private readonly textOptions: () => TextOptions = () => NO_TEXT_OPTIONS,
   ) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS notification_messages (
@@ -281,12 +300,35 @@ export class Outbox implements MachineRemovalListener {
    * An event message goes at once, and at the limit the first event message that waits goes past the held messages.
    */
   private headOrMoreMessage(head: MessageRow, now: number): OutboxEntry | null {
+    const summary = this.summaryAfterHold(head.channel_id, now);
+    if (summary) return summary;
     if (head.is_event) return toEntry(head);
     const room = SEND_LIMIT - this.sentInWindow(head.channel_id, now);
     if (room <= 0) return this.firstDueEvent(head.channel_id, now);
     const groupable = this.groupable(head.channel_id);
     if (room === 1 && groupable.messages > 1) return this.groupWaiting(head.channel_id, groupable, now);
     return toEntry(head);
+  }
+
+  /**
+   * The summary message, when the channel was held and more than BACKLOG_SEND + 1 messages wait.
+   * All but the newest BACKLOG_SEND become "grouped", so the list still shows each one. A test message is not in it.
+   * dueHeads gives only a channel whose hold ended. The hold stays until a message goes, so a summary waits for it too.
+   */
+  private summaryAfterHold(channelId: string, now: number): OutboxEntry | null {
+    if (!this.db.prepare('SELECT 1 FROM notification_channel_holds WHERE channel_id = ?').get(channelId)) return null;
+    const waiting = this.db.prepare(`
+      SELECT * FROM notification_messages WHERE channel_id = ? AND status = 'waiting' AND sending = 0 AND kind != 'test' ORDER BY id DESC
+    `).all(channelId) as MessageRow[];
+    if (waiting.length <= BACKLOG_SEND + 1) return null;
+    const merged = waiting.slice(BACKLOG_SEND);
+    const markGrouped = this.db.prepare("UPDATE notification_messages SET status = 'grouped', detail = ? WHERE id = ?");
+    for (const row of merged) markGrouped.run(BACKLOG_DETAIL, row.id);
+    const groups = alertGroups(merged);
+    const message = backlogMessage(groups, this.textOptions());
+    const alerts = groups.reduce((sum, group) => sum + group.count, 0);
+    const id = this.insert({ channelId, alertId: null, message }, alerts, now);
+    return { id, channelId, message, attempts: 0, createdAt: now };
   }
 
   private firstDueEvent(channelId: string, now: number): OutboxEntry | null {
@@ -347,6 +389,28 @@ export class Outbox implements MachineRemovalListener {
       finished?.status ?? 'waiting', finished?.detail ?? null, now, now,
     ).lastInsertRowid);
   }
+}
+
+/**
+ * The alerts of the messages, for each rule and machine, for example "In alarm on Haas VF-2".
+ * The start and the end of one alert are one alert. A "more" message adds its alerts to the group with no name.
+ */
+function alertGroups(rows: readonly MessageRow[]): AlertGroup[] {
+  const alertsByName = new Map<string, Set<number | string>>();
+  let others = 0;
+  for (const row of rows) {
+    const message = parseMessage(row);
+    if (row.kind === 'more' || !message.alertName) {
+      others += row.alert_count ?? 1;
+      continue;
+    }
+    const name = message.machine ? `${message.alertName} on ${message.machine.name}` : message.alertName;
+    const alerts = alertsByName.get(name) ?? new Set();
+    alerts.add(row.alert_id ?? `message ${row.id}`);
+    alertsByName.set(name, alerts);
+  }
+  const groups: AlertGroup[] = [...alertsByName].map(([name, alerts]) => ({ name, count: alerts.size }));
+  return others > 0 ? [...groups, { name: null, count: others }] : groups;
 }
 
 function toEntry(row: MessageRow): OutboxEntry {

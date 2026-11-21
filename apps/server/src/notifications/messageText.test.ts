@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Alert } from '../alerts/AlertStore.js';
-import { alertMessageText, moreAlertsText, SMS_LENGTH, testMessageText, type TextOptions } from './messageText.js';
+import { alertMessageText, backlogText, moreAlertsText, SMS_LENGTH, testMessageText, type TextOptions } from './messageText.js';
 
 const STARTED = Date.UTC(2026, 10, 13, 15, 2);
 const ENDED = Date.UTC(2026, 10, 13, 15, 40);
@@ -147,6 +147,28 @@ describe('moreAlertsText', () => {
     expect(moreAlertsText(7, CHICAGO)).toBe('And 7 more alerts. Open Chatter to see them.');
     expect(moreAlertsText(1, { ...WITH_LINK, linkBaseUrl: 'http://chatter.local:3001/' }))
       .toBe('And 1 more alert. Open Chatter to see it. http://chatter.local:3001');
+  });
+});
+
+describe('backlogText', () => {
+  it('tells how many alerts Chatter did not send while the channel was blocked, with the most first, and a link', () => {
+    const groups = [{ name: 'In alarm on Haas VF-2', count: 2 }, { name: 'Program ended on Haas ST-10', count: 12 }];
+
+    expect(backlogText(groups, WITH_LINK)).toBe(
+      'Chatter could not send 14 alerts while the channel was blocked: Program ended on Haas ST-10 (12), In alarm on Haas VF-2 (2). '
+      + 'Open Chatter to see them. http://chatter.local:3001',
+    );
+    expect(backlogText([{ name: 'In alarm on Haas VF-2', count: 1 }], CHICAGO))
+      .toBe('Chatter could not send 1 alert while the channel was blocked: In alarm on Haas VF-2 (1). Open Chatter to see it.');
+  });
+
+  it('names at most 5 groups, and puts the others together', () => {
+    const groups = Array.from({ length: 7 }, (_, index) => ({ name: `Alarm ${index}`, count: 10 - index }));
+
+    expect(backlogText([...groups, { name: null, count: 2 }], CHICAGO)).toBe(
+      'Chatter could not send 51 alerts while the channel was blocked: Alarm 0 (10), Alarm 1 (9), Alarm 2 (8), Alarm 3 (7), Alarm 4 (6), '
+      + 'other alerts (11). Open Chatter to see them.',
+    );
   });
 });
 
