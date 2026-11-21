@@ -18,4 +18,19 @@ describe('MachineTable', () => {
     expect(within(row).queryByText('8,000')).not.toBeInTheDocument();
     expect(within(row).queryByText('Connection timeout')).not.toBeInTheDocument();
   });
+
+  it('shows "Not polled for N min" when the last poll result is too old, for example a poll that never ended', () => {
+    const now = Date.parse('2026-11-21T10:20:00Z');
+    const stuck = testMachine({
+      name: 'Speedio',
+      pollClock: { lastEndedAt: '2026-11-21T10:08:00Z', overdueAfterMs: 60_000, inProgressSince: '2026-11-21T10:08:02Z' },
+    });
+    const fine = testMachine({
+      id: 'm2', name: 'Haas', pollClock: { lastEndedAt: '2026-11-21T10:19:58Z', overdueAfterMs: 60_000, inProgressSince: null },
+    });
+    render(<MemoryRouter><MachineTable machines={[stuck, fine]} now={now} /></MemoryRouter>);
+
+    expect(within(screen.getByRole('row', { name: /Speedio/ })).getByText('Not polled for 12 min')).toBeInTheDocument();
+    expect(within(screen.getByRole('row', { name: /Haas/ })).queryByText(/Not polled/)).not.toBeInTheDocument();
+  });
 });

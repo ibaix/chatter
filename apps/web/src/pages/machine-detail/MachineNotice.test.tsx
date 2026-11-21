@@ -28,6 +28,18 @@ describe('MachineNotice', () => {
       .toHaveAttribute('href', expect.stringMatching(/\/guide\/get-started#if-a-machine-shows-offline$/));
   });
 
+  it('tells that the machine is not polled, and what to do, when its last poll result is too old', () => {
+    const now = Date.parse('2026-11-21T10:20:00Z');
+    const machine = testMachine({
+      connected: false, errors: [], pollClock: { lastEndedAt: '2026-11-21T10:15:00Z', overdueAfterMs: 60_000, inProgressSince: '2026-11-21T10:15:01Z' },
+    });
+
+    render(<MachineNotice machine={machine} state={machineStateOf(machine)} now={now} />);
+
+    expect(screen.getByText('Not polled for 5 min')).toBeInTheDocument();
+    expect(screen.getByText(/Use Reconnect in the Settings tab/)).toBeInTheDocument();
+  });
+
   it('shows no notice for a machine that runs while the page is live', () => {
     const machine = testMachine({ connected: true }, { execution: 'ACTIVE' });
 

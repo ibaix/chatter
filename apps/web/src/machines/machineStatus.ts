@@ -1,4 +1,4 @@
-import { isMachineRunning } from '@local-chatter/shared';
+import { isMachineRunning, overduePollMs } from '@local-chatter/shared';
 import type { Machine, MachineData } from '../types';
 
 /**
@@ -37,6 +37,15 @@ export function machineStateOf(machine: Machine): MachineState {
  */
 export function machinesWhileChatterIsLost(machines: Machine[]): Machine[] {
   return machines.map(machine => ({ ...machine, connecting: true }));
+}
+
+/**
+ * "Not polled for 12 min" when Chatter has had no poll result of the machine for too long (3 intervals, at least 1 minute),
+ * else null. A poll that never ends shows this way: the machine is not polled again until the poll ends.
+ */
+export function notPolledText(machine: Machine, now: number): string | null {
+  const overdueMs = overduePollMs(machine.pollClock, now);
+  return overdueMs === null ? null : `Not polled for ${Math.floor(overdueMs / 60_000)} min`;
 }
 
 /** True when the server gets values from the machine now. Values from before are old, so the pages do not show them. */

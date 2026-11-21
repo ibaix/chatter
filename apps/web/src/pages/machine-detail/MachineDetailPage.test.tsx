@@ -32,6 +32,11 @@ vi.mock('../../api/machineFiles', async importOriginal => ({
 }));
 // The chart has its own tests. Here it has no values.
 vi.mock('../../api/history', () => ({ fetchValueHistory: vi.fn() }));
+vi.mock('../../api/diagnostics', () => ({
+  fetchMachineHealth: vi.fn().mockResolvedValue({ offlineSince: null, lastError: null, events: [], lastPollTime: null, pollClock: null }),
+  testMachineConnection: vi.fn(),
+  reconnectMachine: vi.fn(),
+}));
 vi.mock('../../api/stateTimeline', () => ({ fetchStateTimeline: vi.fn() }));
 /** Each render of the header: the machine and its count of firing alerts */
 const headerRenders: { machineId: string; firingCount: number }[] = [];
@@ -471,7 +476,7 @@ describe('MachineDetailPage', () => {
       }
     });
 
-    it('shows an admin three panels, Machine, Alert rules and Delete machine, with no side menu', async () => {
+    it('shows an admin four panels, Machine, Connection, Alert rules and Delete machine, with no side menu', async () => {
       vi.mocked(fetchAlertRules).mockResolvedValue([OFFLINE_RULE]);
       renderPage();
 
@@ -482,7 +487,8 @@ describe('MachineDetailPage', () => {
       const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
       expect(await within(rulesSection).findByText(/Click a word in a rule to change it/)).toBeInTheDocument();
       const panel = screen.getByRole('tabpanel', { name: 'Settings' });
-      expect(within(panel).getAllByRole('region').map(region => region.id)).toEqual([machineSection.id, rulesSection.id, SETTINGS_SECTION_IDS.deleteMachine]);
+      expect(within(panel).getAllByRole('region').map(region => region.id))
+        .toEqual([machineSection.id, SETTINGS_SECTION_IDS.connection, rulesSection.id, SETTINGS_SECTION_IDS.deleteMachine]);
       expect(screen.queryByRole('navigation', { name: 'Settings sections' })).not.toBeInTheDocument();
     });
 

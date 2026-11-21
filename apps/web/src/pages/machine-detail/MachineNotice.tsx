@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { DocsLink } from '../../components/ui/DocsLink';
 import { Notice } from '../../components/ui/Notice';
 import { alarmOf, offlineReasonOf } from '../../machines/alarm';
-import type { MachineState } from '../../machines/machineStatus';
+import { notPolledText, type MachineState } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 import { formatAgo } from '../../utils/formatters';
 
@@ -31,6 +31,16 @@ function noticeOf(machine: Machine, state: MachineState, now: number, chatterIsL
       tone: 'offline',
       title: 'Lost the connection to Chatter',
       text: `${lastAnswer}The page tries to connect again. Check that the Chatter computer is on and on the network.`,
+    };
+  }
+  const notPolled = notPolledText(machine, now);
+  if (notPolled && state !== 'connecting') {
+    return {
+      key: `${machine.id}:not-polled`,
+      tone: 'offline',
+      title: notPolled,
+      text: 'The last poll of this machine has not ended, so Chatter does not poll it again. '
+        + 'Use Reconnect in the Settings tab. If that does not help, restart Chatter in Settings > Diagnostics.',
     };
   }
   if (state === 'offline') {
