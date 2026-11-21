@@ -12,6 +12,7 @@ import { fetchMachineReport } from '../../api/reports';
 import { fetchStateTimeline } from '../../api/stateTimeline';
 import { CurrentUserContext } from '../../components/CurrentUser';
 import { testMachine } from '../../test/testMachine';
+import { SETTINGS_SECTION_IDS } from './SettingsTab';
 import type { FTPTreeNode, Machine } from '../../types';
 import MachineDetailPage from './MachineDetailPage';
 
@@ -467,7 +468,7 @@ describe('MachineDetailPage', () => {
       const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
       expect(await within(rulesSection).findByText(/Click a word in a rule to change it/)).toBeInTheDocument();
       const panel = screen.getByRole('tabpanel', { name: 'Settings' });
-      expect(within(panel).getAllByRole('region').map(region => region.id)).toEqual([machineSection.id, rulesSection.id, 'settings-delete-machine']);
+      expect(within(panel).getAllByRole('region').map(region => region.id)).toEqual([machineSection.id, rulesSection.id, SETTINGS_SECTION_IDS.deleteMachine]);
       expect(screen.queryByRole('navigation', { name: 'Settings sections' })).not.toBeInTheDocument();
     });
 
@@ -499,57 +500,92 @@ describe('MachineDetailPage', () => {
   });
 
   describe('deleting the machine', () => {
+    const LABEL = 'Type DELETE to enable the Delete button';
     const openDeleteDialog = () => {
       fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
       const section = screen.getByRole('region', { name: 'Delete machine' });
-      fireEvent.click(within(section).getByRole('button', { name: 'Delete machine' }));
+      fireEvent.click(within(section).getByRole('button', { name: 'Delete this machine' }));
       return screen.findByRole('alertdialog');
     };
+    const confirmButton = (dialog: HTMLElement) => within(dialog).getByRole('button', { name: 'Delete the machine' });
 
     it('has its own panel, and is not in the machine form', () => {
       renderPage();
 
       fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
 
-      expect(within(screen.getByRole('region', { name: 'Delete machine' })).getByRole('button', { name: 'Delete machine' })).toBeInTheDocument();
-      expect(within(screen.getByRole('region', { name: 'Machine' })).queryByRole('button', { name: 'Delete machine' })).not.toBeInTheDocument();
+      expect(within(screen.getByRole('region', { name: 'Delete machine' })).getByRole('button', { name: 'Delete this machine' })).toBeInTheDocument();
+      expect(within(screen.getByRole('region', { name: 'Machine' })).queryByRole('button', { name: /Delete/ })).not.toBeInTheDocument();
     });
 
-    it('lets the admin delete the machine only after they type "delete"', async () => {
-      const onRemove = vi.fn().mockResolvedValue(true);
-      renderPage({ onRemove });
-      const dialog = await openDeleteDialog();
-      const confirm = within(dialog).getByRole('button', { name: 'Delete the machine' });
-      const box = within(dialog).getByLabelText('Type DELETE, to enable machine removal');
+    it('names the box with its title, for a screen reader', async () => {
+      renderPage();
 
-      expect(confirm).toBeDisabled();
+      await openDeleteDialog();
+
+      expect(screen.getByRole('alertdialog', { name: `Delete ${testMachine().name}?` })).toBeInTheDocument();
+    });
+
+    it('lets the admin delete the machine only after they type "delete", in any case and with spaces around it', async () => {
+      renderPage({ onRemove: vi.fn().mockResolvedValue(true) });
+      const dialog = await openDeleteDialog();
+      const box = within(dialog).getByLabelText(LABEL);
+
+      expect(confirmButton(dialog)).toBeDisabled();
       fireEvent.change(box, { target: { value: 'remove' } });
-      expect(confirm).toBeDisabled();
+      expect(confirmButton(dialog)).toBeDisabled();
       fireEvent.change(box, { target: { value: 'Delete' } });
-      expect(confirm).toBeEnabled();
-
-      fireEvent.click(confirm);
-      await waitFor(() => expect(onRemove).toHaveBeenCalledWith('m1'));
+      expect(confirmButton(dialog)).toBeEnabled();
+      fireEvent.change(box, { target: { value: '  DELETE  ' } });
+      expect(confirmButton(dialog)).toBeEnabled();
     });
 
-    it('keeps the machine when the admin closes the box', async () => {
+    it('deletes the machine and goes to the machine list', async () => {
       const onRemove = vi.fn().mockResolvedValue(true);
       renderPage({ onRemove });
       const dialog = await openDeleteDialog();
+
+      fireEvent.change(within(dialog).getByLabelText(LABEL), { target: { value: 'DELETE' } });
+      fireEvent.click(confirmButton(dialog));
+
+      await waitFor(() => expect(onRemove).toHaveBeenCalledWith('m1'));
+      await waitFor(() => expect(shownAddress).toBe('/'));
+    });
+
+    it('stays on the machine page when the delete fails', async () => {
+      const onRemove = vi.fn().mockResolvedValue(false);
+      renderPage({ onRemove });
+      const dialog = await openDeleteDialog();
+
+      fireEvent.change(within(dialog).getByLabelText(LABEL), { target: { value: 'DELETE' } });
+      fireEvent.click(confirmButton(dialog));
+
+      await waitFor(() => expect(onRemove).toHaveBeenCalled());
+      expect(shownAddress).toMatch(/^\/machine\/m1/);
+    });
+
+    it('keeps the machine when the admin closes the box, and starts empty when they open it again', async () => {
+      const onRemove = vi.fn().mockResolvedValue(true);
+      renderPage({ onRemove });
+      let dialog = await openDeleteDialog();
+      fireEvent.change(within(dialog).getByLabelText(LABEL), { target: { value: 'DELETE' } });
 
       fireEvent.click(within(dialog).getByRole('button', { name: 'Keep the machine' }));
+      fireEvent.click(within(screen.getByRole('region', { name: 'Delete machine' })).getByRole('button', { name: 'Delete this machine' }));
+      dialog = await screen.findByRole('alertdialog');
 
-      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+      expect(within(dialog).getByLabelText(LABEL)).toHaveValue('');
+      expect(confirmButton(dialog)).toBeDisabled();
       expect(onRemove).not.toHaveBeenCalled();
     });
 
-    it('is not there for a user who cannot manage machines', () => {
-      renderPage({ role: 'operator' });
+    it.each(['operator', 'viewer'] as const)('is not there for a user who cannot manage machines (%s)', role => {
+      renderPage({ role });
 
       fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
 
       expect(screen.queryByRole('region', { name: 'Delete machine' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Delete machine' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Delete/ })).not.toBeInTheDocument();
     });
   });
 

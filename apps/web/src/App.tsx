@@ -50,7 +50,7 @@ function App() {
   const removeMachine = async (id: string) => {
     try {
       const response = await api.machine[':id'].$delete({ param: { id } });
-      if (!response.ok) throw new Error('Could not remove the machine');
+      if (!response.ok) throw new Error('Could not delete the machine');
       return true;
     } catch (err) {
       setError(messageOf(err));
