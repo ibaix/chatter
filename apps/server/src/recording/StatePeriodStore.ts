@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { STATE_PERIOD_KINDS, type StatePeriodKind } from '@local-chatter/shared';
+import type { ArchivedPeriod } from '../history-backup/archive.js';
 
 /** One time when a machine state had one value. `end` is undefined while the period still runs. */
 export interface StatePeriod {
@@ -15,6 +16,25 @@ export interface PeriodQuery {
   to: number;
   kind?: StatePeriodKind;
   limit: number;
+}
+
+export interface BackupPage {
+  machineId: string;
+  /** Null for all the history */
+  from: number | null;
+  to: number;
+  /** The id of the last period of the page before, or 0 */
+  afterId: number;
+  limit: number;
+}
+
+/** The restored periods that wait for commit() */
+export interface PeriodRestore {
+  add(periods: readonly ArchivedPeriod[]): void;
+  /** Add the periods to the machine. `alsoInTransaction` runs in the same transaction: when it throws, nothing is added. */
+  commit(machineId: string, alsoInTransaction: () => void): { added: number; known: number };
+  /** Remove the temporary table. Call it also after a failure. */
+  drop(): void;
 }
 
 interface StatePeriodRow {
@@ -114,6 +134,51 @@ export class StatePeriodStore {
       .sort((a, b) => b.started_at - a.started_at || b.id - a.id)
       .slice(0, limit)
       .map(toStatePeriod);
+  }
+
+  /**
+   * For a history backup: a page of the periods of one machine that overlap the range, in the order of their id.
+   * A page at a time, so no query stays open while the backup waits for the disk (the polls use the same connection).
+   * An open period ends at the last time that Chatter saw it, so a restored period is never open.
+   */
+  periodsForBackup({ machineId, from, to, afterId, limit }: BackupPage): { id: number; period: ArchivedPeriod }[] {
+    const rows = this.db.prepare(`
+      SELECT id, kind, value, started_at, COALESCE(ended_at, seen_at) AS ended_at FROM state_periods
+      WHERE machine_id = @machineId AND id > @afterId AND started_at < @to AND (@from IS NULL OR COALESCE(ended_at, seen_at) >= @from)
+      ORDER BY id LIMIT @limit`).all({ machineId, from, to, afterId, limit }) as (StatePeriodRow & { ended_at: number })[];
+    return rows.map(row => ({ id: row.id, period: { kind: row.kind, value: row.value, start: row.started_at, end: row.ended_at } }));
+  }
+
+  /**
+   * For a history restore: the periods wait in a temporary table (only this connection sees it), then commit()
+   * adds them to the machine in one transaction. A period that the machine already has (the same kind and start) is
+   * not added again, so a second restore adds nothing. Only one restore at a time can use it.
+   */
+  startRestore(): PeriodRestore {
+    const { db } = this;
+    db.exec(`
+      DROP TABLE IF EXISTS temp.restored_periods;
+      CREATE TEMP TABLE restored_periods (kind TEXT NOT NULL, value TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL,
+        PRIMARY KEY (kind, started_at));
+    `);
+    const stage = db.prepare('INSERT OR IGNORE INTO temp.restored_periods (kind, value, started_at, ended_at) VALUES (?, ?, ?, ?)');
+    return {
+      add: periods => db.transaction(() => {
+        for (const period of periods) stage.run(period.kind, period.value, period.start, period.end);
+      })(),
+      commit: (machineId, alsoInTransaction) => db.transaction(() => {
+        const staged = (db.prepare('SELECT COUNT(*) AS count FROM temp.restored_periods').get() as { count: number }).count;
+        const { changes } = db.prepare(`
+          INSERT INTO state_periods (machine_id, kind, value, started_at, ended_at, seen_at)
+          SELECT @machineId, r.kind, r.value, r.started_at, r.ended_at, r.ended_at FROM temp.restored_periods r
+          WHERE NOT EXISTS (
+            SELECT 1 FROM state_periods p WHERE p.machine_id = @machineId AND p.kind = r.kind AND p.started_at = r.started_at
+          )`).run({ machineId });
+        alsoInTransaction();
+        return { added: changes, known: staged - changes };
+      })(),
+      drop: () => db.exec('DROP TABLE IF EXISTS temp.restored_periods'),
+    };
   }
 
   removeMachine(machineId: string): void {

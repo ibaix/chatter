@@ -182,4 +182,19 @@ describe('AlertRuleService', () => {
     expect(log.text('error')).toContain('read-only folder');
     expect(reload).not.toHaveBeenCalled();
   });
+
+  it('for a history restore: checks the rules first, then replaces them, and writes the file only on publish', async () => {
+    const { service, files, checkQuery } = serviceWith({ check: { ok: false, error: 'cannot parse' } });
+    service.machineAdded('new_1');
+    await service.publish();
+    const filesBefore = files.length;
+
+    expect(await service.checkRules('new_1', [highLoad, slowSpindle])).toEqual({ error: 'cannot parse', ruleIndex: 1 });
+    expect(checkQuery).toHaveBeenCalledWith('chatter_spindle_speed{machine="new_1"} < 500');
+
+    service.replaceWithoutPublish('new_1', [highLoad, slowSpindle]);
+    service.replaceWithoutPublish('new_1', [highLoad, slowSpindle]);
+    expect(service.rulesOf('new_1').map(rule => rule.kind)).toEqual(['simple', 'query']);
+    expect(files).toHaveLength(filesBefore);
+  });
 });

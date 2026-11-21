@@ -1,0 +1,76 @@
+import { Readable } from 'node:stream';
+import type { ReadableStream as WebReadableStream } from 'node:stream/web';
+import { escapeLabelValue } from '../recording/metricLines.js';
+import { EXPORT_ROWS_PER_LINE } from './archive.js';
+
+const EXPORT_PATH = '/api/v1/export';
+const IMPORT_PATH = '/api/v1/import';
+/** VictoriaMetrics keeps the answers of queries. A restore adds old samples, so the kept answers must go. */
+const RESET_CACHE_PATH = '/internal/resetRollupResultCache';
+const IMPORT_TIMEOUT_MS = 60_000;
+const CONNECT_TIMEOUT_MS = 10_000;
+
+/** The raw values of the history (metricLines.ts), and the averages that vmalert saves (vmalert/rules.yml) */
+export const RAW_SERIES = 'chatter_[a-z0-9_]+';
+export const AVERAGE_SERIES = 'chatter_[a-z0-9_]+:avg1[mh]';
+
+export interface ExportRange {
+  /** Null for all the history */
+  from: number | null;
+  to: number;
+}
+
+/** Where a history backup reads the series of a machine, and where a restore writes them */
+export interface HistoryStore {
+  /** The series of the machine whose name matches the pattern, as lines of /api/v1/export */
+  exportSeries(machineId: string, namePattern: string, range: ExportRange, signal: AbortSignal): Promise<AsyncIterable<Uint8Array>>;
+  /** Write lines of /api/v1/export (JSON, one series block on each line) */
+  importLines(body: string): Promise<void>;
+  /** Call after an import, so the charts show the new samples at once */
+  importDone(): Promise<void>;
+}
+
+/** The machine history in VictoriaMetrics */
+export class VictoriaHistory implements HistoryStore {
+  constructor(private readonly url: string) {}
+
+  async exportSeries(machineId: string, namePattern: string, { from, to }: ExportRange, signal: AbortSignal): Promise<AsyncIterable<Uint8Array>> {
+    const params = new URLSearchParams({
+      'match[]': `{__name__=~"${namePattern}",machine="${escapeLabelValue(machineId)}"}`,
+      end: seconds(to),
+      max_rows_per_line: String(EXPORT_ROWS_PER_LINE),
+    });
+    if (from !== null) params.set('start', seconds(from));
+    // The export itself can take long on a Pi. The time limit stops only a VictoriaMetrics that does not start to answer.
+    const controller = new AbortController();
+    const stop = () => controller.abort(signal.reason);
+    signal.addEventListener('abort', stop, { once: true });
+    const timer = setTimeout(() => controller.abort(new Error('VictoriaMetrics did not answer')), CONNECT_TIMEOUT_MS);
+    try {
+      const response = await fetch(new URL(`${EXPORT_PATH}?${params}`, this.url), { signal: controller.signal });
+      if (!response.ok || !response.body) throw new Error(await describeAnswer(response));
+      return Readable.fromWeb(response.body as WebReadableStream<Uint8Array>);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async importLines(body: string): Promise<void> {
+    const response = await fetch(new URL(IMPORT_PATH, this.url), { method: 'POST', body, signal: AbortSignal.timeout(IMPORT_TIMEOUT_MS) });
+    if (!response.ok) throw new Error(await describeAnswer(response));
+  }
+
+  async importDone(): Promise<void> {
+    const response = await fetch(new URL(RESET_CACHE_PATH, this.url), { signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS) });
+    if (!response.ok) throw new Error(await describeAnswer(response));
+  }
+}
+
+/** The time in seconds, with milliseconds, as VictoriaMetrics reads it */
+function seconds(timeMs: number): string {
+  return (timeMs / 1000).toFixed(3);
+}
+
+async function describeAnswer(response: Response): Promise<string> {
+  return `VictoriaMetrics answered ${response.status}: ${(await response.text()).trim().slice(0, 300)}`;
+}

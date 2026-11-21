@@ -76,15 +76,20 @@ function parseSeries(text: string): ExportedSeries {
     throw new ArchiveError('A line of the history is not JSON.');
   }
   const { metric, values, timestamps } = (value ?? {}) as Partial<ExportedSeries>;
-  if (typeof metric !== 'object' || metric === null || Array.isArray(metric)) throw new ArchiveError('A line of the history has no metric.');
-  if (Object.values(metric).some(label => typeof label !== 'string')) throw new ArchiveError('A line of the history has a label that is not text.');
-  if (!CHATTER_METRIC.test(metric[NAME_LABEL] ?? '')) throw new ArchiveError('The file has a series that is not a Chatter machine value.');
+  checkMetric(metric);
   if (!Array.isArray(values) || !Array.isArray(timestamps) || values.length !== timestamps.length) {
     throw new ArchiveError('A line of the history has not the same number of values and times.');
   }
   if (!values.every(item => typeof item === 'number' && Number.isFinite(item))) throw new ArchiveError('A line of the history has a value that is not a number.');
   if (!timestamps.every(item => Number.isSafeInteger(item) && item >= 0)) throw new ArchiveError('A line of the history has a time that is not correct.');
   return { metric, values, timestamps };
+}
+
+function checkMetric(metric: unknown): asserts metric is Record<string, string> {
+  if (typeof metric !== 'object' || metric === null || Array.isArray(metric)) throw new ArchiveError('A line of the history has no metric.');
+  const labels = metric as Record<string, unknown>;
+  if (Object.values(labels).some(label => typeof label !== 'string')) throw new ArchiveError('A line of the history has a label that is not text.');
+  if (!CHATTER_METRIC.test(String(labels[NAME_LABEL] ?? ''))) throw new ArchiveError('The file has a series that is not a Chatter machine value.');
 }
 
 const NEWLINE = 0x0a;
