@@ -434,6 +434,33 @@ describe('MachineDetailPage', () => {
       await screen.findByText(/Click a word in a rule to change it/);
       expect(scrolledTo).toEqual([rulesSection, rulesSection]);
     });
+
+    it('does not move the page when the rules load after the user scrolled', async () => {
+      let loadRules: (rules: AlertRule[]) => void = () => {};
+      vi.mocked(fetchAlertRules).mockReturnValue(new Promise(resolve => { loadRules = resolve; }));
+      renderPage({ address: '/machine/m1?tab=settings#settings-alert-rules' });
+      const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
+      await waitFor(() => expect(scrolledTo).toEqual([rulesSection]));
+
+      fireEvent.wheel(document.body, { deltaY: -200 });
+      loadRules([OFFLINE_RULE]);
+
+      await screen.findByText(/Click a word in a rule to change it/);
+      expect(scrolledTo).toEqual([rulesSection]);
+    });
+
+    it('scrolls again for the next link, also after the user scrolled', async () => {
+      renderPage();
+      fireEvent.click(await screen.findByRole('link', { name: 'Settings › Alert rules' }));
+      const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
+      await waitFor(() => expect(scrolledTo).toEqual([rulesSection]));
+      fireEvent.wheel(document.body, { deltaY: -200 });
+
+      go(-1);
+      fireEvent.click(await screen.findByRole('link', { name: 'Settings › Alert rules' }));
+
+      await waitFor(() => expect(scrolledTo).toEqual([rulesSection, screen.getByRole('region', { name: 'Alert rules' })]));
+    });
   });
 
   describe('the firing alerts', () => {

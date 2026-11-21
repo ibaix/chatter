@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useCan } from '../../components/CurrentUser';
 import type { Machine, MachineUpdate } from '../../types';
@@ -52,14 +52,33 @@ export function SettingsTab({ machine, machines, rules, onUpdate, onRemove }: Se
   );
 }
 
+/** These events show that the user moves the page or works on it */
+const USER_MOVE_EVENTS = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const;
+
 /**
  * A link from another tab to `#<id>` opens the Settings tab. The browser does not scroll then, so this does it.
  * It scrolls again when the alert rules load: before that, the page can be too short to bring the section to the top.
+ * But when the user moved the page or worked on it after the link, the page stays where it is.
  */
 function useScrollToSection(rulesLoaded: boolean) {
-  const { hash } = useLocation();
+  const { hash, key } = useLocation();
+  const userMoved = useRef(false);
+
+  // Each new address starts again. This effect runs before the scroll below.
   useEffect(() => {
-    if (hash) document.getElementById(hash.slice(1))?.scrollIntoView({ block: 'start' });
+    userMoved.current = false;
+    const noteMove = () => {
+      userMoved.current = true;
+    };
+    for (const type of USER_MOVE_EVENTS) window.addEventListener(type, noteMove, { capture: true, passive: true });
+    return () => {
+      for (const type of USER_MOVE_EVENTS) window.removeEventListener(type, noteMove, { capture: true });
+    };
+  }, [key]);
+
+  useEffect(() => {
+    if (!hash || userMoved.current) return;
+    document.getElementById(hash.slice(1))?.scrollIntoView({ block: 'start' });
   }, [hash, rulesLoaded]);
 }
 
