@@ -10,7 +10,7 @@ export type Role = typeof ROLES[number];
 
 /**
  * send-files: send files to a machine, and delete files on it.
- * manage-machines: add, change, and remove machines, and scan the network for them.
+ * manage-machines: add, change, and delete machines, and scan the network for them.
  * manage-chatter: add users and change their roles, and change the HTTPS, proxy, and login settings.
  * manage-updates: update Chatter to a new version (Settings > Updates). Chatter stops during the install.
  */

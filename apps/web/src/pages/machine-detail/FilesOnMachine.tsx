@@ -3,13 +3,12 @@ import { useEffect, useRef, useState } from 'react';
 import { deleteMachineFile, fileDownloadUrl } from '../../api/machineFiles';
 import { useCan } from '../../components/CurrentUser';
 import { Button } from '../../components/ui/Button';
-import { DownloadIcon, FolderIcon, FolderUpIcon, RefreshIcon, TrashIcon, UploadIcon } from '../../components/ui/icons';
+import { DownloadIcon, FolderIcon, FolderUpIcon, RefreshIcon, TrashIcon } from '../../components/ui/icons';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
 import type { FTPTreeNode } from '../../types';
 import { formatSize } from '../../utils/formatters';
 import { errorMessageOf } from '../../utils/errorMessage';
 import { filesOf, foldersOf, formatChanged, parentPath, pathCrumbs } from './fileListing';
-import FileUploadPanel from './FileUploadPanel';
 import FileViewer from './FileViewer';
 import type { MachineFiles } from './useMachineFiles';
 import type { UploadMessages } from './useUploadMessages';
@@ -20,18 +19,16 @@ const FILE_ROW = cn(ROW, 'transition-colors hover:bg-primary/20 focus-within:bg-
 const FOLDER_BUTTON_CLASS =
   'flex min-h-9 w-full items-center gap-2 rounded-md border-0 bg-transparent px-2 text-left font-mono text-[0.8125rem] text-zinc-50 hover:bg-zinc-800';
 
-interface FilesTabProps {
+interface FilesOnMachineProps {
   machineId: string;
   files: MachineFiles;
   messages: UploadMessages;
-  onUploaded: () => Promise<void>;
   now: number;
 }
 
-/** The files on the machine, by folder. Send new files, or read, download and delete the files there. */
-export function FilesTab({ machineId, files, messages, onUploaded, now }: FilesTabProps) {
+/** The files on the machine, by folder. Read, download and delete the files there. */
+export function FilesOnMachine({ machineId, files, messages, now }: FilesOnMachineProps) {
   const canSendFiles = useCan('send-files');
-  const [isSending, setIsSending] = useState(false);
   const { openFile, showFile, closeFile } = useFileViewer(files.currentPath);
   const { confirm } = Dialog.useDialog();
 
@@ -47,37 +44,16 @@ export function FilesTab({ machineId, files, messages, onUploaded, now }: FilesT
     }
   };
 
-  const sendFinished = async () => {
-    setIsSending(false);
-    await onUploaded();
-  };
-
   return (
     <div className="flex flex-wrap">
       <FolderList files={files} />
       <div className="flex min-w-0 flex-[999_1_26.25rem] flex-col">
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
           <PathCrumbs files={files} />
-          <div className="flex gap-2">
-            <Button size="icon" variant="quiet" aria-label="Load the files again" title="Load the files again" onClick={() => files.refresh()} disabled={files.loading}>
-              <RefreshIcon />
-            </Button>
-            {canSendFiles && (
-              <Button variant="primary" onClick={() => setIsSending(true)} disabled={isSending}>
-                <UploadIcon /> Send files
-              </Button>
-            )}
-          </div>
+          <Button size="icon" variant="quiet" aria-label="Load the files again" title="Load the files again" onClick={() => files.refresh()} disabled={files.loading}>
+            <RefreshIcon />
+          </Button>
         </div>
-        {isSending && (
-          <FileUploadPanel
-            machineId={machineId}
-            uploadPath={files.uploadPath}
-            messages={messages}
-            onUploaded={sendFinished}
-            onCancel={() => setIsSending(false)}
-          />
-        )}
         {openFile && <FileViewer key={openFile.path} machineId={machineId} file={openFile} onClose={closeFile} />}
         <FileTable
           files={files}

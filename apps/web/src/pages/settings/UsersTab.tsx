@@ -38,7 +38,7 @@ const ROLE_BADGES: Record<Role, string> = {
 const EVERYONE_CAN = ['See machines and history', 'Download files'];
 const PERMISSION_LABELS: Record<Permission, string> = {
   'send-files': 'Send and delete files',
-  'manage-machines': 'Add, change, or remove machines',
+  'manage-machines': 'Add, change, or delete machines',
   'manage-chatter': 'Manage users, HTTPS, the proxy, and logins',
   'manage-updates': 'Update Chatter',
 };

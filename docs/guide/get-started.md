@@ -31,13 +31,21 @@ When you add a machine, it shows on the **Machines** page. It shows **Connecting
 Chatter uses FTP to show, send and download the program files on a machine. Do these steps for each machine:
 
 1. On the **Machines** page, click the machine.
-2. Click the **Machine settings** tab.
+2. Click the **Settings** tab. The **Machine** section is at the top.
 3. Under **FTP login**, type the FTP port, username and password that the machine uses. Most machines use port `21`.
 4. Click **Save changes**.
 
-![Machine settings: the FTP login with port, username and password](../images/chatter-machine-ftp.png)
+![Settings > Machine: the FTP login with port, username and password](../images/chatter-machine-ftp.png)
 
 Chatter never shows a saved password again. To keep it, leave the password box empty.
+
+### Delete a machine
+
+An **Admin** can delete a machine from Chatter. Chatter then stops reading the machine and deletes its spindle speed history. You cannot undo this.
+
+1. Click the **Settings** tab of the machine.
+2. In the **Delete machine** panel at the bottom, click **Delete machine**.
+3. In the box, type `DELETE`. Then click **Delete the machine**.
 
 ## 4. Add users and give them roles
 
@@ -47,7 +55,7 @@ Go to **Settings > Users and roles**, and click **Add user**. Give each person a
 |------|--------|
 | **Viewer** | See the machines and their history. Download files. |
 | **Operator** | All that a Viewer can do. Send files to the machines, and delete files on them. |
-| **Admin** | All that an Operator can do. Add, change, and remove machines. Manage the users and the settings. Update Chatter. |
+| **Admin** | All that an Operator can do. Add, change, and delete machines. Manage the users and the settings. Update Chatter. |
 
 Give the username and the password to the person. They can change the password on **Settings > Your account**.
 

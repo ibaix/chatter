@@ -10,14 +10,14 @@ import { AlertRuleRow } from './AlertRuleRow';
 import { CopyRulesDialog } from './CopyRulesDialog';
 import type { AlertRules } from './useAlertRules';
 
-interface AlertRulesTabProps {
+interface AlertRulesSectionProps {
   machineId: string;
   otherMachines: Pick<Machine, 'id' | 'name'>[];
   rules: AlertRules;
 }
 
 /** The alert rules of one machine, as sentences. An admin changes the words, then clicks Save changes. */
-export function AlertRulesTab({ machineId, otherMachines, rules }: AlertRulesTabProps) {
+export function AlertRulesSection({ machineId, otherMachines, rules }: AlertRulesSectionProps) {
   const canChange = useCan('manage-machines');
   const [isCopyOpen, setIsCopyOpen] = useState(false);
 

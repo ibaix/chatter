@@ -1,4 +1,4 @@
-import { useReducer } from 'react';
+import { useState, type Dispatch, type SetStateAction } from 'react';
 import { useNow } from '../../hooks/useNow';
 import type { Machine } from '../../types';
 import { CHART_CLOCK_TICK_MS, CHART_RANGES, fittedOverviewEnd, pannedEnd, zoomView, type ChartRange } from './historyChart';
@@ -61,13 +61,24 @@ export function chartViewReducer(view: ChartView, action: ChartViewAction): Char
   }
 }
 
+/** A chart view that a parent keeps (from useState), so the view stays while the chart is not on the page */
+export type KeptChartView = [ChartView, Dispatch<SetStateAction<ChartView>>];
+
+/** The view of a new chart: the first range button, up to now */
+export function firstChartView(): ChartView {
+  return liveView(CHART_RANGES[0]);
+}
+
 /**
  * The time in the chart and in the overview strip, and the ways to change it.
+ * Without `keptView`, the chart keeps the view itself, and loses it when it leaves the page.
  * `now` is the chart clock (useChartClock). The charts draw "now" from the same clock, so a move or a zoom
  * goes to the time that the user sees.
  */
-export function useChartView(now: number) {
-  const [view, dispatch] = useReducer(chartViewReducer, CHART_RANGES[0], liveView);
+export function useChartView(now: number, keptView?: KeptChartView) {
+  const ownView = useState(firstChartView);
+  const [view, setView] = keptView ?? ownView;
+  const dispatch = (action: ChartViewAction) => setView(current => chartViewReducer(current, action));
   return {
     /** The strip always holds the view: a live strip that moved past a view in the past goes back to it */
     view: { ...view, overviewEnd: fittedStrip(view, now) },

@@ -10,7 +10,7 @@ Only an **Admin** can add a custom query.
 
 ## Add a custom query, step by step
 
-1. Open the machine page, and click the **Alert rules** tab.
+1. Open the machine page, and click the **Settings** tab. Go to the **Alert rules** section.
 2. Click **+ Add rule**, then **Custom query**. A new rule comes at the end of the list, with an example query.
 
    ![The + Add rule menu: Simple rule and Custom query](../images/chatter-alert-add-rule.png)
@@ -30,7 +30,7 @@ Only an **Admin** can add a custom query.
 ![A custom query: the name, the query with $machine, the Test result, and the Save changes bar](../images/chatter-alert-custom-query.png)
 
 Chatter checks the query again when you save. A query with an error is not saved.
-Chatter uses the new rule within 30 seconds. When the check is true for the minutes in the rule, the alert shows in the **Alerts** panel.
+Chatter uses the new rule within 30 seconds. When the check is true for the minutes in the rule, the alert shows in the **Alerts** panel of the **Dashboard** tab.
 
 ![The Alerts panel: an alert that fires now](../images/chatter-alert-firing.png)
 

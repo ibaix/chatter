@@ -47,5 +47,5 @@ read -rs CHATTER_PASSWORD && export CHATTER_PASSWORD
 `read -rs` waits for you to type the password, and does not show it. Type it, then push Enter.
 
 ::: warning Warning:
-Do not give an agent an Admin login unless you must. An agent with an Admin login can change and remove machines, users and settings.
+Do not give an agent an Admin login unless you must. An agent with an Admin login can change and delete machines, users and settings.
 :::

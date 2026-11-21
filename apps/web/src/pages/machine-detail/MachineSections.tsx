@@ -1,22 +1,21 @@
-import { useState } from 'react';
-import { useCan } from '../../components/CurrentUser';
-import { Notice } from '../../components/ui/Notice';
+import { useEffect, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { tabPanelProps } from '../../components/ui/tabPanel';
 import { UnderlineTabs, type TabItem } from '../../components/ui/UnderlineTabs';
 import type { Machine, MachineUpdate, ToolTable } from '../../types';
-import { AlertRulesTab } from './AlertRulesTab';
-import { FilesTab } from './FilesTab';
-import { MachineSettingsTab } from './MachineSettingsTab';
+import { FilesSection } from './FilesSection';
+import { FIRST_TAB, TAB_PARAM, type SectionId } from './machineTabs';
+import { FIRST_REPORT_RANGE, ReportPanel } from './ReportPanel';
+import { SettingsTab } from './SettingsTab';
 import { ToolTableTab } from './ToolTableTab';
-import { UploadHistoryTab } from './UploadHistoryTab';
 import { useAlertRules } from './useAlertRules';
 import { useMachineFiles } from './useMachineFiles';
 import { useUploadHistory } from './useUploadHistory';
-import { useUploadMessages, type UploadMessages } from './useUploadMessages';
-
-type SectionId = 'files' | 'history' | 'tools' | 'alerts' | 'settings';
+import { useUploadMessages } from './useUploadMessages';
 
 const ID_PREFIX = 'machine-sections';
+/** The tabs that hold a list or a form. They share one card. Dashboard and Report hold cards of their own. */
+const CARD_TABS: readonly SectionId[] = ['files', 'tools'];
 
 /** Brother and Haas machines send their tool table. Only Brother tells which pocket holds each tool. */
 function toolTableOf(machine: Machine): { toolTable: ToolTable | undefined; hasPocketInfo: boolean } {
@@ -33,28 +32,41 @@ interface MachineSectionsProps {
   now: number;
   onUpdate: (id: string, updates: MachineUpdate) => Promise<boolean>;
   onRemove: () => Promise<void>;
+  /** The live values, the chart and the alerts */
+  dashboard: ReactNode;
+  /** The Dashboard tab shows this number of firing alerts */
+  firingCount: number;
 }
 
-/** The tabs under the live values: files, upload history, tool table, alert rules and settings */
-export function MachineSections({ machine, machines, now, onUpdate, onRemove }: MachineSectionsProps) {
-  const [openTab, setOpenTab] = useState<SectionId>('files');
-  const canManageMachines = useCan('manage-machines');
-  const files = useMachineFiles(machine.id);
-  const history = useUploadHistory(machine.id);
+/** The tabs under the machine name: the dashboard, the report, files, tool table and settings */
+export function MachineSections({ machine, machines, now, onUpdate, onRemove, dashboard, firingCount }: MachineSectionsProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const openTab = searchParams.get(TAB_PARAM);
   const messages = useUploadMessages();
   const alertRules = useAlertRules(machine.id);
+  // The range of the report stays when the user opens another tab and comes back
+  const reportRange = useState(FIRST_REPORT_RANGE);
   const { toolTable, hasPocketInfo } = toolTableOf(machine);
   const toolCount = machine.connected && toolTable ? Object.keys(toolTable).length : 0;
 
   const tabs: TabItem<SectionId>[] = [
+    { id: 'dashboard', label: <>Dashboard<FiringCount count={firingCount} /></> },
+    { id: 'report', label: 'Report' },
     { id: 'files', label: 'Files' },
-    { id: 'history', label: 'Upload history', count: history.historyFiles.length },
     ...(toolCount > 0 ? [{ id: 'tools' as const, label: 'Tool table', count: toolCount }] : []),
-    { id: 'alerts', label: 'Alert rules', count: alertRules.saved?.length },
-    ...(canManageMachines ? [{ id: 'settings' as const, label: 'Machine settings' }] : []),
+    { id: 'settings', label: 'Settings' },
   ];
-  // The tool table tab goes away when the machine stops sending it
-  const shownTab = tabs.some(tab => tab.id === openTab) ? openTab : 'files';
+  // An unknown tab, or a tab that is not there (the tool table goes away when the machine stops sending it), opens the dashboard
+  const shownTab = tabs.find(tab => tab.id === openTab)?.id ?? FIRST_TAB;
+  // Each tab change is a step in the history, so Back opens the tab before. A click on the open tab adds no step.
+  const openTabNamed = (tab: SectionId) => {
+    if (tab !== shownTab) setSearchParams({ [TAB_PARAM]: tab });
+  };
+  useAddressOfShownTab(openTab, shownTab);
+  // The files and the upload history load at the first open of the Files tab, not on each visit to the page
+  const filesWereOpened = useHasBeenTrue(shownTab === 'files');
+  const files = useMachineFiles(machine.id, filesWereOpened);
+  const history = useUploadHistory(machine.id, filesWereOpened);
 
   const reloadAfterUpload = async () => {
     files.refresh();
@@ -62,47 +74,74 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove }: 
   };
 
   return (
-    <section aria-label="Files and settings" className="rounded-xl border border-zinc-800 bg-zinc-900">
-      <UnderlineTabs label="Machine sections" tabs={tabs} value={shownTab} onChange={setOpenTab} idPrefix={ID_PREFIX} className="px-3" />
-      <div {...tabPanelProps(ID_PREFIX, shownTab)}>
-        {(shownTab === 'files' || shownTab === 'history') && <UploadMessageNotices messages={messages} />}
-        {shownTab === 'files' && (
-          <FilesTab machineId={machine.id} files={files} messages={messages} onUploaded={reloadAfterUpload} now={now} />
-        )}
-        {shownTab === 'history' && (
-          <UploadHistoryTab
-            machineId={machine.id}
-            machineName={machine.name}
-            history={history}
-            messages={messages}
-            onUploaded={reloadAfterUpload}
-          />
-        )}
-        {shownTab === 'tools' && toolTable && (
-          <ToolTableTab toolTable={toolTable} hasPocketInfo={hasPocketInfo} spindleTool={machine.data.toolNumber} />
-        )}
-        {shownTab === 'alerts' && (
-          <AlertRulesTab
-            machineId={machine.id}
-            otherMachines={machines.filter(other => other.id !== machine.id)}
-            rules={alertRules}
-          />
+    <>
+      <UnderlineTabs label="Machine sections" tabs={tabs} value={shownTab} onChange={openTabNamed} idPrefix={ID_PREFIX} />
+      <div {...tabPanelProps(ID_PREFIX, shownTab)} className="flex flex-col gap-5">
+        {shownTab === 'dashboard' && dashboard}
+        {shownTab === 'report' && <ReportPanel machineId={machine.id} machineType={machine.type} range={reportRange} />}
+        {CARD_TABS.includes(shownTab) && (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900">
+            {shownTab === 'files' && (
+              <FilesSection
+                machineId={machine.id}
+                machineName={machine.name}
+                files={files}
+                history={history}
+                messages={messages}
+                onUploaded={reloadAfterUpload}
+                now={now}
+              />
+            )}
+            {shownTab === 'tools' && toolTable && (
+              <ToolTableTab toolTable={toolTable} hasPocketInfo={hasPocketInfo} spindleTool={machine.data.toolNumber} />
+            )}
+          </div>
         )}
         {shownTab === 'settings' && (
-          <MachineSettingsTab machine={machine} onUpdate={onUpdate} onRemove={onRemove} />
+          <SettingsTab machine={machine} machines={machines} rules={alertRules} onUpdate={onUpdate} onRemove={onRemove} />
         )}
       </div>
-    </section>
+    </>
   );
 }
 
-/** The result of the last upload, above the files and the upload history */
-function UploadMessageNotices({ messages }: { messages: UploadMessages }) {
-  if (!messages.error && !messages.success) return null;
+/** True from the first render where `value` is true */
+function useHasBeenTrue(value: boolean): boolean {
+  const [hasBeenTrue, setHasBeenTrue] = useState(value);
+  if (value && !hasBeenTrue) setHasBeenTrue(true);
+  return hasBeenTrue || value;
+}
+
+/**
+ * When the address names a tab that is not there, the address changes to the shown tab.
+ * Else the tool table would open by itself later, when the machine sends it again.
+ */
+function useAddressOfShownTab(openTab: string | null, shownTab: SectionId) {
+  const [, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (openTab === null || openTab === shownTab) return;
+    setSearchParams(
+      params => {
+        const next = new URLSearchParams(params);
+        next.delete(TAB_PARAM);
+        return next;
+      },
+      { replace: true },
+    );
+  }, [openTab, shownTab, setSearchParams]);
+}
+
+/** The number of firing alerts after the Dashboard tab name, in the alarm color. Nothing when no alert fires. */
+function FiringCount({ count }: { count: number }) {
+  if (count === 0) return null;
   return (
-    <div className="px-4 pt-3">
-      {messages.error && <Notice tone="error" title={messages.error} onClose={messages.clear} />}
-      {messages.success && <Notice tone="success" title={messages.success} onClose={messages.clear} />}
-    </div>
+    <>
+      {/* A real space: a browser joins the inline texts of the tab name with no space */}
+      {' '}
+      <span className="ml-0.5 inline-flex min-w-5 items-center justify-center rounded-full bg-alarm px-1.5 font-mono text-xs font-bold text-white">
+        {count}
+        <span className="sr-only"> {count === 1 ? 'alert' : 'alerts'} firing</span>
+      </span>
+    </>
   );
 }

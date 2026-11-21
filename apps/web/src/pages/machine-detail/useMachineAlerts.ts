@@ -42,3 +42,5 @@ export function useMachineAlerts(machineId: string) {
 
   return { alerts, loaded, failed };
 }
+
+export type MachineAlerts = ReturnType<typeof useMachineAlerts>;

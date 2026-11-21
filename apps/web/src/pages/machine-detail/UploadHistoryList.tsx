@@ -1,6 +1,7 @@
 import { cn, Dialog } from '@toolpath/ui';
 import { useEffect, useState } from 'react';
 import { fetchUploadEvent, sendUploadAgain, type UploadEventDetail } from '../../api/machineFiles';
+import { useCan } from '../../components/CurrentUser';
 import { Button } from '../../components/ui/Button';
 import { RefreshIcon } from '../../components/ui/icons';
 import { SearchBox } from '../../components/ui/SearchBox';
@@ -11,7 +12,7 @@ import { errorMessageOf } from '../../utils/errorMessage';
 import type { UploadHistory } from './useUploadHistory';
 import type { UploadMessages } from './useUploadMessages';
 
-interface UploadHistoryTabProps {
+interface UploadHistoryListProps {
   machineId: string;
   machineName: string;
   history: UploadHistory;
@@ -21,9 +22,11 @@ interface UploadHistoryTabProps {
 }
 
 /** Every file sent to the machine from ChatterBox. Pick one to see its versions and send one again. */
-export function UploadHistoryTab({ machineId, machineName, history, messages, onUploaded }: UploadHistoryTabProps) {
+export function UploadHistoryList({ machineId, machineName, history, messages, onUploaded }: UploadHistoryListProps) {
   const [searchText, setSearchText] = useState('');
   const { confirm } = Dialog.useDialog();
+  // The server lets only a role that can send files send one again
+  const canSendFiles = useCan('send-files');
   const matchingFiles = filesMatching(history.historyFiles, searchText);
 
   const sendAgain = async (eventId: number) => {
@@ -76,11 +79,11 @@ export function UploadHistoryTab({ machineId, machineName, history, messages, on
           files={matchingFiles}
           selectedFileId={history.selectedFileId}
           onSelect={fileId => history.select(fileId === history.selectedFileId ? null : fileId)}
-          onSendNewest={sendNewest}
+          onSendNewest={canSendFiles ? sendNewest : undefined}
         />
       )}
       {selectedFile && (
-        <VersionsBox key={selectedFile.id} machineId={machineId} file={selectedFile} events={history.selectedEvents} onSendAgain={sendAgain} />
+        <VersionsBox key={selectedFile.id} machineId={machineId} file={selectedFile} events={history.selectedEvents} onSendAgain={canSendFiles ? sendAgain : undefined} />
       )}
     </>
   );
@@ -112,7 +115,8 @@ interface UploadTableProps {
   files: UploadFile[];
   selectedFileId: number | null;
   onSelect: (fileId: number) => void;
-  onSendNewest: (fileId: number) => void;
+  /** Not there when the user may not send files */
+  onSendNewest?: (fileId: number) => void;
 }
 
 function UploadTable({ files, selectedFileId, onSelect, onSendNewest }: UploadTableProps) {
@@ -140,8 +144,13 @@ function UploadTable({ files, selectedFileId, onSelect, onSendNewest }: UploadTa
                 <td className={cn(CELL, 'text-right whitespace-nowrap')}>
                   <Button size="sm" aria-pressed={isSelected} onClick={() => onSelect(file.id)}>
                     {isSelected ? 'Hide versions' : 'Versions'}
-                  </Button>{' '}
-                  <Button size="sm" onClick={() => onSendNewest(file.id)}>Send again</Button>
+                  </Button>
+                  {onSendNewest && (
+                    <>
+                      {' '}
+                      <Button size="sm" onClick={() => onSendNewest(file.id)}>Send again</Button>
+                    </>
+                  )}
                 </td>
               </tr>
             );
@@ -156,7 +165,8 @@ interface VersionsBoxProps {
   machineId: string;
   file: UploadFile;
   events: UploadEvent[] | undefined;
-  onSendAgain: (eventId: number) => void;
+  /** Not there when the user may not send files */
+  onSendAgain?: (eventId: number) => void;
 }
 
 /** The versions of one file, newest first, and the text of the picked version. Give it a new key for each file. */
@@ -198,7 +208,7 @@ function VersionsBox({ machineId, file, events, onSendAgain }: VersionsBoxProps)
       <div className="flex min-w-0 flex-[2_1_20rem] flex-col bg-zinc-950">
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-2">
           <span className="text-xs text-zinc-300">The text of this version</span>
-          {shownId !== null && <Button size="sm" onClick={() => onSendAgain(shownId)}>Send this version again</Button>}
+          {shownId !== null && onSendAgain && <Button size="sm" onClick={() => onSendAgain(shownId)}>Send this version again</Button>}
         </div>
         <pre
           aria-label="The text of the picked version"
