@@ -1,9 +1,10 @@
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { StateBadge } from '../../components/MachineStateMark';
 import { AlarmIcon } from '../../components/ui/icons';
 import { machineAddress, machineTypeLabel, makerOf, type MachineState } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 import { formatAgo } from '../../utils/formatters';
+import { FIRST_TAB, tabInAddress, tabLink } from './machineTabs';
 
 interface MachineHeaderProps {
   machine: Machine;
@@ -32,9 +33,13 @@ export function MachineHeader({ machine, state, now, firingCount }: MachineHeade
 
 /** "2 alerts firing", in the alarm color. It opens the Dashboard tab, where the Alerts panel lists them. */
 function FiringBadge({ count }: { count: number }) {
+  const [searchParams] = useSearchParams();
+  // When the Dashboard is open, the click adds no step to the history
+  const isDashboardOpen = tabInAddress(searchParams) === FIRST_TAB;
   return (
     <Link
-      to="?tab=dashboard"
+      to={tabLink('dashboard')}
+      replace={isDashboardOpen}
       className="inline-flex h-[1.625rem] items-center gap-1.5 rounded-md bg-alarm px-2.5 text-xs font-bold tracking-[.03em] text-white no-underline hover:underline"
     >
       <AlarmIcon size={14} strokeWidth={2} />

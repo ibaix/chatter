@@ -46,21 +46,24 @@ function renderPage({
   machine = testMachine(),
   machines = [machine],
 }: { address?: string; role?: Role; machine?: Machine; machines?: Machine[] } = {}) {
-  render(
+  const page = (shownMachines: Machine[]) => (
     <CurrentUserContext.Provider value={{ username: 'sam', role }}>
       <Dialog.Provider>
         <MemoryRouter initialEntries={[address]}>
           <Routes>
             <Route
               path="/machine/:id"
-              element={<MachineDetailPage machines={machines} isLoaded onRemove={vi.fn()} onUpdate={vi.fn()} />}
+              element={<MachineDetailPage machines={shownMachines} isLoaded onRemove={vi.fn()} onUpdate={vi.fn()} />}
             />
           </Routes>
           <AddressSpy />
         </MemoryRouter>
       </Dialog.Provider>
-    </CurrentUserContext.Provider>,
+    </CurrentUserContext.Provider>
   );
+  const { rerender } = render(page(machines));
+  /** The server sends new machine values. The address and the history stay. */
+  return { showMachines: (next: Machine[]) => rerender(page(next)) };
 }
 
 const SENT_FILES = [
@@ -141,6 +144,62 @@ describe('MachineDetailPage', () => {
       renderPage({ address: '/machine/m1?tab=nonsense' });
 
       expect(screen.getByRole('tab', { name: 'Dashboard' })).toHaveAttribute('aria-selected', 'true');
+    });
+    it('fixes the address when the tab is not there, so the tab cannot open later by itself', () => {
+      const { showMachines } = renderPage({ address: '/machine/m1?tab=tools' });
+      expect(shownAddress).toBe('/machine/m1');
+
+      showMachines([testMachine({}, { toolTable: { 1: { toolNum: 1 } } })]);
+
+      expect(screen.getByRole('tab', { name: 'Dashboard' })).toHaveAttribute('aria-selected', 'true');
+    });
+
+    it('fixes the address for an unknown tab name', () => {
+      renderPage({ address: '/machine/m1?tab=nonsense' });
+
+      expect(shownAddress).toBe('/machine/m1');
+    });
+
+    it('goes back and forward between the tabs that the user opened', () => {
+      renderPage();
+      fireEvent.click(screen.getByRole('tab', { name: 'Report' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
+
+      go(-1);
+      expect(screen.getByRole('tab', { name: 'Report' })).toHaveAttribute('aria-selected', 'true');
+      expect(shownAddress).toBe('/machine/m1?tab=report');
+
+      go(-1);
+      expect(screen.getByRole('tab', { name: 'Dashboard' })).toHaveAttribute('aria-selected', 'true');
+
+      go(1);
+      expect(screen.getByRole('tab', { name: 'Report' })).toHaveAttribute('aria-selected', 'true');
+      expect(within(openPanel()).getByRole('region', { name: 'Report' })).toBeInTheDocument();
+    });
+
+    it('adds no history step for a click on the open tab', () => {
+      renderPage();
+      fireEvent.click(screen.getByRole('tab', { name: 'Report' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Report' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Report' }));
+
+      go(-1);
+
+      expect(screen.getByRole('tab', { name: 'Dashboard' })).toHaveAttribute('aria-selected', 'true');
+      expect(shownAddress).toBe('/machine/m1');
+    });
+
+    it('opens the first tab again for the next machine', async () => {
+      vi.mocked(fetchUploadFiles).mockResolvedValue(SENT_FILES);
+      renderPage({ machines: [testMachine(), testMachine({ id: 'm2', name: 'Mill 2' })] });
+      fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Upload history 2' }));
+
+      go('/machine/m2');
+      expect(screen.getByRole('tab', { name: 'Dashboard' })).toHaveAttribute('aria-selected', 'true');
+      go('/machine/m2?tab=files');
+
+      expect(screen.getByRole('button', { name: 'On the machine' })).toHaveAttribute('aria-pressed', 'true');
     });
   });
 
@@ -341,6 +400,16 @@ describe('MachineDetailPage', () => {
       await waitFor(() => expect(scrolledTo).toContain(rulesSection));
     });
 
+    it('goes back to the Dashboard from the alert rules', async () => {
+      renderPage();
+      fireEvent.click(await screen.findByRole('link', { name: 'Settings › Alert rules' }));
+
+      go(-1);
+
+      expect(screen.getByRole('tab', { name: 'Dashboard' })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('region', { name: 'Alerts' })).toBeInTheDocument();
+    });
+
     it('scrolls to the alert rules again when they load, because the page is longer then', async () => {
       let loadRules: (rules: AlertRule[]) => void = () => {};
       vi.mocked(fetchAlertRules).mockReturnValue(new Promise(resolve => { loadRules = resolve; }));
@@ -384,6 +453,31 @@ describe('MachineDetailPage', () => {
 
       expect(screen.getByRole('tab', { name: /^Dashboard/ })).toHaveAttribute('aria-selected', 'true');
       expect(screen.getByRole('region', { name: 'Alerts' })).toBeInTheDocument();
+    });
+
+    it('goes back to the tab before after a click on the badge', async () => {
+      vi.mocked(fetchMachineAlerts).mockResolvedValue([firingAlert('Offline')]);
+      renderPage();
+      fireEvent.click(screen.getByRole('tab', { name: 'Report' }));
+
+      fireEvent.click(await screen.findByRole('link', { name: '1 alert firing' }));
+      expect(screen.getByRole('tab', { name: /^Dashboard/ })).toHaveAttribute('aria-selected', 'true');
+      go(-1);
+
+      expect(screen.getByRole('tab', { name: 'Report' })).toHaveAttribute('aria-selected', 'true');
+    });
+
+    it('adds no history step for a click on the badge when the Dashboard is open', async () => {
+      vi.mocked(fetchMachineAlerts).mockResolvedValue([firingAlert('Offline')]);
+      renderPage({ address: '/machine/m1?tab=report' });
+      fireEvent.click(screen.getByRole('tab', { name: /^Dashboard/ }));
+      const badge = await screen.findByRole('link', { name: '1 alert firing' });
+      fireEvent.click(badge);
+      fireEvent.click(badge);
+
+      go(-1);
+
+      expect(screen.getByRole('tab', { name: 'Report' })).toHaveAttribute('aria-selected', 'true');
     });
 
     it('shows no badge and no count when no alert fires', async () => {

@@ -1,9 +1,10 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { tabPanelProps } from '../../components/ui/tabPanel';
 import { UnderlineTabs, type TabItem } from '../../components/ui/UnderlineTabs';
 import type { Machine, MachineUpdate, ToolTable } from '../../types';
 import { FilesSection } from './FilesSection';
+import { FIRST_TAB, TAB_PARAM, type SectionId } from './machineTabs';
 import { ReportPanel } from './ReportPanel';
 import { SettingsTab } from './SettingsTab';
 import { ToolTableTab } from './ToolTableTab';
@@ -12,11 +13,7 @@ import { useMachineFiles } from './useMachineFiles';
 import { useUploadHistory } from './useUploadHistory';
 import { useUploadMessages } from './useUploadMessages';
 
-type SectionId = 'dashboard' | 'report' | 'files' | 'tools' | 'settings';
-
 const ID_PREFIX = 'machine-sections';
-/** The address keeps the open tab (for example /machine/m1?tab=report), so a reload or a link opens the same tab */
-const TAB_PARAM = 'tab';
 /** The tabs that hold a list or a form. They share one card. Dashboard and Report hold cards of their own. */
 const CARD_TABS: readonly SectionId[] = ['files', 'tools', 'settings'];
 
@@ -60,8 +57,12 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
     { id: 'settings', label: 'Settings' },
   ];
   // An unknown tab, or a tab that is not there (the tool table goes away when the machine stops sending it), opens the dashboard
-  const shownTab = tabs.find(tab => tab.id === openTab)?.id ?? 'dashboard';
-  const openTabNamed = (tab: SectionId) => setSearchParams({ [TAB_PARAM]: tab }, { replace: true });
+  const shownTab = tabs.find(tab => tab.id === openTab)?.id ?? FIRST_TAB;
+  // Each tab change is a step in the history, so Back opens the tab before. A click on the open tab adds no step.
+  const openTabNamed = (tab: SectionId) => {
+    if (tab !== shownTab) setSearchParams({ [TAB_PARAM]: tab });
+  };
+  useAddressOfShownTab(openTab, shownTab);
 
   const reloadAfterUpload = async () => {
     files.refresh();
@@ -98,6 +99,25 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
       </div>
     </>
   );
+}
+
+/**
+ * When the address names a tab that is not there, the address changes to the shown tab.
+ * Else the tool table would open by itself later, when the machine sends it again.
+ */
+function useAddressOfShownTab(openTab: string | null, shownTab: SectionId) {
+  const [, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (openTab === null || openTab === shownTab) return;
+    setSearchParams(
+      params => {
+        const next = new URLSearchParams(params);
+        next.delete(TAB_PARAM);
+        return next;
+      },
+      { replace: true },
+    );
+  }, [openTab, shownTab, setSearchParams]);
 }
 
 /** The number of firing alerts after the Dashboard tab name, in the alarm color. Nothing when no alert fires. */

@@ -7,6 +7,7 @@ import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table
 import { useShownItems } from '../../hooks/useShownItems';
 import { formatDateTime } from '../../utils/formatters';
 import { alertText, alertTone, splitFiring } from './alertList';
+import { tabLink } from './machineTabs';
 import { SETTINGS_SECTION_IDS } from './SettingsTab';
 import type { MachineAlerts } from './useMachineAlerts';
 
@@ -28,7 +29,7 @@ export function AlertsPanel({ machineId, alerts: { alerts, loaded, failed } }: {
       {loaded && !failed && alerts.length === 0 && (
         <p className="m-0 px-5 py-4 text-zinc-300">
           No alerts in the last 7 days. Set the rules in{' '}
-          <Link to={`?tab=settings#${SETTINGS_SECTION_IDS.alertRules}`} className="font-semibold text-primary-text">Settings › Alert rules</Link>.
+          <Link to={tabLink('settings', SETTINGS_SECTION_IDS.alertRules)} className="font-semibold text-primary-text">Settings › Alert rules</Link>.
         </p>
       )}
       {alerts.length > 0 && (
