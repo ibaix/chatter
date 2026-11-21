@@ -5,12 +5,17 @@ import type { Machine, MachineUpdate } from '../../types';
 import { AlertRulesSection } from './AlertRulesSection';
 import { ConnectionSection } from './ConnectionSection';
 import { DeleteMachineSection } from './DeleteMachineSection';
+import { HistoryBackupSection } from './HistoryBackupSection';
 import { MachineSettingsSection } from './MachineSettingsSection';
 import type { AlertRules } from './useAlertRules';
 
 /** The id of each section. A link to `?tab=settings#<id>` opens the Settings tab at that section. */
 export const SETTINGS_SECTION_IDS = {
-  machine: 'settings-machine', connection: 'settings-connection', alertRules: 'settings-alert-rules', deleteMachine: 'settings-delete-machine',
+  machine: 'settings-machine',
+  connection: 'settings-connection',
+  alertRules: 'settings-alert-rules',
+  advanced: 'settings-advanced',
+  deleteMachine: 'settings-delete-machine',
 } as const;
 
 interface SettingsTabProps {
@@ -23,11 +28,12 @@ interface SettingsTabProps {
 }
 
 /**
- * Four panels, one under the other: the machine settings, the connection, the alert rules, and Delete machine.
+ * Five panels, one under the other: the machine settings, the connection, the alert rules, Advanced, and Delete machine.
  * A user who is not an admin sees only the connection and the alert rules, read only.
  */
 export function SettingsTab({ machine, machines, rules, onUpdate, onRemove }: SettingsTabProps) {
   const canManageMachines = useCan('manage-machines');
+  const canManageChatter = useCan('manage-chatter');
   useScrollToSection(!!rules.saved);
 
   const alertRules = (
@@ -56,6 +62,9 @@ export function SettingsTab({ machine, machines, rules, onUpdate, onRemove }: Se
       </SettingsSection>
       {connection}
       {alertRules}
+      <AdvancedSection>
+        <HistoryBackupSection machine={machine} canRestore={canManageChatter} />
+      </AdvancedSection>
       <SettingsSection id={SETTINGS_SECTION_IDS.deleteMachine} title="Delete machine">
         <DeleteMachineSection machine={machine} onRemove={onRemove} />
       </SettingsSection>
@@ -99,6 +108,19 @@ function SettingsSection({ id, title, children }: { id: string; title: string; c
     <section id={id} aria-labelledby={titleId} className="scroll-mt-4 rounded-xl border border-zinc-800 bg-zinc-900">
       <h2 id={titleId} className="m-0 px-4 pt-4 text-base font-bold">{title}</h2>
       {children}
+    </section>
+  );
+}
+
+/** Tools that a user seldom needs. The panel is closed until the user opens it. */
+function AdvancedSection({ children }: { children: ReactNode }) {
+  return (
+    <section id={SETTINGS_SECTION_IDS.advanced} aria-label="Advanced" className="scroll-mt-4 rounded-xl border border-zinc-800 bg-zinc-900">
+      <details>
+        <summary className="cursor-pointer px-4 py-4 text-base font-bold">Advanced</summary>
+        <h3 className="m-0 px-4 text-sm font-bold text-zinc-200">Backup and restore of the history</h3>
+        {children}
+      </details>
     </section>
   );
 }
