@@ -43,11 +43,25 @@ describe('matchesPattern', () => {
     expect(matchesPattern('\\d', 'a\\d')).toBe(true);
   });
 
-  it('finishes fast for a pattern that is slow with a regular expression', () => {
+  it('takes at most (pattern length) × (text length) steps, also for a pattern that is slow with a regular expression', () => {
     const text = 'a'.repeat(20_000);
-    const start = performance.now();
-    expect(matchesPattern('*a*a*a*a*a*b', text)).toBe(false);
-    expect(performance.now() - start).toBeLessThan(500);
+    const pattern = '*a*a*a*a*a*b';
+    const counter = { steps: 0 };
+
+    expect(matchesPattern(pattern, text, counter)).toBe(false);
+
+    // The pattern gets a * at each end, so it has 2 more characters
+    expect(counter.steps).toBeLessThanOrEqual((pattern.length + 2) * (text.length + 1));
+  });
+
+  it('takes the worst case of a long pattern on a long text in a bounded number of steps', () => {
+    const pattern = `${'a?'.repeat(49)}b`;
+    const text = 'a'.repeat(2_000);
+    const counter = { steps: 0 };
+
+    expect(matchesPattern(pattern, text, counter)).toBe(false);
+
+    expect(counter.steps).toBeLessThanOrEqual((pattern.length + 2) * (text.length + 1));
   });
 });
 

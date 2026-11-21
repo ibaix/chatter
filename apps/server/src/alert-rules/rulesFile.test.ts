@@ -68,7 +68,12 @@ describe('rulesFileText', () => {
       labels: { machine: 'haas_1', severity: 'warning', rule_id: 'r4', event: 'true' },
       annotations: { summary: 'Program ended' },
     });
-    expect(rule.expr).toMatch(/^chatter_program_ended\{machine="haas_1"\} == 1 and /);
+    expect(rule.expr).toBe(
+      'chatter_program_ended{machine="haas_1"} == 1'
+      + ' and on(machine) max_over_time(chatter_running{machine="haas_1"}[1m]) == 1'
+      + ' unless on(machine) max_over_time(chatter_alarm{machine="haas_1"}[1m]) == 1'
+      + ' unless on(machine) max_over_time(chatter_emergency{machine="haas_1"}[1m]) == 1',
+    );
   });
 
   it('leaves out rules that are off, and machines with no rule on', () => {

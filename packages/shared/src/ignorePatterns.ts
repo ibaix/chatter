@@ -14,9 +14,14 @@ export const MAX_IGNORE_PATTERN_LENGTH = 100;
 
 const MATCHES_ALL = 'This pattern matches each message. To stop all messages, turn the channel off.';
 
-/** True when the pattern matches a part of the text */
-export function matchesPattern(pattern: string, text: string): boolean {
-  return wildcardMatch(charactersOf(`*${pattern}*`), charactersOf(text));
+/** Counts the steps of a match, so a test can check the worst case without a clock */
+export interface MatchSteps {
+  steps: number;
+}
+
+/** True when the pattern matches a part of the text. `counter` gets the number of steps. */
+export function matchesPattern(pattern: string, text: string, counter?: MatchSteps): boolean {
+  return wildcardMatch(charactersOf(`*${pattern}*`), charactersOf(text), counter);
 }
 
 /** The first pattern that matches the text, or null */
@@ -43,12 +48,13 @@ function charactersOf(text: string): string[] {
  * An earlier `*` never needs to take more: the last `*` can take any run that it could take. So the time is at most
  * the length of the pattern times the length of the text.
  */
-function wildcardMatch(pattern: string[], text: string[]): boolean {
+function wildcardMatch(pattern: string[], text: string[], counter?: MatchSteps): boolean {
   let p = 0;
   let t = 0;
   let starAt = -1;
   let textAtStar = 0;
   while (t < text.length) {
+    if (counter) counter.steps++;
     if (p < pattern.length && (pattern[p] === '?' || (pattern[p] !== '*' && pattern[p] === text[t]))) {
       p++;
       t++;

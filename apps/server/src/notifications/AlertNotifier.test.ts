@@ -221,6 +221,38 @@ describe('AlertNotifier', () => {
       ]);
     });
 
+    function endOfAlert1(): unknown {
+      return outbox.list({}).find(message => message.alertId === 1 && message.kind === 'ended');
+    }
+
+    it('checks the end text alone when the start failed, and ignores a matching end', () => {
+      channels = [channel('phones', { ignorePatterns: ['ended at'] })];
+      notifier.alertChanged(change('started'));
+      const [start] = outbox.takeDue(NOW);
+      outbox.markFailed(start.id, 'Twilio refused the login.');
+
+      notifier.alertChanged(change('ended'));
+
+      expect(outbox.startStatus('phones', 1)).toBe('failed');
+      expect(endOfAlert1()).toMatchObject({ status: 'ignored', detail: 'Ignored by the pattern "ended at"' });
+    });
+
+    it('checks the end text alone when the start went into a "more" message, and ignores a matching end', () => {
+      channels = [channel('phones', { ignorePatterns: ['ended at'] })];
+      for (let alertId = 100; alertId < 100 + SEND_LIMIT - 1; alertId += 1) {
+        notifier.alertChanged(change('started', anAlert(), alertId));
+        sendWaiting();
+      }
+      notifier.alertChanged(change('started', anAlert(), 1));
+      notifier.alertChanged(change('started', anAlert(), 2));
+      outbox.takeDue(NOW);
+
+      notifier.alertChanged(change('ended'));
+
+      expect(outbox.startStatus('phones', 1)).toBe('grouped');
+      expect(endOfAlert1()).toMatchObject({ status: 'ignored', detail: 'Ignored by the pattern "ended at"' });
+    });
+
     it('sends no end message, not even an ignored one, when the channel did not get the start', () => {
       channels = [channel('phones', { ignorePatterns: ['OK'] })];
 
@@ -257,6 +289,17 @@ describe('AlertNotifier', () => {
       notifier.alertChanged(change('started', programEnded, 1));
 
       expect(texts(outbox.takeDue(NOW))).toEqual(['WARNING - Haas VF-2: Program ended. Started 9:02 AM.']);
+    });
+
+    it('keeps an ignored event start as ignored, and adds nothing when the alert clears', () => {
+      channels = [channel('phones', { ignorePatterns: ['Program ended'] })];
+
+      notifier.alertChanged(change('started', programEnded));
+      notifier.alertChanged(change('ended', programEnded));
+
+      expect(outbox.list({}).map(({ kind, status, detail }) => ({ kind, status, detail }))).toEqual([
+        { kind: 'started', status: 'ignored', detail: 'Ignored by the pattern "Program ended"' },
+      ]);
     });
 
     it('does not combine a start that still waits: the start goes as it is', () => {
