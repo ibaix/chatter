@@ -8,6 +8,7 @@ import { loggedInAuth } from './auth/testSupport.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
+import { PROGRAM_UPLOAD_LIMIT_BYTES } from '@local-chatter/shared';
 
 // Mock the db module
 vi.mock('./storage/database.js', () => ({
@@ -851,6 +852,26 @@ describe('API Routes', () => {
       const res = await call('POST', '/api/machine/non-existent/files/upload', uploadForm({ withFile: true, path: '/test.nc' }));
 
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('the size limit of program uploads', () => {
+    // A Pi has only 512 MB, and the server holds each file in memory while it sends it
+    it.each(['upload', 'upload-batch'])('refuses a %s body that is larger than the limit, before it reads it', async route => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const uploadFile = vi.spyOn(poller.getConnector(machine.id)!, 'uploadFile');
+      const uploadFiles = vi.spyOn(poller.getConnector(machine.id)!, 'uploadFiles');
+
+      const res = await send(`/api/machine/${machine.id}/files/${route}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'multipart/form-data; boundary=x', 'Content-Length': String(PROGRAM_UPLOAD_LIMIT_BYTES + 1) },
+        body: '--x--',
+      });
+
+      expect(res.status).toBe(413);
+      expect(((await res.json()) as { error: string }).error).toBe('The files are too large. Send at most 32 MB at one time.');
+      expect(uploadFile).not.toHaveBeenCalled();
+      expect(uploadFiles).not.toHaveBeenCalled();
     });
   });
 

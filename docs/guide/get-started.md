@@ -39,6 +39,8 @@ Chatter uses FTP to show, send and download the program files on a machine. Do t
 
 Chatter never shows a saved password again. To keep it, leave the password box empty.
 
+You can send at most 32 MB of program files at one time. A Raspberry Pi has little memory, and Chatter holds the files in memory while it sends them. To send more, send the files in smaller groups.
+
 ### Delete a machine
 
 An **Admin** can delete a machine from Chatter. Chatter then stops reading the machine and deletes its spindle speed history. You cannot undo this.
