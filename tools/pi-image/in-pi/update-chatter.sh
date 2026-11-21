@@ -105,6 +105,9 @@ known_version=""
 manifest_version=""
 manifest_arch=""
 declare -A signed_sha256=() signed_size=() unchanged_tag=() unchanged_id=()
+# The names of the tar entries, from the one listing of the check
+listed_names=()
+listed_name=""
 old_version=""
 old_container=""
 
@@ -440,19 +443,18 @@ check_tar_entries() {
 
 # Each entry must be a regular file with an allowed name, and each name comes only once.
 # At most 7 entries, and the manifest and its signature are small. All before anything is extracted.
+# tar lists the file one time. The names come from the long listing, and listed_names keeps them for
+# tar_matches_manifest. --quoting-style=escape writes a newline in a name as "\n", so each line is one entry.
 tar_entries_are_safe() {
-  local names listing name line
-  names="$(limited_listing "$1")" || return 1
+  local listing line
+  listed_names=()
   listing="$(limited_listing "$1" --verbose --numeric-owner)" || return 1
-  is_short_listing "$names" && is_short_listing "$listing" || return 1
-  [ "$(wc -l <<< "$names")" -eq "$(wc -l <<< "$listing")" ] || return 1
-  [ -z "$(sort <<< "$names" | uniq --repeated)" ] || return 1
-  while IFS= read -r name; do
-    is_allowed_member "$name" || return 1
-  done <<< "$names"
+  is_short_listing "$listing" || return 1
   while IFS= read -r line; do
     is_safe_listing_line "$line" || return 1
+    listed_names+=("$listed_name")
   done <<< "$listing"
+  [ -z "$(printf '%s\n' "${listed_names[@]}" | sort | uniq --repeated)" ]
 }
 
 # Prints the tar listing, but never more than LISTING_LIMIT_BYTES + 1 bytes.
@@ -467,12 +469,17 @@ is_short_listing() {
 }
 
 # A line of the long listing, for example "-rw-r--r-- 0/0 123 2026-11-10 10:00 manifest.txt".
-# GNU tar starts it with "-" for a regular file. The third field is the size.
+# GNU tar starts it with "-" for a regular file. Then come the owner, the size, the date, and the time.
+# The name is the rest of the line, as it is: a space before or after it makes a name that is not allowed.
+# A symlink or a hard link has a different first letter, and " -> " or " link to " after its name.
+# Sets listed_name.
 is_safe_listing_line() {
-  local mode size name
-  read -r mode _ size _ _ name <<< "$1"
-  [ "${mode:0:1}" = "-" ] && [[ $size =~ ^[0-9]+$ ]] || return 1
-  case "$name" in
+  local shape='^-[^ ]* +[0-9]+/[0-9]+ +([0-9]+) [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} (.*)$' size
+  [[ $1 =~ $shape ]] || return 1
+  size="${BASH_REMATCH[1]}"
+  listed_name="${BASH_REMATCH[2]}"
+  is_allowed_member "$listed_name" || return 1
+  case "$listed_name" in
     manifest.txt | manifest.txt.sig) [ "$size" -le "$MANIFEST_LIMIT_BYTES" ] ;;
   esac
 }
@@ -503,9 +510,12 @@ is_image_member() {
 }
 
 # Extracts the named entries of the copy, one by one, into the new root-only folder. Then checks each again.
+# --occurrence=1: tar stops to read when it has each name. Each name comes only once (tar_entries_are_safe),
+# so this is the same as a read of the whole file. The manifest comes first in an update file, so the check
+# of the signature does not read the large image files.
 extract_members() {
   local name
-  read_tar "$COPY" 10m --extract --no-wildcards --no-same-owner --no-same-permissions \
+  read_tar "$COPY" 10m --extract --occurrence=1 --no-wildcards --no-same-owner --no-same-permissions \
     --directory "$FILES" -- "$@" 2> /dev/null || return 1
   for name in "$@"; do
     is_plain_file "$FILES/$name" || return 1
@@ -594,10 +604,12 @@ is_new_payload_member() {
 }
 
 # The tar holds the manifest, its signature, and each "file" of the manifest. Nothing else.
+# The names are from the listing of tar_entries_are_safe: only root can change the copy.
 tar_matches_manifest() {
   local expected actual
+  [ "${#listed_names[@]}" -gt 0 ] || return 1
   expected="$(printf '%s\n' manifest.txt manifest.txt.sig "${!signed_sha256[@]}" | sort)"
-  actual="$(read_tar "$COPY" 2m --list | sort)" || return 1
+  actual="$(printf '%s\n' "${listed_names[@]}" | sort)"
   [ "$expected" = "$actual" ]
 }
 

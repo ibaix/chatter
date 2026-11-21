@@ -310,10 +310,36 @@ pack_with_unknown_name() {
   pack_into_inbox "$1"
 }
 
+pack_with_duplicate_manifest() {
+  pack_into_inbox "$1"
+  tar --append --file "$inbox/chatter-update.tar" --directory "$1" manifest.txt
+}
+
+# A name with a space after it. The long listing shows it as "rules.yml ", which is not an allowed name.
+pack_with_space_after_a_name() {
+  mv "$1/rules.yml" "$1/rules.yml "
+  pack_into_inbox "$1" manifest.txt manifest.txt.sig chatter.tar.gz victoria-metrics.tar.gz vmalert.tar.gz \
+    docker-compose.yml "rules.yml "
+}
+
+# A name with a newline: --quoting-style=escape lists it as one line, "rules.yml\nmanifest.txt".
+pack_with_newline_in_a_name() {
+  cp "$1/rules.yml" "$1/rules.yml"$'\n'"manifest.txt"
+  pack_into_inbox "$1" manifest.txt.sig chatter.tar.gz victoria-metrics.tar.gz vmalert.tar.gz docker-compose.yml \
+    rules.yml "rules.yml"$'\n'"manifest.txt"
+}
+
+pack_with_fifo() {
+  rm "$1/rules.yml"
+  mkfifo "$1/rules.yml"
+  pack_into_inbox "$1"
+}
+
 test_tar_tricks_are_refused() {
   local trick
   for trick in pack_with_symlink pack_with_dot_dot pack_with_hard_link pack_with_duplicate pack_with_folder \
-    pack_with_unknown_name; do
+    pack_with_unknown_name pack_with_duplicate_manifest pack_with_space_after_a_name pack_with_newline_in_a_name \
+    pack_with_fifo; do
     set_up
     tar_trick "$trick"
     send_request check
@@ -404,6 +430,61 @@ test_a_manifest_that_does_not_match_the_tar_is_refused() {
   pack_into_inbox "$dir"
   send_request check
   check "a signed manifest with CR LF line ends: refused" reason_has "not a correct"
+}
+
+# The tar has an allowed name that the signed manifest does not list as a "file".
+test_an_extra_entry_that_the_manifest_does_not_list_is_refused() {
+  local dir old_vm="victoriametrics/victoria-metrics:$OLD_VM_TAG"
+  set_up
+  dir="$(make_payload "$NEW_VERSION")"
+  mv "$dir/victoria-metrics.tar.gz" "$sandbox/build/extra"
+  MANIFEST_EXTRA="unchanged victoria-metrics.tar.gz $old_vm $(fake_image_id "$old_vm")" write_manifest "$dir" "$NEW_VERSION"
+  sign_manifest "$dir"
+  mv "$sandbox/build/extra" "$dir/victoria-metrics.tar.gz"
+  pack_into_inbox "$dir"
+  send_request check
+  check "an image file that the manifest calls unchanged: refused" reason_has "not a correct"
+  check "an extra entry: no work files stay" work_files_are_gone
+}
+
+# The release script puts the manifest first, but the order is not part of the check.
+test_a_manifest_at_the_end_is_ready() {
+  set_up
+  local dir
+  dir="$(make_payload "$NEW_VERSION")"
+  write_manifest "$dir" "$NEW_VERSION"
+  sign_manifest "$dir"
+  pack_into_inbox "$dir" chatter.tar.gz victoria-metrics.tar.gz vmalert.tar.gz docker-compose.yml rules.yml \
+    manifest.txt.sig manifest.txt
+  send_request check
+  check "a correct update file with the manifest at the end: ready" status_is ready
+}
+
+# Fake tar and sha256sum that write each call to a log, then run the real command.
+count_reads() {
+  local command
+  for command in tar sha256sum; do
+    cat > "$sandbox/bin/$command" << EOF
+#!/usr/bin/env bash
+echo "\$* < \$(readlink /proc/self/fd/0)" >> "$fake/$command.log"
+exec /usr/bin/$command "\$@"
+EOF
+    chmod +x "$sandbox/bin/$command"
+  done
+}
+
+# Each read of the update file takes minutes on a Pi. tar lists it one time, and stops after the manifest.
+test_the_check_reads_the_update_file_few_times() {
+  set_up
+  put_update_file > /dev/null
+  count_reads
+  send_request check
+  check "read count: the file is ready" status_is ready
+  check "read count: tar lists the copy one time" test "$(grep -c -- '--list' "$fake/tar.log")" -eq 1
+  check "read count: tar extracts the manifest and stops (--occurrence=1)" \
+    grep -q -- '--extract --occurrence=1 .* manifest.txt manifest.txt.sig < .*update.tar' "$fake/tar.log"
+  check "read count: tar runs 3 times on the copy (list, manifest, files)" \
+    test "$(grep -c 'update.tar$' "$fake/tar.log")" -eq 3
 }
 
 test_unchanged_images_must_be_on_the_pi() {
@@ -538,6 +619,9 @@ test_only_the_exact_request_texts_work
 test_tar_tricks_are_refused
 test_size_limits_before_the_signature_check
 test_a_manifest_that_does_not_match_the_tar_is_refused
+test_an_extra_entry_that_the_manifest_does_not_list_is_refused
+test_a_manifest_at_the_end_is_ready
+test_the_check_reads_the_update_file_few_times
 test_unchanged_images_must_be_on_the_pi
 test_a_fake_status_in_the_inbox_changes_nothing
 test_a_new_check_deletes_the_old_ready_file
