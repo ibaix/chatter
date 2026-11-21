@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Alert } from '../alerts/AlertStore.js';
 import type { AlertChange } from './AlertChangeFinder.js';
 import { AlertNotifier } from './AlertNotifier.js';
-import { Outbox } from './Outbox.js';
+import { Outbox, SEND_LIMIT } from './Outbox.js';
 import { moreAlertsMessage } from './outgoingMessages.js';
 
 const NOW = Date.UTC(2026, 10, 13, 15, 2);
@@ -44,6 +44,10 @@ describe('AlertNotifier', () => {
       now: () => NOW,
     });
   });
+
+  function texts(entries: { message: { text: string } }[]): string[] {
+    return entries.map(entry => entry.message.text);
+  }
 
   function queued(): string[] {
     return outbox.list({}).reverse().map(message => `${message.channelId} ${message.kind}: ${message.text}`);
@@ -231,6 +235,18 @@ describe('AlertNotifier', () => {
       notifier.alertChanged(change('ended', programEnded));
 
       expect(queued()).toEqual(['phones started: WARNING - Haas VF-2: Program ended. Started 9:02 AM.']);
+    });
+
+    it('sends the start message also when the channel is at its limit, so the alarms keep the whole limit', () => {
+      channels = [channel('phones')];
+      for (let alertId = 100; alertId < 100 + SEND_LIMIT; alertId += 1) {
+        notifier.alertChanged(change('started', anAlert(), alertId));
+        for (const entry of outbox.takeDue(NOW)) outbox.markSent(entry.id, 'Sent', NOW);
+      }
+
+      notifier.alertChanged(change('started', programEnded, 1));
+
+      expect(texts(outbox.takeDue(NOW))).toEqual(['WARNING - Haas VF-2: Program ended. Started 9:02 AM.']);
     });
 
     it('does not combine a start that still waits: the start goes as it is', () => {

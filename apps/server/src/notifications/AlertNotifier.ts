@@ -52,14 +52,15 @@ export class AlertNotifier implements AlertChangeListener {
   }
 
   private queueMessages({ kind, alertId, alert }: AlertChange): void {
-    if (kind === 'ended' && isEventAlert(alert)) return;
+    const event = isEventAlert(alert);
+    if (kind === 'ended' && event) return;
     const { outbox, textOptions, now = Date.now } = this.options;
     const machineName = alert.machineId === undefined ? null : this.options.machineName(alert.machineId);
     const message = (messageKind: 'started' | 'ended' | 'combined') =>
       alertOutgoingMessage({ kind: messageKind, alert, machineName }, textOptions());
     for (const channel of this.channelsThatWant(alert)) {
       const queueOrIgnore = (outgoing: OutgoingMessage) => {
-        const item = { channelId: channel.id, alertId, message: outgoing };
+        const item = { channelId: channel.id, alertId, message: outgoing, event };
         const pattern = firstMatchingPattern(channel.ignorePatterns, outgoing.text);
         if (pattern === null) outbox.queue(item, now());
         else outbox.keepIgnored(item, ignoredBy(pattern), now());
