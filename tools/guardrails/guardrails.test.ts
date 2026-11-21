@@ -1,0 +1,148 @@
+// Tests for the guardrails in AGENTS.md. Each test names the rule that it keeps.
+// These rules protect users in the field, so a failure here blocks a change.
+import { execFileSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
+import { portsOpened, type ComposePort } from './composePorts';
+import { anchorsOf, docsLinksIn, docsPageFile } from './docsLinks';
+
+const ROOT = join(import.meta.dirname, '../..');
+const read = (path: string) => readFileSync(join(ROOT, path), 'utf8');
+const trackedFiles = () =>
+  execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n').filter(Boolean);
+
+interface ComposeService {
+  ports?: ComposePort[];
+  volumes?: string[];
+}
+interface ComposeFile {
+  name?: string;
+  services: Record<string, ComposeService>;
+  volumes?: Record<string, unknown>;
+}
+const compose = (path: string) => parse(read(path)) as ComposeFile;
+
+describe('FANUC files', () => {
+  it('are not in git, because the FOCAS2 library belongs to FANUC', () => {
+    const fanucFiles = trackedFiles().filter(file => /(^|\/)(fwlib[^/]*|libfwlib32[^/]*)$/i.test(file));
+    expect(fanucFiles).toEqual([]);
+  });
+
+  it('stay out of git through .gitignore', () => {
+    expect(read('.gitignore')).toContain('apps/server/native/focas/**');
+  });
+});
+
+describe('user data', () => {
+  // Docker Compose puts the project name before each volume name: chatter_chatterbox-data.
+  // A different project name or volume name makes an update lose the user's data.
+  const main = compose('docker-compose.yml');
+
+  it('keeps the volume names in docker-compose.yml', () => {
+    expect(Object.keys(main.volumes ?? {})).toEqual(expect.arrayContaining(['chatterbox-data', 'victoriametrics-data']));
+    expect(main.services.chatterbox.volumes).toContain('chatterbox-data:/app/data');
+    expect(main.services.victoriametrics.volumes).toContain('victoriametrics-data:/storage');
+  });
+
+  it('lets the folder name set the project name in docker-compose.yml', () => {
+    expect(main.name).toBeUndefined();
+  });
+
+  it('keeps one folder, "chatter", in the zip of the Docker package', () => {
+    // The last word of the zip command is the folder that goes into the zip
+    const zipCommands = [...read('tools/release/make-docker-package.sh').matchAll(/\bzip\s+-[^\n]*/g)].map(([line]) => line);
+    expect(zipCommands).toHaveLength(1);
+    expect(zipCommands[0].replace(/[)\s]+$/, '').split(/\s+/).at(-1)).toBe('chatter');
+  });
+
+  it('keeps the folder /opt/chatter on the Pi card', () => {
+    expect(read('tools/pi-image/in-pi/chatter.service')).toContain('WorkingDirectory=/opt/chatter');
+  });
+});
+
+describe('closed ports', () => {
+  // VictoriaMetrics (8428), vmalert (8880) and the alert port (3002) have no login.
+  const noLoginPorts = [8428, 8880, 3002];
+  const thisComputerOnly = ['127.0.0.1', 'localhost', '::1'];
+  const composeFiles = trackedFiles().filter(file => /(^|\/)docker-compose[^/]*\.ya?ml$/.test(file));
+
+  it('finds the compose files', () => {
+    expect(composeFiles).toContain('docker-compose.yml');
+  });
+
+  it.each(composeFiles)('uses no variable in a port of %s, so that this test can read each port', file => {
+    const withVariable = Object.values(compose(file).services ?? {})
+      .flatMap(({ ports = [] }) => ports)
+      .filter(port => JSON.stringify(port).includes('$'));
+    expect(withVariable).toEqual([]);
+  });
+
+  it('publishes no port of VictoriaMetrics or vmalert in docker-compose.yml', () => {
+    const { services } = compose('docker-compose.yml');
+    expect(services.victoriametrics.ports).toBeUndefined();
+    expect(services.vmalert.ports).toBeUndefined();
+  });
+
+  it.each(composeFiles)('publishes a port with no login in %s only to this computer', file => {
+    const opened = Object.entries(compose(file).services ?? {}).flatMap(([service, { ports = [] }]) =>
+      ports
+        .filter(port => {
+          const { hostIp, containerPorts } = portsOpened(port);
+          return !thisComputerOnly.includes(hostIp) && containerPorts.some(p => noLoginPorts.includes(p));
+        })
+        .map(port => `${service}: ${JSON.stringify(port)}`),
+    );
+    expect(opened).toEqual([]);
+  });
+});
+
+describe('docs links', () => {
+  // Released apps link to these pages. Users with an old version still click them.
+  const releasedLinks = ['guide/update#back-up', 'guide/manage'];
+
+  function sourceFiles(dir: string): string[] {
+    return readdirSync(join(ROOT, dir)).flatMap(name => {
+      const path = `${dir}/${name}`;
+      if (name === 'node_modules' || name === 'dist') return [];
+      if (statSync(join(ROOT, path)).isDirectory()) return sourceFiles(path);
+      return /\.(tsx?|md)$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
+    });
+  }
+
+  const linksInApp = [...new Set(['apps', 'plugins', 'README.md'].flatMap(path =>
+    (path.endsWith('.md') ? [path] : sourceFiles(path)).flatMap(file => docsLinksIn(read(file))),
+  ))];
+
+  it('finds the links in the app', () => {
+    expect(linksInApp).toContain('guide/update#back-up');
+  });
+
+  it.each([...new Set([...releasedLinks, ...linksInApp])])('%s goes to a page and a heading that exist', link => {
+    const [page, anchor] = link.split('#');
+    const file = docsPageFile(page);
+    expect(existsSync(join(ROOT, 'docs', file)), `docs/${file}`).toBe(true);
+    if (anchor) expect(anchorsOf(read(join('docs', file)))).toContain(anchor);
+  });
+});
+
+describe('test runs', () => {
+  // npm test runs each tools folder with test:tools. npm run coverage runs the projects of vitest.config.ts.
+  // A tools folder with tests must be in both, or one of the two runs skips it.
+  const toolsWithTests = readdirSync(join(ROOT, 'tools')).filter(name =>
+    statSync(join(ROOT, 'tools', name)).isDirectory() &&
+    readdirSync(join(ROOT, 'tools', name)).some(file => /\.test\.ts$/.test(file)),
+  );
+  const testTools = (JSON.parse(read('package.json')) as { scripts: Record<string, string> }).scripts['test:tools'];
+  const projects = /projects:\s*\[([^\]]*)\]/.exec(read('vitest.config.ts'))?.[1] ?? '';
+
+  it('finds the tools folders with tests', () => {
+    expect(toolsWithTests).toContain('guardrails');
+  });
+
+  it.each(toolsWithTests)('runs tools/%s in npm test and in npm run coverage', name => {
+    expect(testTools).toContain(`--root tools/${name}`);
+    expect(projects).toContain(`'tools/${name}'`);
+  });
+});
