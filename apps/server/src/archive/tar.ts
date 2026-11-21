@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 
 /**
- * A small writer of tar files (the ustar format), for the support bundle.
+ * A small writer and reader of tar files (the ustar format), for the support bundle and the history backup.
  * The files go out one after the other, so a log file is read in parts and never held whole in memory.
  */
 

@@ -9,7 +9,7 @@ import type { ServerLog } from '../logging/ServerLog.js';
 import type { ConnectionHealth } from '../logging/ConnectionLog.js';
 import type { BaseMachineStatus } from '../types/index.js';
 import type { UpdateService } from '../updates/UpdateService.js';
-import { tarBytes, type TarEntry } from './tar.js';
+import { tarBytes, type TarEntry } from '../archive/tar.js';
 
 /** The time limit for each health check of VictoriaMetrics and vmalert */
 const HEALTH_TIMEOUT_MS = 2000;
