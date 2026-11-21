@@ -270,7 +270,7 @@ describe('MachineDetailPage', () => {
     it('is the last tab, after the tool table, for each role', () => {
       for (const role of ['admin', 'operator', 'viewer'] as const) {
         renderPage({ role, machine: toolMachine() });
-        expect(tabNames()).toEqual(['Dashboard', 'Report', 'Files', 'Tool table2', 'Settings']);
+        expect(tabNames()).toEqual(['Dashboard', 'Report', 'Files', 'Tool table 2', 'Settings']);
         cleanup();
       }
     });
@@ -363,7 +363,8 @@ describe('MachineDetailPage', () => {
       renderPage();
 
       expect(await within(header()).findByRole('link', { name: '2 alerts firing' })).toBeInTheDocument();
-      expect(screen.getByRole('tab', { name: 'Dashboard 2 alerts firing' })).toBeInTheDocument();
+      // A browser joins inline text with no space, so the text itself must hold the space (jsdom adds one for each element)
+      expect(screen.getByRole('tab', { name: /^Dashboard/ }).textContent).toBe('Dashboard 2 alerts firing');
       expect(screen.getByText('2 firing now')).toBeInTheDocument();
       expect(fetchMachineAlerts).toHaveBeenCalledTimes(1);
     });

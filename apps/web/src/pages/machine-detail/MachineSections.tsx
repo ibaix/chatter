@@ -104,9 +104,13 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
 function FiringCount({ count }: { count: number }) {
   if (count === 0) return null;
   return (
-    <span className="ml-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-alarm px-1.5 font-mono text-xs font-bold text-white">
-      {count}
-      <span className="sr-only"> {count === 1 ? 'alert' : 'alerts'} firing</span>
-    </span>
+    <>
+      {/* A real space: a browser joins the inline texts of the tab name with no space */}
+      {' '}
+      <span className="ml-0.5 inline-flex min-w-5 items-center justify-center rounded-full bg-alarm px-1.5 font-mono text-xs font-bold text-white">
+        {count}
+        <span className="sr-only"> {count === 1 ? 'alert' : 'alerts'} firing</span>
+      </span>
+    </>
   );
 }

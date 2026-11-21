@@ -41,7 +41,8 @@ export function UnderlineTabs<T extends string>({ label, tabs, value, onChange, 
             )}
           >
             {tab.label}
-            {tab.count !== undefined && <span className="ml-1.5 font-mono font-medium text-zinc-300">{tab.count}</span>}
+            {/* A real space before the count, so the tab name reads "Tool table 2" and not "Tool table2" */}
+            {tab.count !== undefined && <> <span className="ml-0.5 font-mono font-medium text-zinc-300">{tab.count}</span></>}
           </button>
         );
       })}
