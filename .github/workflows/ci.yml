@@ -36,6 +36,10 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Fails on a lint error. Warnings (such as complexity) are signals and do not fail.
+      - name: Lint
+        run: npm run lint
+
       - name: Run tests
         run: npm test
 
