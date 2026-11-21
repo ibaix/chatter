@@ -84,11 +84,11 @@ describe('AlertsPanel', () => {
       vi.restoreAllMocks();
     });
 
-    it('loads the alerts again every 30 seconds', async () => {
+    it('loads the alerts again every 15 seconds, as often as vmalert checks the rules', async () => {
       await renderPanel([]);
       vi.mocked(fetchMachineAlerts).mockResolvedValue(firingAlerts(1));
 
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(15_000);
 
       expect(await screen.findByText('Firing 1')).toBeInTheDocument();
       expect(fetchMachineAlerts).toHaveBeenCalledTimes(2);

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchMachineAlerts, type MachineAlert } from '../../api/alerts';
 import { useRefreshWhileVisible } from '../../hooks/useRefreshWhileVisible';
 
-/** vmalert checks the rules every 15 seconds, so the list loads again this often while the page is in view */
-const RELOAD_EVERY_MS = 30_000;
+/** vmalert checks the rules every 15 seconds, so the list loads again as often while the page is in view */
+const RELOAD_EVERY_MS = 15_000;
 
 /** The alerts of one machine in the last week. `failed` is true when the last load did not work. */
 export function useMachineAlerts(machineId: string) {

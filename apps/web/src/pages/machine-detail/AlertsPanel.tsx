@@ -25,7 +25,7 @@ export function AlertsPanel({ machineId, alerts: { alerts, loaded, failed } }: {
       title="Alerts"
       description={firingCount > 0 ? `${firingCount} firing now` : 'The alerts of the last 7 days'}
     >
-      {failed && <p className="m-0 px-5 py-4 text-alarm-soft">Could not load the alerts. Chatter tries again in 30 seconds.</p>}
+      {failed && <p className="m-0 px-5 py-4 text-alarm-soft">Could not load the alerts. Chatter tries again in 15 seconds.</p>}
       {loaded && !failed && alerts.length === 0 && (
         <p className="m-0 px-5 py-4 text-zinc-300">
           No alerts in the last 7 days. Set the rules in{' '}
