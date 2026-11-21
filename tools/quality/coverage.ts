@@ -1,7 +1,7 @@
 // Reads the coverage reports of `npm run coverage` (coverage/coverage-summary.json and coverage/lcov.info).
 // Coverage is a signal that we watch. Nothing here fails a build.
 
-export interface Counts {
+interface Counts {
   covered: number;
   total: number;
 }
