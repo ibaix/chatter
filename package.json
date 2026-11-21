@@ -27,9 +27,11 @@
     "fake-notify": "tsx tools/fake-notify/index.ts",
     "docs:dev": "npm --prefix docs run dev --",
     "docs:build": "npm --prefix docs run build --",
-    "test:shared": "npm run test:run -w @local-chatter/shared"
+    "test:shared": "npm run test:run -w @local-chatter/shared",
+    "coverage": "vitest run --coverage"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^5.1.1",
     "concurrently": "^8.2.2",
     "yaml": "^2.9.1"
   }
