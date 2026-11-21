@@ -117,6 +117,8 @@ const RUN_STATUS_EXECUTION: Record<string, string> = {
  * Older controls put STX and ETB bytes around the reply; NGC starts it with ">".
  */
 export function parseRunStatus(response: string): string | null {
+  // The reply can hold control characters. This regex removes them on purpose.
+  // eslint-disable-next-line no-control-regex
   const fields = response.replace(/[\x00-\x1f>]/g, '').split(',').map(field => field.trim());
   const statusWord = fields[0] === 'STATUS' ? fields[1] : fields[0] === 'PROGRAM' ? fields[2] : undefined;
   return (statusWord && RUN_STATUS_EXECUTION[statusWord]) || null;
