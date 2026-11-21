@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { combinedRunState, isMachineRunning, isProgramEnded, type RunningValues } from './running.js';
+import { combinedRunState, isMachineRunning, isProgramEnded, isRunningStateText, type RunningValues } from './running.js';
 
 describe('isMachineRunning', () => {
   it.each([
@@ -94,5 +94,18 @@ describe('isProgramEnded', () => {
   it('does not know when the machine tells neither a run state nor an execution', () => {
     expect(isProgramEnded({})).toBeUndefined();
     expect(isProgramEnded({ alarm: true })).toBeUndefined();
+  });
+});
+
+describe('isRunningStateText', () => {
+  it.each([
+    ['START', true],
+    ['MSTR', true],
+    ['ACTIVE', true],
+    ['HOLD', false],
+    ['FEED_HOLD', false],
+    ['READY', false],
+  ])('counts the saved run state %s as running: %s', (text, running) => {
+    expect(isRunningStateText(text)).toBe(running);
   });
 });

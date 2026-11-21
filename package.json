@@ -30,6 +30,7 @@
     "test:shared": "npm run test:run -w @local-chatter/shared"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "yaml": "^2.9.1"
   }
 }

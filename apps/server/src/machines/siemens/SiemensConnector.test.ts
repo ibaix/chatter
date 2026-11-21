@@ -55,7 +55,7 @@ class FakeSession implements SinumerikSession {
 
 describe('SiemensConnector', () => {
   let session: FakeSession;
-  let openSession: ReturnType<typeof vi.fn<[SinumerikConnectOptions], Promise<SinumerikSession>>>;
+  let openSession: ReturnType<typeof vi.fn<(...args: [SinumerikConnectOptions]) => Promise<SinumerikSession>>>;
   let connector: SiemensConnector;
 
   beforeEach(() => {

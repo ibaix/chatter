@@ -9,6 +9,8 @@ interface MachineNoticeProps {
   machine: Machine;
   state: MachineState;
   now: number;
+  /** True when the page lost its live connection to Chatter */
+  chatterIsLost?: boolean;
 }
 
 interface NoticeContent {
@@ -20,7 +22,16 @@ interface NoticeContent {
   text: string;
 }
 
-function noticeOf(machine: Machine, state: MachineState, now: number): NoticeContent | null {
+function noticeOf(machine: Machine, state: MachineState, now: number, chatterIsLost: boolean): NoticeContent | null {
+  if (chatterIsLost) {
+    const lastAnswer = machine.lastPollTime ? `The last values came ${formatAgo(machine.lastPollTime, now)}. ` : '';
+    return {
+      key: `${machine.id}:chatter-lost`,
+      tone: 'offline',
+      title: 'Lost the connection to Chatter',
+      text: `${lastAnswer}The page tries to connect again. Check that the Chatter computer is on and on the network.`,
+    };
+  }
   if (state === 'offline') {
     const reason = offlineReasonOf(machine);
     const lastAnswer = machine.lastPollTime ? `The last answer came ${formatAgo(machine.lastPollTime, now)}. ` : '';
@@ -44,9 +55,9 @@ function noticeOf(machine: Machine, state: MachineState, now: number): NoticeCon
 }
 
 /** A box that tells about an alarm or a lost connection. The user can close it. A new problem opens it again. */
-export function MachineNotice({ machine, state, now }: MachineNoticeProps) {
+export function MachineNotice({ machine, state, now, chatterIsLost = false }: MachineNoticeProps) {
   const [closedKeys, setClosedKeys] = useState<string[]>([]);
-  const notice = noticeOf(machine, state, now);
+  const notice = noticeOf(machine, state, now, chatterIsLost);
   if (!notice || closedKeys.includes(notice.key)) return null;
 
   return (

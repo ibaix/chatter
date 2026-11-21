@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
 import { PollScheduler } from './PollScheduler.js';
 
@@ -43,8 +43,8 @@ class FakeMachine {
 
 describe('PollScheduler', () => {
   let machine: FakeMachine;
-  let afterPoll: ReturnType<typeof vi.fn>;
-  let connectingEnded: ReturnType<typeof vi.fn>;
+  let afterPoll: Mock<(connector: BaseMachineConnector) => void>;
+  let connectingEnded: Mock<(connector: BaseMachineConnector) => void>;
   let scheduler: PollScheduler;
 
   beforeEach(() => {

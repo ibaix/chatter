@@ -25,7 +25,7 @@ describe('alert rule routes', () => {
   let adminCookie: string;
   let haasId: string;
   let brotherId: string;
-  let checkQuery: Mock<[string], Promise<QueryCheck>>;
+  let checkQuery: Mock<(...args: [string]) => Promise<QueryCheck>>;
 
   beforeEach(async () => {
     const parts = await loggedInAuth();
@@ -34,7 +34,7 @@ describe('alert rule routes', () => {
     const db = new Database(':memory:');
     applySchema(db);
     const poller = new HardwarePoller(db);
-    checkQuery = vi.fn<[string], Promise<QueryCheck>>().mockResolvedValue({ ok: true, resultCount: 1, firstValue: 812 });
+    checkQuery = vi.fn<(...args: [string]) => Promise<QueryCheck>>().mockResolvedValue({ ok: true, resultCount: 1, firstValue: 812 });
     const alertRules = new AlertRuleService({
       store: new AlertRuleStore(db),
       rulesFile: { write: async () => {} },

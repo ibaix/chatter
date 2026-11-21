@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { testMachine } from '../test/testMachine';
-import { machineAddress, machineStateOf, machineTypeLabel, makerOf, partCountOf, spindleLoadOf, spindleSpeedText, toolText } from './machineStatus';
+import { machineAddress, machinesWhileChatterIsLost, machineStateOf, machineTypeLabel, makerOf, partCountOf, spindleLoadOf, spindleSpeedText, toolText } from './machineStatus';
 
 describe('machineStateOf', () => {
   it('says offline when the machine is not connected, even with an alarm', () => {
@@ -112,5 +112,13 @@ describe('a Siemens machine', () => {
   it('runs while the channel is active', () => {
     expect(machineStateOf(testMachine({ type: 'siemens' } as never, { execution: 'ACTIVE' }))).toBe('running');
     expect(machineStateOf(testMachine({ type: 'siemens' } as never, { execution: 'INTERRUPTED' }))).toBe('idle');
+  });
+});
+
+describe('machinesWhileChatterIsLost', () => {
+  it('shows each machine as connecting, because its last values are old', () => {
+    const machines = [testMachine({ connected: true }, { execution: 'ACTIVE' }), testMachine({ id: 'm2', connected: false })];
+
+    expect(machinesWhileChatterIsLost(machines).map(machineStateOf)).toEqual(['connecting', 'connecting']);
   });
 });

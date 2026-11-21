@@ -22,7 +22,7 @@ describe('jobValuesOf', () => {
       { label: 'Program', value: 'O1234' },
       { label: 'Parts', value: '5 / 10', fraction: 0.5, chartValue: 'part-count' },
       { label: 'Spindle', value: '8,000 rpm', chartValue: 'spindle-speed' },
-      { label: 'Tool', value: 'T3' },
+      { label: 'Tool', value: 'T3', chartValue: 'tool-number' },
     ]);
   });
 
@@ -65,7 +65,7 @@ describe('jobValuesOf', () => {
 
     it('adds the run state and program of each path, and each spindle after the main one by name', () => {
       expect(jobValuesOf(lathe).slice(-5)).toEqual([
-        { label: 'Tool', value: 'T1001' },
+        { label: 'Tool', value: 'T1001', chartValue: 'tool-number' },
         { label: 'Path 1', value: 'START · O6000' },
         { label: 'Path 2', value: 'RESET · O5000' },
         { label: 'Spindle S2', value: '0 rpm · 0%' },
@@ -124,6 +124,7 @@ describe('jobValuesOf', () => {
     expect(jobValuesOf(machine, 'spindle-load').map(item => item.label)).toEqual(expect.arrayContaining(['Spindle', 'Parts']));
     expect(jobValuesOf(machine, 'spindle-load').map(item => item.label)).not.toContain('Spindle load');
     expect(jobValuesOf(machine, 'part-count').map(item => item.label)).not.toContain('Parts');
+    expect(jobValuesOf(machine, 'tool-number').map(item => item.label)).not.toContain('Tool');
   });
 
   it('also leaves out the chart value when the machine is offline', () => {

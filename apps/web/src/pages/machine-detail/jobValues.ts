@@ -1,4 +1,5 @@
 import type { HistoryValue } from '@local-chatter/shared';
+import type { ChartChoiceId } from './chartValues';
 import { isReachable, machineStateOf, NO_VALUE, partCountOf, spindleLoadOf, spindleSpeedText, toolText } from '../../machines/machineStatus';
 import type { Machine, MachineData, MachinePath, MachineSpindle } from '../../types';
 
@@ -8,7 +9,7 @@ const OFFLINE_ROWS: Omit<JobValue, 'value'>[] = [
   { label: 'Program' },
   { label: 'Parts', chartValue: 'part-count' },
   { label: 'Spindle', chartValue: 'spindle-speed' },
-  { label: 'Tool' },
+  { label: 'Tool', chartValue: 'tool-number' },
 ];
 
 export interface JobValue {
@@ -84,12 +85,12 @@ function siemensValues(data: Extract<Machine, { type: 'siemens' }>['data']): Job
  * The values of the job on the machine, without the value that the chart shows (`chartValue`).
  * Each machine type sends a different set.
  */
-export function jobValuesOf(machine: Machine, chartValue?: HistoryValue): JobValue[] {
+export function jobValuesOf(machine: Machine, chartValue?: ChartChoiceId): JobValue[] {
   return allJobValuesOf(machine).filter(jobValue => !isInChart(jobValue, chartValue));
 }
 
 /** A row with no chart value (for example Mode) is never in the chart, also when no chart value is given */
-function isInChart(jobValue: JobValue, chartValue: HistoryValue | undefined): boolean {
+function isInChart(jobValue: JobValue, chartValue: ChartChoiceId | undefined): boolean {
   return jobValue.chartValue !== undefined && jobValue.chartValue === chartValue;
 }
 
@@ -107,7 +108,7 @@ function allJobValuesOf(machine: Machine): JobValue[] {
     { label: 'Parts', value: parts?.text ?? NO_VALUE, fraction: parts?.fraction, chartValue: 'part-count' },
     { label: 'Spindle', value: spindleSpeedText(data) ?? NO_VALUE, chartValue: 'spindle-speed' },
     ...spindleLoadValues(data),
-    { label: 'Tool', value: toolText(data) ?? NO_VALUE },
+    { label: 'Tool', value: toolText(data) ?? NO_VALUE, chartValue: 'tool-number' },
     ...(machine.type === 'fanuc' ? pathValues(machine.data.paths) : []),
   ];
   if (machine.type === 'fanuc' && machine.data.operatorMessage) {

@@ -19,7 +19,7 @@ const mockFtpClient = {
 };
 
 vi.mock('basic-ftp', () => ({
-  Client: vi.fn(() => mockFtpClient),
+  Client: vi.fn(function () { return mockFtpClient; }),
 }));
 
 // Imported after vi.mock so FTPClient gets the mock basic-ftp
