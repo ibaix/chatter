@@ -36,4 +36,28 @@ describe('anchorsOf', () => {
 
     expect(anchorsOf(markdown)).toEqual(['update-chatter', 'back-up', 'if-an-update-goes-wrong', 'memory-on-a-pi-512-mb']);
   });
+
+  it('makes the same anchors as VitePress from dots, digits, links and code', () => {
+    const markdown = [
+      '## Keep `chatter.db` private',
+      '## 1. Create the Admin login',
+      '## Read [the logs](./logs.md) first',
+      '## Café: settings_and more',
+    ].join('\n');
+
+    expect(anchorsOf(markdown)).toEqual([
+      'keep-chatter-db-private',
+      '_1-create-the-admin-login',
+      'read-the-logs-first',
+      'cafe-settings-and-more',
+    ]);
+  });
+
+  it('adds a number to a heading that is already on the page', () => {
+    expect(anchorsOf('## Steps\n## Steps\n## Steps')).toEqual(['steps', 'steps-1', 'steps-2']);
+  });
+
+  it('skips code blocks with tildes', () => {
+    expect(anchorsOf('~~~bash\n# not a heading\n~~~\n## Real')).toEqual(['real']);
+  });
 });

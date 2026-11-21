@@ -25,22 +25,49 @@ export function docsPageFile(page: string): string {
 /** The heading anchors of a Markdown page: a {#custom} anchor, or the heading text as VitePress makes it. */
 export function anchorsOf(markdown: string): string[] {
   const anchors: string[] = [];
-  let inCode = false;
+  const seen = new Map<string, number>();
+  let fence: string | undefined;
   for (const line of markdown.split('\n')) {
-    if (line.startsWith('```')) inCode = !inCode;
-    const heading = !inCode && /^#{1,6}\s+(.*)$/.exec(line);
+    const fenceMark = /^(```|~~~)/.exec(line)?.[1];
+    if (fenceMark && (fence === undefined || fence === fenceMark)) {
+      fence = fence === undefined ? fenceMark : undefined;
+      continue;
+    }
+    const heading = fence === undefined && /^#{1,6}\s+(.*)$/.exec(line);
     if (!heading) continue;
     const custom = /\{#([^}]+)\}\s*$/.exec(heading[1]);
-    anchors.push(custom ? custom[1] : slug(heading[1]));
+    if (custom) {
+      anchors.push(custom[1]);
+      continue;
+    }
+    // VitePress adds -1, -2, ... to a heading anchor that is already on the page
+    const base = slug(textOf(heading[1]));
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    anchors.push(count === 0 ? base : `${base}-${count}`);
   }
   return anchors;
 }
 
-function slug(heading: string): string {
-  return heading
-    .toLowerCase()
-    .replace(/`/g, '')
-    .replace(/[^a-z0-9\s-]/g, '')
-    .trim()
-    .replace(/[\s-]+/g, '-');
+/** The text of a heading as the page shows it: a link gives its text only. */
+function textOf(heading: string): string {
+  return heading.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+}
+
+// A copy of slugify in @mdit-vue/shared, which VitePress uses to make heading anchors
+// eslint-disable-next-line no-control-regex -- the same control characters that VitePress removes
+const CONTROL = /[\u0000-\u001f]/g;
+const SPECIAL = /[\s~`!@#$%^&*()\-_+=[\]{}|\\;:"'“”‘’<>,.?/]+/g;
+const COMBINING = /[\u0300-\u036F]/g;
+
+function slug(text: string): string {
+  return text
+    .normalize('NFKD')
+    .replace(COMBINING, '')
+    .replace(CONTROL, '')
+    .replace(SPECIAL, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/^(\d)/, '_$1')
+    .toLowerCase();
 }
