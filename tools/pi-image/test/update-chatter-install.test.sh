@@ -233,6 +233,31 @@ test_install_after_a_checked_file_changed() {
   check "the checked manifest changed: nothing is stopped" bash -c "! grep -q stop '$fake/calls.log'"
 }
 
+# The steps of an install, in order. Loading tells which image of how many.
+test_the_status_tells_the_steps_of_an_install() {
+  set_up_ready
+  : > "$sandbox/helper.log"
+  UPDATE_HEARTBEAT=1 FAKE_DOCKER_HANGS_ON="load --input" send_request install &
+  local helper=$! first_beat
+  wait_until test -s "$fake/hung"
+  check "while the first image loads, the step is loading" test "$(status_field step)" = loading
+  check "while the first image loads, it is image 1" test "$(status_field part)" = 1
+  check "while the first image loads, there are 3 images" test "$(status_field parts)" = 3
+  check "the busy status with a part is the JSON that Chatter reads" status_is_valid_json
+  first_beat="$(status_field heartbeat)"
+  wait_until heartbeat_is_not "$first_beat"
+  check "a heartbeat write keeps the image number" test "$(status_field part)" = 1
+  stop_hung_docker
+  wait "$helper"
+
+  set_up_ready
+  : > "$sandbox/helper.log"
+  send_request install
+  check "the steps of a good install, in order" \
+    test "$(steps_in_log)" = "verifying backing-up loading loading loading loading starting health "
+  check "the done status has no step" test -z "$(status_field step)"
+}
+
 test_the_same_update_after_a_roll_back() {
   set_up_ready
   FAKE_HEALTH=unhealthy send_request install
@@ -358,6 +383,7 @@ test_a_ready_file_older_than_a_day_is_refused
 test_a_second_install_of_the_same_file_does_nothing
 test_install_after_the_file_changed
 test_install_after_a_checked_file_changed
+test_the_status_tells_the_steps_of_an_install
 test_the_same_update_after_a_roll_back
 test_a_leftover_old_backup_is_deleted
 test_too_little_space_at_install_starts_the_old_version_again

@@ -596,6 +596,34 @@ test_the_heartbeat_changes_while_the_helper_works() {
 
 # A heartbeat that writes at the moment the helper stops it must not write "checking" over the result.
 # The heartbeat writes each 10 ms, and each of its writes takes 0.5 seconds, so it is nearly always writing.
+# The step is in status.json while the helper works, and the heartbeat keeps it.
+test_the_status_tells_the_step() {
+  set_up
+  put_update_file > /dev/null
+  UPDATE_HEARTBEAT=1 FAKE_DOCKER_HANGS_ON="du" send_request check &
+  local helper=$! first_beat started
+  wait_until test -s "$fake/hung"
+  check "while the data is measured, the step is space" test "$(status_field step)" = space
+  check "the busy status has the start time" test -n "$(status_field startedAt)"
+  check "the busy status with a step is the JSON that Chatter reads" status_is_valid_json
+  first_beat="$(status_field heartbeat)"
+  started="$(status_field startedAt)"
+  wait_until heartbeat_is_not "$first_beat"
+  check "a heartbeat write keeps the step" test "$(status_field step)" = space
+  check "a heartbeat write keeps the start time" test "$(status_field startedAt)" = "$started"
+  stop_hung_docker
+  wait "$helper"
+  check "the steps of a check that stopped, in order, are in the log" \
+    test "$(steps_in_log)" = "copying listing signature space "
+  check "the result has no step" test -z "$(status_field step)"
+
+  set_up
+  put_update_file > /dev/null
+  send_request check
+  check "the steps of a good check, in order" test "$(steps_in_log)" = "copying listing signature space files images "
+  check "a ready status has no step and no start time" test -z "$(status_field step)$(status_field startedAt)"
+}
+
 test_the_heartbeat_never_writes_after_the_result() {
   set_up
   put_update_file > /dev/null
@@ -634,5 +662,6 @@ test_the_installed_version_file
 test_a_hung_container_does_not_hang_the_check
 test_the_check_command_works_without_a_request
 test_the_heartbeat_changes_while_the_helper_works
+test_the_status_tells_the_step
 test_the_heartbeat_never_writes_after_the_result
 finish_tests

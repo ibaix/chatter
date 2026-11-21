@@ -32,6 +32,8 @@ INSTALLED_VERSION_FILE="$STATE_DIR/installed-version"
 LOCK_FILE="$STATE_DIR/lock"
 # A heartbeat writes status.json only while it holds this lock. stop_heartbeat takes it too.
 STATUS_LOCK_FILE="$STATE_DIR/status.lock"
+# The step that the helper does now, and the start time of the run. write_status reads it, also in the heartbeat.
+STEP_FILE="$STATE_DIR/step"
 INCOMING="$STATE_DIR/incoming"
 COPY="$STATE_DIR/update.tar"
 FILES="$STATE_DIR/files"
@@ -110,6 +112,12 @@ listed_names=()
 listed_name=""
 old_version=""
 old_container=""
+# The status that the heartbeat writes again while the helper works: checking or installing, and the version
+busy_state=""
+busy_version=""
+
+# The steps in status.json (UPDATE_STEPS in packages/shared/src/updates.ts). Chatter shows a text for each.
+STEPS=(copying listing signature space files images verifying backing-up loading starting health)
 
 main() {
   exec 3>&1
@@ -241,8 +249,65 @@ write_status() {
   if is_release_version "$version"; then json+=",\"version\":\"$version\""; fi
   if [ -n "$reason" ]; then json+=",\"reason\":\"$reason\""; fi
   json+=",\"heartbeat\":\"$(utc_now)\",\"freeBytes\":$(free_bytes)"
+  if [ "$state" = checking ] || [ "$state" = installing ]; then json+="$(step_json)"; fi
   if [[ $freed =~ ^[0-9]+$ ]]; then json+=",\"freedBytes\":$freed"; fi
   printf '%s\n' "$json}" | atomic_write "$UPDATE_DIR/status.json" 644
+}
+
+# The step fields of a busy status, from the step file:  ,"step":"loading","part":1,"parts":3,"startedAt":"..."
+# Each value must have its pattern, or it is not written.
+step_json() {
+  local step part parts started_at json=""
+  step="$(step_value step)"
+  part="$(step_value part)"
+  parts="$(step_value parts)"
+  started_at="$(step_value started_at)"
+  if is_step "$step"; then
+    json+=",\"step\":\"$step\""
+    if [[ $part =~ ^[1-9][0-9]{0,2}$ && $parts =~ ^[1-9][0-9]{0,2}$ ]] && [ "$part" -le "$parts" ]; then
+      json+=",\"part\":$part,\"parts\":$parts"
+    fi
+  fi
+  if [[ $started_at =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    json+=",\"startedAt\":\"$started_at\""
+  fi
+  printf '%s' "$json"
+}
+
+is_step() {
+  local step
+  for step in "${STEPS[@]}"; do
+    [ "$1" != "$step" ] || return 0
+  done
+  return 1
+}
+
+step_value() {
+  [ -f "$STEP_FILE" ] || return 0
+  sed -n "s/^$1=//p" "$STEP_FILE" | head -n 1
+}
+
+# Starts a check or an install: writes the busy status with the start time, and starts the heartbeat.
+# begin_run <checking or installing> [version]
+begin_run() {
+  busy_state="$1"
+  busy_version="${2:-}"
+  printf 'started_at=%s\n' "$(utc_now)" | atomic_write "$STEP_FILE" 600
+  write_status "$busy_state" "$busy_version"
+  start_heartbeat "$busy_state" "$busy_version"
+}
+
+# Tells Chatter the step that starts now: set_step <step> [part parts], for example "set_step loading 2 3".
+# It holds the status lock, so a heartbeat never writes the step before over it.
+set_step() {
+  local step="$1" part="${2:-}" parts="${3:-}" started_at
+  started_at="$(step_value started_at)"
+  log "Step: $step${part:+ ($part of $parts)}."
+  {
+    flock 8
+    printf '%s\n' "started_at=$started_at" "step=$step" "part=$part" "parts=$parts" | atomic_write "$STEP_FILE" 600
+    write_status "$busy_state" "$busy_version"
+  } 8> "$STATUS_LOCK_FILE"
 }
 
 # Writes stdin to a file: atomic_write <path> <mode>
@@ -384,16 +449,21 @@ run_check() {
   refuse_while_old_data_waits
   undo_unfinished_install
   remove_temp_files
-  write_status checking
-  start_heartbeat checking
+  begin_run checking
   forget_ready_file
+  set_step copying
   take_update_file
+  set_step listing
   check_tar_entries
+  set_step signature
   check_signature
   read_signed_manifest
   check_manifest_fits_this_pi
+  set_step space
   check_free_space_for_install
+  set_step files
   extract_and_check_files
+  set_step images
   check_unchanged_images
   remove_copy
   mark_ready
@@ -713,8 +783,7 @@ run_install() {
   remove_temp_files
   known_version="$(state_value version)"
   is_release_version "$known_version" || known_version=""
-  write_status installing "$known_version"
-  start_heartbeat installing "$known_version"
+  begin_run installing "$known_version"
   check_ready_file
   back_up_old_version
   load_new_images
@@ -729,6 +798,7 @@ check_ready_file() {
   is_unchanged_manifest || refuse "$R_CHANGED"
   old_version="$(installed_version)" || refuse "$R_NOT_RELEASE"
   is_newer "$known_version" "$old_version" || refuse "$R_NOT_NEWER"
+  set_step verifying
   files_match_manifest || refuse "$R_CHANGED"
   log "Each checked file still has its signed size and checksum."
   log "Installing version $known_version over version $old_version."
@@ -764,6 +834,7 @@ is_unchanged_manifest() {
 back_up_old_version() {
   local needed
   set_phase backing-up
+  set_step backing-up
   old_container="$(compose ps --all --quiet chatterbox)" || old_container=""
   compose stop chatterbox > /dev/null || fail_install "$R_STOP_FAILED"
   needed="$(space_for_install)" || fail_install "$R_NO_SIZE"
@@ -861,11 +932,16 @@ restore_data() {
 # Deletes the images of the version before the old one first, so the card never holds 3 sets of images.
 # Then loads the new images. Each image file is deleted after it loads, to give the card the space back.
 load_new_images() {
-  local member
+  local member members=() number=0
   set_phase loading
+  set_step loading
   remove_images_except "$(images_in "$CHATTER_DIR/docker-compose.yml"; unchanged_images)"
   for member in "${!signed_size[@]}"; do
-    is_image_member "$member" || continue
+    if is_image_member "$member"; then members+=("$member"); fi
+  done
+  for member in "${members[@]}"; do
+    number=$((number + 1))
+    set_step loading "$number" "${#members[@]}"
     log "Loading $member. On a Pi, this takes some minutes."
     docker_within "$LOAD_TIMEOUT" load --input "$FILES/$member" > /dev/null || fail_install "$R_LOAD_FAILED"
     rm -f -- "$FILES/$member"
@@ -892,10 +968,12 @@ new_images_are_here() {
 # vmalert must read the new rules, also when its own settings did not change.
 start_new_version() {
   set_phase swapped
+  set_step starting
   put_file_in_place "$FILES/docker-compose.yml" "$CHATTER_DIR/docker-compose.yml" || fail_install "$R_START_FAILED"
   put_file_in_place "$FILES/rules.yml" "$CHATTER_DIR/vmalert/rules.yml" || fail_install "$R_START_FAILED"
   log "Starting version $known_version."
   compose up --detach --force-recreate > /dev/null || fail_install "$R_START_FAILED"
+  set_step health
   wait_for_new_version || fail_install "$R_NOT_HEALTHY"
 }
 

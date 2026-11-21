@@ -441,8 +441,18 @@ docker_was_called_with() {
 }
 
 # A status.json as Chatter parses it: one JSON object with the fields that the contract allows.
+# A busy status can also have a step (with "part of parts" while images load) and the start time of the run.
 status_is_valid_json() {
-  grep -qE '^\{"state":"[a-z-]+"(,"version":"[0-9]+\.[0-9]+\.[0-9]+")?(,"reason":"[^"]+")?,"heartbeat":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z","freeBytes":[0-9]+(,"freedBytes":[0-9]+)?\}$' "$(status_file)"
+  grep -qE '^\{"state":"[a-z-]+"(,"version":"[0-9]+\.[0-9]+\.[0-9]+")?(,"reason":"[^"]+")?,"heartbeat":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z","freeBytes":[0-9]+(,"step":"[a-z-]+"(,"part":[0-9]+,"parts":[0-9]+)?)?(,"startedAt":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")?(,"freedBytes":[0-9]+)?\}$' "$(status_file)"
+}
+
+heartbeat_is_not() {
+  [ "$(status_field heartbeat)" != "$1" ]
+}
+
+# The steps that the helper wrote to its log, in order, on one line: "copying listing ... "
+steps_in_log() {
+  sed -n 's/^Step: \([a-z-]*\).*/\1/p' "$sandbox/helper.log" | tr '\n' ' '
 }
 
 work_files_are_gone() {
