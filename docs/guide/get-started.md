@@ -26,6 +26,18 @@ When you add a machine, it shows on the **Machines** page. It shows **Connecting
 
 ![The Machines page: four machines with their state, program, parts, spindle speed and tool](../images/chatter-machines.png)
 
+### If a machine shows Offline
+
+The **Alarm** column on the **Machines** page tells why Chatter cannot reach the machine. The page of the machine shows the same text at the top.
+
+| The text | What to do |
+|----------|------------|
+| `Connection timeout`, or `connect EHOSTUNREACH` | Chatter cannot find the machine on the network. Make sure that the machine is on. Compare the IP address on the control with the IP address in Chatter. Shortly after Chatter starts, the network can be not ready yet. Wait one minute. |
+| `connect ECONNREFUSED` | The machine is on the network, but the port is closed. Turn on the protocol on the control, and check the port in **Settings > Machine**. |
+| `The machine accepts the connection, but it does not answer` | Another program is connected to the machine. A Brother control serves only one program at a time. Find the other program and stop it. It can be a second Chatter, for example a test copy on a computer, or other monitoring software. If you cannot find it, turn the control off and on again. |
+
+A Pi on the network cannot see which other program is connected to the machine. To find it, look at each computer that can connect to the machine.
+
 ## 3. Set up FTP on each machine
 
 Chatter uses FTP to show, send and download the program files on a machine. Do these steps for each machine:
