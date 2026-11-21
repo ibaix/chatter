@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { fetchUploadEvents, fetchUploadFiles } from '../../api/machineFiles';
 import type { UploadEvent, UploadFile } from '../../types';
 
-/** The files sent to the machine before, and the sends (versions) of the file that is picked */
-export function useUploadHistory(machineId: string) {
+/** The files sent to the machine before, and the sends (versions) of the file that is picked. Nothing loads until `isWanted` is true. */
+export function useUploadHistory(machineId: string, isWanted: boolean) {
   const [historyFiles, setHistoryFiles] = useState<UploadFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -51,11 +51,12 @@ export function useUploadHistory(machineId: string) {
   };
 
   useEffect(() => {
+    if (!isWanted) return;
     setSelectedFileId(null);
     setFileEvents({});
     refresh();
-    // Load again only when the machine changes
-  }, [machineId]);
+    // Load again only when the machine changes, or when the history is wanted the first time
+  }, [machineId, isWanted]);
 
   const selectedEvents = selectedFileId === null ? undefined : fileEvents[selectedFileId];
   return { historyFiles, loading, failed, selectedFileId, selectedEvents, select, loadEvents, refreshAll };

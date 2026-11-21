@@ -280,6 +280,36 @@ describe('MachineDetailPage', () => {
     };
     const viewSwitch = () => screen.getByRole('group', { name: 'Files to show' });
 
+    it('lists no files and loads no upload history on a visit to the other tabs', async () => {
+      renderPage();
+      await waitFor(() => expect(fetchMachineAlerts).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('tab', { name: 'Report' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+      await screen.findByText(/Click a word in a rule to change it/);
+
+      expect(fetchFileTree).not.toHaveBeenCalled();
+      expect(fetchUploadFiles).not.toHaveBeenCalled();
+    });
+
+    it('loads the files and the upload history once, at the first open of the tab', async () => {
+      renderPage();
+      await openFilesTab();
+      await waitFor(() => expect(fetchFileTree).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Dashboard' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
+
+      expect(fetchFileTree).toHaveBeenCalledTimes(1);
+      expect(fetchUploadFiles).toHaveBeenCalledTimes(1);
+    });
+
+    it('loads the files at once when the address opens the Files tab', async () => {
+      renderPage({ address: '/machine/m1?tab=files' });
+
+      await waitFor(() => expect(fetchFileTree).toHaveBeenCalledWith('m1', '/'));
+      expect(fetchUploadFiles).toHaveBeenCalledWith('m1');
+    });
+
     it('holds the files on the machine and the upload history, with a switch between them', async () => {
       vi.mocked(fetchUploadFiles).mockResolvedValue(SENT_FILES);
       renderPage();

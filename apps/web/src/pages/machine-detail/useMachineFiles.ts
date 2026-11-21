@@ -3,8 +3,11 @@ import { fetchFileTree } from '../../api/machineFiles';
 import type { FTPTreeNode } from '../../types';
 import { errorMessageOf } from '../../utils/errorMessage';
 
-/** The machine's file tree, for the folder that is open now */
-export function useMachineFiles(machineId: string) {
+/**
+ * The machine's file tree, for the folder that is open now.
+ * Nothing loads until `isWanted` is true: each list is an FTP login on the machine.
+ */
+export function useMachineFiles(machineId: string, isWanted: boolean) {
   const [files, setFiles] = useState<FTPTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,9 +41,9 @@ export function useMachineFiles(machineId: string) {
   };
 
   useEffect(() => {
-    refresh();
-    // Load again only when the machine changes
-  }, [machineId]);
+    if (isWanted) refresh();
+    // Load again only when the machine changes, or when the list is wanted the first time
+  }, [machineId, isWanted]);
 
   return { files, loading, error, currentPath, uploadPath, refresh, openFolder };
 }

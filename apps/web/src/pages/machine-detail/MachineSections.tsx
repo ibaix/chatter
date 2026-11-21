@@ -42,8 +42,6 @@ interface MachineSectionsProps {
 export function MachineSections({ machine, machines, now, onUpdate, onRemove, dashboard, firingCount }: MachineSectionsProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const openTab = searchParams.get(TAB_PARAM);
-  const files = useMachineFiles(machine.id);
-  const history = useUploadHistory(machine.id);
   const messages = useUploadMessages();
   const alertRules = useAlertRules(machine.id);
   // The range of the report stays when the user opens another tab and comes back
@@ -65,6 +63,10 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
     if (tab !== shownTab) setSearchParams({ [TAB_PARAM]: tab });
   };
   useAddressOfShownTab(openTab, shownTab);
+  // The files and the upload history load at the first open of the Files tab, not on each visit to the page
+  const filesWereOpened = useHasBeenTrue(shownTab === 'files');
+  const files = useMachineFiles(machine.id, filesWereOpened);
+  const history = useUploadHistory(machine.id, filesWereOpened);
 
   const reloadAfterUpload = async () => {
     files.refresh();
@@ -101,6 +103,13 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
       </div>
     </>
   );
+}
+
+/** True from the first render where `value` is true */
+function useHasBeenTrue(value: boolean): boolean {
+  const [hasBeenTrue, setHasBeenTrue] = useState(value);
+  if (value && !hasBeenTrue) setHasBeenTrue(true);
+  return hasBeenTrue || value;
 }
 
 /**
