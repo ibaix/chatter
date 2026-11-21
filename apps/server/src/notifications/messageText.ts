@@ -70,6 +70,16 @@ export function backlogText(groups: readonly AlertGroup[], options: TextOptions)
     + `Open Chatter to see ${them}.${withLink(chatterLink(options.linkBaseUrl))}`;
 }
 
+/**
+ * The text of an event message that has `count` events, for example
+ * "WARNING - Haas VF-2: Program ended. Started 9:17 AM. This happened 20 times since 9:02 AM." The link stays at the end.
+ */
+export function repeatedEventText(text: string, link: string | null, count: number, since: number, options: TextOptions): string {
+  const linkPart = withLink(link);
+  const withoutLink = linkPart && text.endsWith(linkPart) ? text.slice(0, -linkPart.length) : text;
+  return `${withoutLink} This happened ${count} times since ${clockTime(since, options.timeZone)}.${linkPart}`;
+}
+
 /** The message of "Send test". It has the link, so the user can try the link too. */
 export function testMessageText(options: TextOptions): string {
   return `Test from Chatter. Messages to this channel work.${withLink(chatterLink(options.linkBaseUrl))}`;

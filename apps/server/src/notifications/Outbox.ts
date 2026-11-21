@@ -4,7 +4,7 @@ import {
 import type Database from 'better-sqlite3';
 import type { MachineRemovalListener } from '../polling/poller.js';
 import type { OutgoingMessage } from './channels/ChannelType.js';
-import type { AlertGroup, TextOptions } from './messageText.js';
+import { type AlertGroup, repeatedEventText, type TextOptions } from './messageText.js';
 import { backlogMessage } from './outgoingMessages.js';
 
 /** A channel gets at most this many messages in SEND_LIMIT_WINDOW_MS */
@@ -24,6 +24,15 @@ export const MAX_KEPT_MESSAGES = 1000;
 export const BACKLOG_SEND = 3;
 const BACKLOG_DETAIL = 'In one summary message, because the service did not take messages for a time.';
 
+/**
+ * A channel gets at most one message about an event of one rule on one machine in this time, for example "Program ended"
+ * on the Haas VF-2. The events in between go in the next message, with their count. A machine with a short program
+ * (one each 45 seconds) sent 1,176 messages in 21 hours. Now it is at most 96 in a day. A program that runs for
+ * 15 minutes or longer still gets one message for each end.
+ */
+export const EVENT_REPEAT_MS = 15 * 60_000;
+const EVENT_DETAIL = `In the next message about this event, because a channel gets at most one message about an event of a machine in ${EVENT_REPEAT_MS / 60_000} minutes.`;
+
 const NO_TEXT_OPTIONS: TextOptions = { timeZone: null, linkBaseUrl: null };
 
 const KEEP_MS = NOTIFICATION_MESSAGE_DAYS * 24 * 60 * 60_000;
@@ -34,10 +43,21 @@ export interface QueuedMessage {
   alertId: number | null;
   message: OutgoingMessage;
   /**
-   * True for the message of an event alert, such as "program ended". It does not count in the limit, it never goes
-   * into a "more" message, and it goes also when the channel is at its limit. So the alarms keep the whole limit.
+   * True for the message of an event alert, such as "program ended". It counts in the limit, like each other alert.
+   * Also, the channel gets at most one message about the same rule and machine in EVENT_REPEAT_MS.
    */
   event?: boolean;
+}
+
+/** How to insert a message. Without values, it is a waiting message that is due now. */
+interface InsertOptions {
+  /** The number of alerts in a "more" message */
+  alertCount?: number | null;
+  /** A finished message, for example an ignored one, with its reason */
+  finished?: { status: MessageStatus; detail: string };
+  nextTryAt?: number;
+  /** The events in an event message, and the time of the first one */
+  repeats?: { count: number; since: number };
 }
 
 /** A message that the sender must send now */
@@ -77,6 +97,11 @@ interface MessageRow {
   status: MessageStatus;
   /** 1 for the message of an event alert */
   is_event: number;
+  /** The events in an event message: 1, or more when later events of the same rule and machine went into it */
+  repeats: number;
+  /** The time of the first event in the message, when `repeats` is more than 1 */
+  repeat_since: number | null;
+  next_try_at: number;
   attempts: number;
   last_error: string | null;
   detail: string | null;
@@ -125,13 +150,53 @@ export class Outbox implements MachineRemovalListener {
     if (!columns.some(column => column.name === 'is_event')) {
       db.exec('ALTER TABLE notification_messages ADD COLUMN is_event INTEGER NOT NULL DEFAULT 0');
     }
+    if (!columns.some(column => column.name === 'repeats')) {
+      db.exec('ALTER TABLE notification_messages ADD COLUMN repeats INTEGER NOT NULL DEFAULT 1');
+      db.exec('ALTER TABLE notification_messages ADD COLUMN repeat_since INTEGER');
+    }
     // Chatter stopped while it sent these messages. It does not know if they went, so it sends them again.
     db.exec("UPDATE notification_messages SET sending = 0 WHERE sending = 1");
+    // An older Chatter held a channel only with the next try of its first message. The hold keeps that order now.
+    db.exec(`
+      INSERT OR IGNORE INTO notification_channel_holds (channel_id, until)
+      SELECT channel_id, MAX(next_try_at) FROM notification_messages WHERE status = 'waiting' AND attempts > 0 GROUP BY channel_id
+    `);
   }
 
   /** Returns the id of the message */
   queue(item: QueuedMessage, now: number): number {
-    return this.insert(item, null, now);
+    if (!item.event) return this.insert(item, now);
+    return this.db.transaction(() => this.queueEvent(item, now))();
+  }
+
+  /**
+   * When a message about the same event of the machine waits, it becomes "grouped", and the new message counts its events.
+   * When one went less than EVENT_REPEAT_MS ago, the new message waits until that time ends.
+   * The other messages of the channel do not wait behind it (see dueHeads).
+   */
+  private queueEvent(item: QueuedMessage, now: number): number {
+    const sameEvent = {
+      channelId: item.channelId, alertName: item.message.alertName, machineId: item.message.machine?.id ?? null, now,
+    };
+    const sameEventWhere = `
+      channel_id = @channelId AND is_event = 1 AND machine_id IS @machineId AND json_extract(payload, '$.alertName') IS @alertName
+    `;
+    const waiting = this.db.prepare(`
+      SELECT * FROM notification_messages WHERE ${sameEventWhere} AND status = 'waiting' AND sending = 0 ORDER BY id DESC LIMIT 1
+    `).get(sameEvent) as MessageRow | undefined;
+    if (waiting) {
+      this.db.prepare("UPDATE notification_messages SET status = 'grouped', detail = ? WHERE id = ?").run(EVENT_DETAIL, waiting.id);
+      const repeats = { count: waiting.repeats + 1, since: waiting.repeat_since ?? waiting.created_at };
+      const { message } = item;
+      const text = repeatedEventText(message.text, message.link, repeats.count, repeats.since, this.textOptions());
+      return this.insert({ ...item, message: { ...message, text } }, now, { repeats, nextTryAt: waiting.next_try_at });
+    }
+    // A message that is being sent now counts as sent now
+    const { lastSent } = this.db.prepare(`
+      SELECT MAX(CASE WHEN status = 'sent' THEN sent_at ELSE @now END) AS lastSent FROM notification_messages
+      WHERE ${sameEventWhere} AND (status = 'sent' OR (status = 'waiting' AND sending = 1))
+    `).get(sameEvent) as { lastSent: number | null };
+    return this.insert(item, now, { nextTryAt: lastSent === null ? now : Math.max(now, lastSent + EVENT_REPEAT_MS) });
   }
 
   /**
@@ -139,7 +204,7 @@ export class Outbox implements MachineRemovalListener {
    * the sender never takes it, it does not count in the limit, and it never goes into a "more" message.
    */
   keepIgnored(item: QueuedMessage, detail: string, now: number): void {
-    this.insert(item, null, now, { status: 'ignored', detail });
+    this.insert(item, now, { finished: { status: 'ignored', detail } });
   }
 
   /**
@@ -173,7 +238,7 @@ export class Outbox implements MachineRemovalListener {
 
   /** A test goes at once, not through the outbox. Its result goes in the message list, so the admin sees it there too. */
   keepTestResult(channelId: string, message: OutgoingMessage, result: ChannelTestResult, now: number): void {
-    const id = this.insert({ channelId, alertId: null, message }, null, now);
+    const id = this.insert({ channelId, alertId: null, message }, now);
     if (result.ok) this.markSent(id, result.detail, now);
     else this.markFailed(id, result.error);
   }
@@ -280,14 +345,14 @@ export class Outbox implements MachineRemovalListener {
   }
 
   /**
-   * The first waiting message of each channel that has no message being sent and is not held, when its time came.
-   * An event message can go past the head (see headOrMoreMessage), so the check is for each message of the channel.
+   * The first due waiting message of each channel that has no message being sent and is not held.
+   * A message that is not due yet is an event message that waits for EVENT_REPEAT_MS, so the next messages go past it.
+   * A message that failed holds its whole channel (see markRetry), so no message goes past it.
    */
   private dueHeads(now: number): MessageRow[] {
     return this.db.prepare(`
       SELECT * FROM notification_messages
-      WHERE id IN (SELECT MIN(id) FROM notification_messages WHERE status = 'waiting' GROUP BY channel_id)
-        AND next_try_at <= @now
+      WHERE id IN (SELECT MIN(id) FROM notification_messages WHERE status = 'waiting' AND next_try_at <= @now GROUP BY channel_id)
         AND channel_id NOT IN (SELECT channel_id FROM notification_messages WHERE sending = 1)
         AND channel_id NOT IN (SELECT channel_id FROM notification_channel_holds WHERE until > @now)
       ORDER BY id
@@ -297,14 +362,12 @@ export class Outbox implements MachineRemovalListener {
   /**
    * The head message, or nothing when the channel is at its limit. When the channel has room for only one more
    * message and more alert messages wait, they all become "grouped", and a new "more" message goes in their place.
-   * An event message goes at once, and at the limit the first event message that waits goes past the held messages.
    */
   private headOrMoreMessage(head: MessageRow, now: number): OutboxEntry | null {
     const summary = this.summaryAfterHold(head.channel_id, now);
     if (summary) return summary;
-    if (head.is_event) return toEntry(head);
     const room = SEND_LIMIT - this.sentInWindow(head.channel_id, now);
-    if (room <= 0) return this.firstDueEvent(head.channel_id, now);
+    if (room <= 0) return null;
     const groupable = this.groupable(head.channel_id);
     if (room === 1 && groupable.messages > 1) return this.groupWaiting(head.channel_id, groupable, now);
     return toEntry(head);
@@ -327,35 +390,27 @@ export class Outbox implements MachineRemovalListener {
     const groups = alertGroups(merged);
     const message = backlogMessage(groups, this.textOptions());
     const alerts = groups.reduce((sum, group) => sum + group.count, 0);
-    const id = this.insert({ channelId, alertId: null, message }, alerts, now);
+    const id = this.insert({ channelId, alertId: null, message }, now, { alertCount: alerts });
     return { id, channelId, message, attempts: 0, createdAt: now };
   }
 
-  private firstDueEvent(channelId: string, now: number): OutboxEntry | null {
-    const row = this.db.prepare(`
-      SELECT * FROM notification_messages
-      WHERE channel_id = ? AND status = 'waiting' AND is_event = 1 AND sending = 0 AND next_try_at <= ?
-      ORDER BY id LIMIT 1
-    `).get(channelId, now) as MessageRow | undefined;
-    return row ? toEntry(row) : null;
-  }
-
-  /** The event messages do not count */
+  /** The event messages count too, so a busy shop cannot use the limit of the service */
   private sentInWindow(channelId: string, now: number): number {
     return (this.db.prepare(`
-      SELECT COUNT(*) AS count FROM notification_messages WHERE channel_id = ? AND status = 'sent' AND is_event = 0 AND sent_at > ?
+      SELECT COUNT(*) AS count FROM notification_messages WHERE channel_id = ? AND status = 'sent' AND sent_at > ?
     `).get(channelId, now - SEND_LIMIT_WINDOW_MS) as { count: number }).count;
   }
 
   /**
-   * The waiting messages that can go into a "more" message: all but the test messages and the event messages.
-   * `alerts` counts the start and the end of one alert one time, and adds the alerts of a "more" message that waits.
+   * The waiting messages that can go into a "more" message: all but the test messages.
+   * `alerts` counts the start and the end of one alert one time, and adds the alerts of a "more" message that waits,
+   * and the earlier events in an event message.
    */
   private groupable(channelId: string): GroupableCount {
     return this.db.prepare(`
       SELECT COUNT(*) AS messages,
-        COUNT(DISTINCT alert_id) + COALESCE(SUM(alert_count), 0) AS alerts
-      FROM notification_messages WHERE channel_id = ? AND status = 'waiting' AND kind != 'test' AND is_event = 0
+        COUNT(DISTINCT alert_id) + COALESCE(SUM(alert_count), 0) + COALESCE(SUM(repeats - 1), 0) AS alerts
+      FROM notification_messages WHERE channel_id = ? AND status = 'waiting' AND kind != 'test'
     `).get(channelId) as GroupableCount;
   }
 
@@ -364,39 +419,46 @@ export class Outbox implements MachineRemovalListener {
     const detail = `Grouped with ${others} more ${others === 1 ? 'message' : 'messages'}, because a channel gets at most ${SEND_LIMIT} messages in 10 minutes.`;
     this.db.prepare(`
       UPDATE notification_messages SET status = 'grouped', detail = ?
-      WHERE channel_id = ? AND status = 'waiting' AND kind != 'test' AND is_event = 0
+      WHERE channel_id = ? AND status = 'waiting' AND kind != 'test'
     `).run(detail, channelId);
     const message = this.moreAlerts(alerts);
-    const id = this.insert({ channelId, alertId: null, message }, alerts, now);
+    const id = this.insert({ channelId, alertId: null, message }, now, { alertCount: alerts });
     return { id, channelId, message, attempts: 0, createdAt: now };
   }
 
-  /**
-   * `alertCount` is the number of alerts in a "more" message, and null for each other message.
-   * A message is "waiting", unless `finished` gives another status and its detail.
-   */
-  private insert(
-    { channelId, alertId, message, event }: QueuedMessage, alertCount: number | null, now: number,
-    finished: { status: MessageStatus; detail: string } | null = null,
-  ): number {
+  private insert({ channelId, alertId, message, event }: QueuedMessage, now: number, options: InsertOptions = {}): number {
     return Number(this.db.prepare(`
       INSERT INTO notification_messages (
-        channel_id, alert_id, kind, machine_id, payload, alert_count, is_event, status, detail, next_try_at, created_at
+        channel_id, alert_id, kind, machine_id, payload, is_event, created_at,
+        alert_count, repeats, repeat_since, status, detail, next_try_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      channelId, alertId, message.kind, message.machine?.id ?? null, JSON.stringify(message), alertCount, event ? 1 : 0,
-      finished?.status ?? 'waiting', finished?.detail ?? null, now, now,
-    ).lastInsertRowid);
+      VALUES (
+        @channelId, @alertId, @kind, @machineId, @payload, @isEvent, @now,
+        @alertCount, @repeats, @repeatSince, @status, @detail, @nextTryAt
+      )
+    `).run({
+      channelId, alertId, kind: message.kind, machineId: message.machine?.id ?? null, payload: JSON.stringify(message),
+      isEvent: event ? 1 : 0, now, ...insertValues(now, options),
+    }).lastInsertRowid);
   }
+}
+
+/** The values of the options of `insert`, with their defaults: a waiting message that is due now */
+function insertValues(now: number, { alertCount = null, finished, nextTryAt = now, repeats }: InsertOptions) {
+  return {
+    alertCount, nextTryAt,
+    status: finished?.status ?? 'waiting', detail: finished?.detail ?? null,
+    repeats: repeats?.count ?? 1, repeatSince: repeats?.since ?? null,
+  };
 }
 
 /**
  * The alerts of the messages, for each rule and machine, for example "In alarm on Haas VF-2".
- * The start and the end of one alert are one alert. A "more" message adds its alerts to the group with no name.
+ * The start and the end of one alert are one alert. An event message adds its earlier events.
+ * A "more" message adds its alerts to the group with no name.
  */
 function alertGroups(rows: readonly MessageRow[]): AlertGroup[] {
-  const alertsByName = new Map<string, Set<number | string>>();
+  const groups = new Map<string, { alerts: Set<number | string>; earlierEvents: number }>();
   let others = 0;
   for (const row of rows) {
     const message = parseMessage(row);
@@ -405,12 +467,13 @@ function alertGroups(rows: readonly MessageRow[]): AlertGroup[] {
       continue;
     }
     const name = message.machine ? `${message.alertName} on ${message.machine.name}` : message.alertName;
-    const alerts = alertsByName.get(name) ?? new Set();
-    alerts.add(row.alert_id ?? `message ${row.id}`);
-    alertsByName.set(name, alerts);
+    const group = groups.get(name) ?? { alerts: new Set(), earlierEvents: 0 };
+    group.alerts.add(row.alert_id ?? `message ${row.id}`);
+    group.earlierEvents += row.repeats - 1;
+    groups.set(name, group);
   }
-  const groups: AlertGroup[] = [...alertsByName].map(([name, alerts]) => ({ name, count: alerts.size }));
-  return others > 0 ? [...groups, { name: null, count: others }] : groups;
+  const named: AlertGroup[] = [...groups].map(([name, group]) => ({ name, count: group.alerts.size + group.earlierEvents }));
+  return others > 0 ? [...named, { name: null, count: others }] : named;
 }
 
 function toEntry(row: MessageRow): OutboxEntry {

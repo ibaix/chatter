@@ -279,7 +279,7 @@ describe('AlertNotifier', () => {
       expect(queued()).toEqual(['phones started: WARNING - Haas VF-2: Program ended. Started 9:02 AM.']);
     });
 
-    it('sends the start message also when the channel is at its limit, so the alarms keep the whole limit', () => {
+    it('waits when the channel is at its limit, like each other alert, so a busy shop cannot use the limit of the service', () => {
       channels = [channel('phones')];
       for (let alertId = 100; alertId < 100 + SEND_LIMIT; alertId += 1) {
         notifier.alertChanged(change('started', anAlert(), alertId));
@@ -288,7 +288,7 @@ describe('AlertNotifier', () => {
 
       notifier.alertChanged(change('started', programEnded, 1));
 
-      expect(texts(outbox.takeDue(NOW))).toEqual(['WARNING - Haas VF-2: Program ended. Started 9:02 AM.']);
+      expect(texts(outbox.takeDue(NOW))).toEqual([]);
     });
 
     it('keeps an ignored event start as ignored, and adds nothing when the alert clears', () => {

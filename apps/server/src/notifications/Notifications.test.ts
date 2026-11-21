@@ -164,6 +164,35 @@ describe('Notifications', () => {
     ]);
   });
 
+  it('sends a "program ended" event of a machine at most one time in 15 minutes, with the count of the others', async () => {
+    let now = NOW;
+    const events = new Notifications({
+      db, settingsTable: new SettingsTable(db), machineName: () => 'Haas VF-2', now: () => now,
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        requests.push({ url: String(url), body: JSON.parse(String(init?.body)) as { text: string } });
+        return new Response(null, { status: 200 });
+      }) as typeof globalThis.fetch,
+    });
+    events.settings.save({ linkBaseUrl: null, timeZone: 'America/Chicago' });
+    addChannel(slack);
+    const labels = { alertname: 'Program ended', machine: 'haas-vf2', severity: 'warning', event: 'true' };
+
+    // A short program: it ends each 45 seconds for one hour, so 80 events
+    for (let second = 0; second < 3600; second += 45) {
+      now = NOW + second * 1000;
+      alerts.save([{ ...alert, name: 'Program ended', labels, startsAt: now, endsAt: now + 60_000 }], now);
+      events.findAlertChanges();
+      await events.sendDue();
+    }
+
+    expect(requests.map(request => request.body.text)).toEqual([
+      'WARNING - Haas VF-2: Program ended. Started 9:02 AM.',
+      'WARNING - Haas VF-2: Program ended. Started 9:17 AM. This happened 20 times since 9:02 AM.',
+      'WARNING - Haas VF-2: Program ended. Started 9:32 AM. This happened 20 times since 9:17 AM.',
+      'WARNING - Haas VF-2: Program ended. Started 9:47 AM. This happened 20 times since 9:32 AM.',
+    ]);
+  });
+
   it('deletes the waiting messages of a removed channel', () => {
     const id = addChannel(slack);
     alerts.save([alert], NOW);

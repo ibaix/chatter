@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Alert } from '../alerts/AlertStore.js';
-import { alertMessageText, backlogText, moreAlertsText, SMS_LENGTH, testMessageText, type TextOptions } from './messageText.js';
+import { alertMessageText, backlogText, moreAlertsText, repeatedEventText, SMS_LENGTH, testMessageText, type TextOptions } from './messageText.js';
 
 const STARTED = Date.UTC(2026, 10, 13, 15, 2);
 const ENDED = Date.UTC(2026, 10, 13, 15, 40);
@@ -169,6 +169,17 @@ describe('backlogText', () => {
       'Chatter could not send 51 alerts while the channel was blocked: Alarm 0 (10), Alarm 1 (9), Alarm 2 (8), Alarm 3 (7), Alarm 4 (6), '
       + 'other alerts (11). Open Chatter to see them.',
     );
+  });
+});
+
+describe('repeatedEventText', () => {
+  it('tells how many times the event happened since the first one, and keeps the link at the end', () => {
+    const link = 'http://chatter.local:3001/machine/haas-vf2';
+
+    expect(repeatedEventText(`WARNING - Haas VF-2: Program ended. Started 9:17 AM. ${link}`, link, 20, STARTED, CHICAGO))
+      .toBe(`WARNING - Haas VF-2: Program ended. Started 9:17 AM. This happened 20 times since 9:02 AM. ${link}`);
+    expect(repeatedEventText('Program ended.', null, 2, STARTED, { timeZone: null, linkBaseUrl: null }))
+      .toBe('Program ended. This happened 2 times since 3:02 PM UTC.');
   });
 });
 

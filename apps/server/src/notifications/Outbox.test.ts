@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { OutgoingMessage } from './channels/ChannelType.js';
-import { BACKLOG_SEND, MAX_KEPT_MESSAGES, Outbox, type OutboxEntry, SEND_LIMIT, SEND_LIMIT_WINDOW_MS } from './Outbox.js';
+import { BACKLOG_SEND, EVENT_REPEAT_MS, MAX_KEPT_MESSAGES, Outbox, type OutboxEntry, SEND_LIMIT, SEND_LIMIT_WINDOW_MS } from './Outbox.js';
 
 const NOW = Date.UTC(2026, 10, 13, 9, 0);
 const MINUTE = 60_000;
@@ -466,60 +466,111 @@ describe('Outbox', () => {
   });
 
   describe('event messages, such as "program ended"', () => {
-    function queueEvent(channelId: string, alertId: number, now: number): number {
-      return outbox.queue({ channelId, alertId, message: alertMessage('started'), event: true }, now);
+    const LINK = 'http://chatter.local:3001/machine/haas-st10';
+
+    function programEnded(machineId = 'haas-st10', alertName = 'Program ended'): OutgoingMessage {
+      return {
+        ...alertMessage('started', machineId), alertName, severity: 'warning', link: LINK,
+        text: `WARNING - ${machineId}: ${alertName}. Started 9:00 AM. ${LINK}`,
+      };
     }
 
-    it('sends an event message when the channel is at its limit', () => {
-      sendMessages('phones', SEND_LIMIT, NOW);
-      const event = queueEvent('phones', 1, NOW + MINUTE);
+    function queueEvent(channelId: string, alertId: number, now: number, message = programEnded()): number {
+      return outbox.queue({ channelId, alertId, message, event: true }, now);
+    }
 
-      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([event]);
+    /** Queues an event message and sends it at `now` */
+    function sendEvent(alertId: number, now: number, message = programEnded()): void {
+      const id = queueEvent('phones', alertId, now, message);
+      if (!outbox.takeDue(now).some(entry => entry.id === id)) throw new Error(`Event ${id} was not due`);
+      outbox.markSent(id, 'Sent', now);
+    }
+
+    function status(id: number) {
+      return outbox.list({}).find(message => message.id === id);
+    }
+
+    it('sends the first event of a rule and a machine at once', () => {
+      const event = queueEvent('phones', 1, NOW);
+
+      expect(outbox.takeDue(NOW).map(entry => entry.id)).toEqual([event]);
     });
 
-    it('sends an event message that waits after an alert message that the limit holds', () => {
-      sendMessages('phones', SEND_LIMIT, NOW);
-      const held = queue('phones', 1, alertMessage('started'), NOW + MINUTE);
-      const event = queueEvent('phones', 2, NOW + MINUTE);
+    it(`holds the next event of the same rule and machine until ${EVENT_REPEAT_MS / MINUTE} minutes after the last one went`, () => {
+      sendEvent(1, NOW);
+      const next = queueEvent('phones', 2, NOW + MINUTE);
 
-      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([event]);
-      expect(outbox.list({}).find(message => message.id === held)?.status).toBe('waiting');
+      expect(outbox.takeDue(NOW + EVENT_REPEAT_MS - 1)).toEqual([]);
+      expect(outbox.takeDue(NOW + EVENT_REPEAT_MS).map(entry => entry.id)).toEqual([next]);
     });
 
-    it('still sends one message of a channel at a time', () => {
-      sendMessages('phones', SEND_LIMIT, NOW);
-      queue('phones', 1, alertMessage('started'), NOW + MINUTE);
+    it('does not hold the other messages of the channel behind an event that waits', () => {
+      sendEvent(1, NOW);
       queueEvent('phones', 2, NOW + MINUTE);
-      queueEvent('phones', 3, NOW + MINUTE);
-
-      expect(outbox.takeDue(NOW + MINUTE)).toHaveLength(1);
-      expect(outbox.takeDue(NOW + MINUTE)).toEqual([]);
-    });
-
-    it('does not count a sent event message in the limit', () => {
-      for (let alertId = 1; alertId <= SEND_LIMIT; alertId += 1) {
-        const id = queueEvent('phones', alertId, NOW);
-        outbox.takeDue(NOW);
-        outbox.markSent(id, 'Sent', NOW);
-      }
-      const alarm = queue('phones', 99, alertMessage('started'), NOW + MINUTE);
-      queue('phones', 100, alertMessage('started'), NOW + MINUTE);
+      const alarm = queue('phones', 3, alertMessage('started'), NOW + MINUTE);
 
       expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([alarm]);
     });
 
-    it('never puts an event message into a "more" message', () => {
-      sendMessages('phones', SEND_LIMIT - 1, NOW);
-      queue('phones', 1, alertMessage('started'), NOW + MINUTE);
-      const event = queueEvent('phones', 2, NOW + MINUTE);
-      queue('phones', 3, alertMessage('started'), NOW + MINUTE);
+    it('does not hold an event of another rule or of another machine', () => {
+      sendEvent(1, NOW);
+      const otherMachine = queueEvent('phones', 2, NOW + MINUTE, programEnded('haas-vf2'));
+      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([otherMachine]);
+      outbox.markSent(otherMachine, 'Sent', NOW + MINUTE);
+
+      const otherRule = queueEvent('phones', 3, NOW + MINUTE, programEnded('haas-st10', 'Tool change'));
+      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([otherRule]);
+    });
+
+    it('puts the events that come while one waits into one message, with the count and the time of the first', () => {
+      sendEvent(1, NOW);
+      const first = queueEvent('phones', 2, NOW + MINUTE);
+      const second = queueEvent('phones', 3, NOW + 2 * MINUTE);
+      const third = queueEvent('phones', 4, NOW + 3 * MINUTE);
+
+      const detail = `In the next message about this event, because a channel gets at most one message about an event of a machine in ${EVENT_REPEAT_MS / MINUTE} minutes.`;
+      expect(status(first)).toMatchObject({ status: 'grouped', detail });
+      expect(status(second)).toMatchObject({ status: 'grouped', detail });
+      const [entry] = outbox.takeDue(NOW + EVENT_REPEAT_MS);
+      expect(entry.id).toBe(third);
+      // The default text options give the time in UTC, and the link stays at the end
+      expect(entry.message.text).toBe(`WARNING - haas-st10: Program ended. Started 9:00 AM. This happened 3 times since 9:01 AM UTC. ${LINK}`);
+      expect(status(third)?.text).toBe(entry.message.text);
+    });
+
+    it('gives the time of the first event in the time zone of the shop', () => {
+      const chicago = new Outbox(new Database(':memory:'), moreAlerts, () => ({ timeZone: 'America/Chicago', linkBaseUrl: null }));
+      const message = { ...programEnded(), link: null, text: 'Program ended.' };
+      chicago.queue({ channelId: 'phones', alertId: 1, message, event: true }, NOW);
+      chicago.queue({ channelId: 'phones', alertId: 2, message, event: true }, NOW + MINUTE);
+
+      expect(texts(chicago.takeDue(NOW + MINUTE))).toEqual(['Program ended. This happened 2 times since 3:00 AM.']);
+    });
+
+    it('counts a sent event message in the limit of the channel', () => {
+      for (let alertId = 1; alertId <= SEND_LIMIT; alertId += 1) sendEvent(alertId, NOW, programEnded(`machine-${alertId}`));
+      queue('phones', 99, alertMessage('started'), NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE)).toEqual([]);
+    });
+
+    it('waits at the limit of the channel, like each other alert', () => {
+      sendMessages('phones', SEND_LIMIT, NOW);
+      const event = queueEvent('phones', 1, NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE)).toEqual([]);
+      expect(outbox.takeDue(NOW + SEND_LIMIT_WINDOW_MS + 1).map(entry => entry.id)).toEqual([event]);
+    });
+
+    it('puts an event message into a "more" message, with each event that it has', () => {
+      sendEvent(1, NOW);
+      sendMessages('phones', SEND_LIMIT - 2, NOW);
+      queue('phones', 10, alertMessage('started'), NOW + MINUTE);
+      [11, 12, 13].forEach(alertId => queueEvent('phones', alertId, NOW + MINUTE));
 
       const [more] = outbox.takeDue(NOW + MINUTE);
-      expect(more.message).toEqual(moreAlerts(2));
-      expect(outbox.list({}).find(message => message.id === event)?.status).toBe('waiting');
 
-      outbox.markSent(more.id, 'Sent', NOW + MINUTE);
-      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([event]);
+      expect(more.message).toEqual(moreAlerts(4));
     });
 
     it('adds the event column to the table of an older Chatter, and keeps its messages', () => {
@@ -541,7 +592,34 @@ describe('Outbox', () => {
 
       expect(texts(upgraded.takeDue(NOW))).toEqual(['started - Haas VF-2: In alarm']);
       upgraded.queue({ channelId: 'slack', alertId: 2, message: alertMessage('started'), event: true }, NOW);
-      expect(upgraded.list({})).toHaveLength(2);
+      upgraded.queue({ channelId: 'slack', alertId: 3, message: alertMessage('started'), event: true }, NOW);
+      expect(upgraded.list({}).map(message => message.status)).toEqual(['waiting', 'grouped', 'waiting']);
+    });
+
+    it('holds a channel whose message failed in an older Chatter, so the next messages do not go past it', () => {
+      const failed = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markRetry(failed, 'ntfy answered 503.', NOW + 10 * MINUTE);
+      db.exec('DELETE FROM notification_channel_holds');
+      queue('phones', 2);
+
+      const upgraded = new Outbox(db, moreAlerts);
+
+      expect(upgraded.takeDue(NOW)).toEqual([]);
+      expect(upgraded.takeDue(NOW + 10 * MINUTE).map(entry => entry.id)).toEqual([failed]);
+    });
+
+    it('counts each event of an event message in the summary after a hold', () => {
+      const first = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markRetry(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      [2, 3, 4].forEach(alertId => queueEvent('phones', alertId, NOW + alertId * MINUTE));
+      [5, 6, 7, 8].forEach(alertId => queue('phones', alertId, alertMessage('started', `machine-${alertId}`), NOW + 10 * MINUTE));
+
+      expect(outbox.takeDue(NOW + 60 * MINUTE)[0].message.text).toBe(
+        'Chatter could not send 5 alerts while the channel was blocked: Program ended on Haas VF-2 (3), In alarm on Haas VF-2 (2). '
+        + 'Open Chatter to see them.',
+      );
     });
   });
 
