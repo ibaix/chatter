@@ -19,6 +19,8 @@ import {
   withLivePoint,
   fittedOverviewEnd,
   loadSpan,
+  compareLoad,
+  MOVE_LOAD_DELAY_MS,
   timeScale,
   zoomView,
 } from './historyChart';
@@ -321,5 +323,28 @@ describe('loadSpan', () => {
         expect(durationMs(query) / windowMs + 1).toBeLessThanOrEqual(5000);
       }
     }
+  });
+});
+
+describe('compareLoad', () => {
+  const [tenMinutes, oneHour] = CHART_RANGES;
+  const last = { key: 'm1 spindleSpeed', range: tenMinutes, end: 1_000 };
+
+  it('starts the first load at once, as a new key', () => {
+    expect(compareLoad(null, last)).toEqual({ isNewKey: true, delayMs: 0 });
+  });
+
+  it('waits when only the end changed, because the user moved in time', () => {
+    expect(compareLoad(last, { ...last, end: 2_000 })).toEqual({ isNewKey: false, delayMs: MOVE_LOAD_DELAY_MS });
+    expect(compareLoad(last, { ...last, end: null })).toEqual({ isNewKey: false, delayMs: MOVE_LOAD_DELAY_MS });
+  });
+
+  it('starts at once for a new range, or for the same load again (StrictMode)', () => {
+    expect(compareLoad(last, { ...last, range: oneHour, end: 2_000 })).toEqual({ isNewKey: false, delayMs: 0 });
+    expect(compareLoad(last, { ...last })).toEqual({ isNewKey: false, delayMs: 0 });
+  });
+
+  it('starts at once for a new machine or value', () => {
+    expect(compareLoad(last, { ...last, key: 'm2 spindleSpeed', end: 2_000 })).toEqual({ isNewKey: true, delayMs: 0 });
   });
 });

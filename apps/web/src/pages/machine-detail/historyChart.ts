@@ -14,6 +14,24 @@ export const CHART_CLOCK_TICK_MS = 5000;
  */
 export const MOVE_LOAD_DELAY_MS = 200;
 
+/** What a chart hook loaded last: its machine (and value), its range and its end */
+export interface ChartLoad {
+  key: string;
+  range: ChartRange;
+  end: number | null;
+}
+
+/**
+ * Compares a new load of a chart hook with the last one.
+ * When only the end changed, the user moved in time, so the load waits MOVE_LOAD_DELAY_MS: a quick series of
+ * moves then loads once. StrictMode runs an effect again with the same end, and that load does not wait.
+ */
+export function compareLoad(last: ChartLoad | null, next: ChartLoad): { isNewKey: boolean; delayMs: number } {
+  if (last === null || last.key !== next.key) return { isNewKey: true, delayMs: 0 };
+  const moved = last.range === next.range && last.end !== next.end;
+  return { isNewKey: false, delayMs: moved ? MOVE_LOAD_DELAY_MS : 0 };
+}
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
