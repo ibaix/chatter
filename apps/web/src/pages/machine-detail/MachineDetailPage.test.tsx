@@ -6,7 +6,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate, type NavigateFun
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchMachineAlerts, type MachineAlert } from '../../api/alerts';
 import { fetchAlertRules } from '../../api/alertRules';
-import { fetchFileTree, fetchUploadFiles, uploadMachineFiles } from '../../api/machineFiles';
+import { fetchFileTree, fetchUploadEvent, fetchUploadEvents, fetchUploadFiles, uploadMachineFiles } from '../../api/machineFiles';
 import { fetchValueHistory } from '../../api/history';
 import { fetchMachineReport } from '../../api/reports';
 import { fetchStateTimeline } from '../../api/stateTimeline';
@@ -25,6 +25,8 @@ vi.mock('../../api/machineFiles', async importOriginal => ({
   ...(await importOriginal<typeof import('../../api/machineFiles')>()),
   fetchFileTree: vi.fn(),
   fetchUploadFiles: vi.fn(),
+  fetchUploadEvents: vi.fn(),
+  fetchUploadEvent: vi.fn(),
   uploadMachineFiles: vi.fn(),
 }));
 // The chart has its own tests. Here it has no values.
@@ -111,6 +113,10 @@ describe('MachineDetailPage', () => {
     vi.mocked(fetchMachineReport).mockReset().mockReturnValue(new Promise(() => {}));
     vi.mocked(fetchFileTree).mockReset().mockResolvedValue([]);
     vi.mocked(fetchUploadFiles).mockReset().mockResolvedValue([]);
+    vi.mocked(fetchUploadEvents).mockReset().mockResolvedValue([
+      { id: 21, uploaded_at: '2026-11-19T10:00:00.000Z', remote_path: '/', target_name: null },
+    ]);
+    vi.mocked(fetchUploadEvent).mockReset().mockReturnValue(new Promise(() => {}));
     vi.mocked(uploadMachineFiles).mockReset().mockResolvedValue({ ok: true, result: { success: [{ filename: 'O1000.nc' }] } });
   });
 
@@ -347,6 +353,21 @@ describe('MachineDetailPage', () => {
 
       expect(screen.getByText('Send files to')).toBeInTheDocument();
       expect(screen.getAllByRole('button', { name: 'Send files' })).toHaveLength(1);
+    });
+
+    it.each([
+      ['an operator', 'operator' as Role, 1],
+      ['a viewer', 'viewer' as Role, 0],
+    ])('shows Send again in the upload history to %s only when the role can send files', async (_who, role, count) => {
+      vi.mocked(fetchUploadFiles).mockResolvedValue(SENT_FILES);
+      renderPage({ role, address: '/machine/m1?tab=files' });
+      fireEvent.click(await within(viewSwitch()).findByRole('button', { name: 'Upload history 2' }));
+      const o2000Row = screen.getByRole('cell', { name: 'O2000.nc' }).closest('tr') as HTMLElement;
+
+      expect(within(o2000Row).queryAllByRole('button', { name: 'Send again' })).toHaveLength(count);
+      fireEvent.click(within(o2000Row).getByRole('button', { name: 'Versions' }));
+      await screen.findByRole('list', { name: 'Versions of O2000.nc' });
+      expect(screen.queryAllByRole('button', { name: 'Send this version again' })).toHaveLength(count);
     });
 
     it('shows no Send files button to a viewer', async () => {
