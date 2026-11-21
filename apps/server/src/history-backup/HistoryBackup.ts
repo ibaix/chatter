@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import path from 'node:path';
 import { Readable, Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { pipeline as pipelineOf } from 'node:stream';
 import { createGunzip, createGzip } from 'node:zlib';
 import type { NewAlertRule } from '@local-chatter/shared';
 import { readTar, tarBytes, TarFormatError, type TarEntry } from '../archive/tar.js';
@@ -208,14 +209,22 @@ export class HistoryBackup {
     ];
     // The parts are gzip already, but gzip of the exported lines stays very repetitive (long runs of 0, and times
     // 2 seconds apart). A second gzip makes the file about 8 times smaller.
-    const source = Readable.from(tarBytes(entries, new Date(this.now()))).pipe(createGzip());
+    // Bytes go through only while the browser takes them. When it stops for IDLE_LIMIT_MS, the download stops.
     let idleTimer: NodeJS.Timeout | undefined;
     const restartIdle = () => {
       clearTimeout(idleTimer);
       idleTimer = setTimeout(() => source.destroy(new Error('The download stopped')), IDLE_LIMIT_MS);
       idleTimer.unref();
     };
-    source.on('data', restartIdle);
+    const watch = new Transform({
+      transform(piece: Buffer, _encoding, done: TransformCallback) {
+        restartIdle();
+        done(null, piece);
+      },
+    });
+    // pipeline() and not pipe(): when the download stops, each stage stops and closes its file
+    pipelineOf(Readable.from(tarBytes(entries, new Date(this.now()))), createGzip(), watch, () => {});
+    const source = watch;
     restartIdle();
     log.info('History backup downloaded', { machine: machineId, user });
     const stream = webStreamOf(source, () => {
@@ -281,6 +290,8 @@ export class HistoryBackup {
       throw new BackupRefusedError('This restore file is not ready. Upload the file again.', 404);
     }
     this.start('restore');
+    // The file must not expire while the restore runs
+    clearTimeout(pending.timer);
     try {
       const rules = options.alertRules ? await this.checkedRules(pending, target.id) : null;
       const samples = await this.importAllHistory(pending, target);
@@ -295,6 +306,8 @@ export class HistoryBackup {
       return { samples, periodsAdded: periods.added, periodsKnown: periods.known, alertRules: rules?.length ?? null };
     } catch (error) {
       log.error('History restore failed. The file stays, so the user can try again.', { machine: target.id, user, error });
+      pending.timer = setTimeout(() => void this.dropPending(id), WAIT_FOR_NEXT_STEP_MS);
+      pending.timer.unref();
       throw refusalOf(error);
     } finally {
       this.running = null;

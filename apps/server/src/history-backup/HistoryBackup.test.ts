@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import type { NewAlertRule } from '@local-chatter/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AlertRuleService } from '../alert-rules/AlertRuleService.js';
 import { captureLog } from '../logging/testSupport.js';
 import { StatePeriodStore } from '../recording/StatePeriodStore.js';
@@ -373,6 +373,27 @@ describe('HistoryBackup', () => {
       log.restore();
       expect(log.text('info')).toMatch(/History restored.*machine=brother_2.*user=boss/);
     });
+  });
+
+  it('deletes a prepared backup and a received file after 30 minutes with no next step, and frees the place', async () => {
+    const archive = await backUp();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const prepared = await backups.prepareBackup(source, ALL, 'admin');
+      const preview = await receive(archive).catch(() => null);
+      expect(preview).toBeNull();
+      vi.advanceTimersByTime(31 * 60_000);
+      await vi.waitFor(() => expect(filesLeft()).toEqual([]));
+      expect(() => backups.download(prepared.id, source.id, 'admin')).toThrow(BackupRefusedError);
+
+      const received = await receive(archive);
+      vi.advanceTimersByTime(31 * 60_000);
+      await vi.waitFor(() => expect(filesLeft()).toEqual([]));
+      await expect(backups.restore(received.id, target, { alertRules: false }, 'admin')).rejects.toMatchObject({ status: 404 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('deletes the files that a crash left, at the start', async () => {
