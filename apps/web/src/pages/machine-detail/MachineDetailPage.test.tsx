@@ -249,6 +249,19 @@ describe('MachineDetailPage', () => {
       expect(shownAddress).toBe(`/machine/m1?tab=settings#${rulesSection.id}`);
       await waitFor(() => expect(scrolledTo).toContain(rulesSection));
     });
+
+    it('scrolls to the alert rules again when they load, because the page is longer then', async () => {
+      let loadRules: (rules: AlertRule[]) => void = () => {};
+      vi.mocked(fetchAlertRules).mockReturnValue(new Promise(resolve => { loadRules = resolve; }));
+      renderPage({ address: '/machine/m1?tab=settings#settings-alert-rules' });
+      const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
+      await waitFor(() => expect(scrolledTo).toEqual([rulesSection]));
+
+      loadRules([OFFLINE_RULE]);
+
+      await screen.findByText(/Click a word in a rule to change it/);
+      expect(scrolledTo).toEqual([rulesSection, rulesSection]);
+    });
   });
 
   describe('the firing alerts', () => {

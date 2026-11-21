@@ -24,7 +24,7 @@ interface SettingsTabProps {
  */
 export function SettingsTab({ machine, machines, rules, onUpdate, onRemove }: SettingsTabProps) {
   const canManageMachines = useCan('manage-machines');
-  useScrollToSection();
+  useScrollToSection(!!rules.saved);
 
   const alertRules = (
     <SettingsSection id={SETTINGS_SECTION_IDS.alertRules} title="Alert rules">
@@ -52,12 +52,15 @@ export function SettingsTab({ machine, machines, rules, onUpdate, onRemove }: Se
   );
 }
 
-/** A link from another tab to `#<id>` opens the Settings tab. The browser does not scroll then, so this does it. */
-function useScrollToSection() {
+/**
+ * A link from another tab to `#<id>` opens the Settings tab. The browser does not scroll then, so this does it.
+ * It scrolls again when the alert rules load: before that, the page can be too short to bring the section to the top.
+ */
+function useScrollToSection(rulesLoaded: boolean) {
   const { hash } = useLocation();
   useEffect(() => {
     if (hash) document.getElementById(hash.slice(1))?.scrollIntoView({ block: 'start' });
-  }, [hash]);
+  }, [hash, rulesLoaded]);
 }
 
 function SettingsSection({ id, title, children }: { id: string; title: string; children: ReactNode }) {
