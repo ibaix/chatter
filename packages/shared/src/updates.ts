@@ -24,6 +24,21 @@ export function isBusy(state: UpdateState): boolean {
   return state === 'checking' || state === 'installing';
 }
 
+/**
+ * The step that a busy helper does now. The helper writes it in status.json (STEPS in update-chatter.sh).
+ * A check: copying, listing, signature, space, files, images.
+ * An install: verifying, backing-up, loading (with "part of parts": the image), starting, health.
+ * A helper from an older card image writes no step.
+ */
+export const UPDATE_STEPS = [
+  'copying', 'listing', 'signature', 'space', 'files', 'images',
+  'verifying', 'backing-up', 'loading', 'starting', 'health',
+] as const;
+export type UpdateStep = typeof UPDATE_STEPS[number];
+
+/** The most parts that a step can have. An update file has at most 3 images. */
+const STEP_PARTS_LIMIT = 999;
+
 /** The processor types that an update file can be for */
 export const UPDATE_ARCHES = ['amd64', 'arm64', 'armv7'] as const;
 export type UpdateArch = typeof UPDATE_ARCHES[number];
@@ -56,6 +71,13 @@ export interface UpdateStatus {
   freeBytes: number;
   /** After done: the space that the clean up gave back */
   freedBytes?: number;
+  /** While the helper works: the step that it does now */
+  step?: UpdateStep;
+  /** With a step: which part of the step (for example image 2 of 3) */
+  part?: number;
+  parts?: number;
+  /** While the helper works: the UTC time when this check or install started */
+  startedAt?: string;
 }
 
 /**
@@ -67,7 +89,10 @@ export interface HelperInfo {
   arch: UpdateArch;
 }
 
-/** Reads status.json. Gives null if the text is not a status that the helper could write. */
+/**
+ * Reads status.json. Gives null if the text is not a status that the helper could write.
+ * The step fields only help the page, so a step field that is not correct is dropped, and the status stays.
+ */
 export function parseUpdateStatus(text: string): UpdateStatus | null {
   const data = parseObject(text);
   if (!data) return null;
@@ -82,7 +107,22 @@ export function parseUpdateStatus(text: string): UpdateStatus | null {
     ...(isReleaseVersion(version) && { version }),
     ...(reason !== undefined && { reason }),
     ...(freedBytes !== undefined && { freedBytes }),
+    ...parseProgress(data),
   };
+}
+
+type ProgressFields = Pick<UpdateStatus, 'step' | 'part' | 'parts' | 'startedAt'>;
+
+/** The start time, the step, and its part only when the step is known and 1 <= part <= parts <= STEP_PARTS_LIMIT */
+function parseProgress({ step, part, parts, startedAt }: Record<string, unknown>): ProgressFields {
+  const start = isTime(startedAt) ? { startedAt } : {};
+  if (!isOneOf(step, UPDATE_STEPS)) return start;
+  if (!isPartCount(part) || !isPartCount(parts) || part > parts) return { ...start, step };
+  return { ...start, step, part, parts };
+}
+
+function isPartCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= STEP_PARTS_LIMIT;
 }
 
 /** Reads helper.json. Gives null if the text is not what the helper writes. */
