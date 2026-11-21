@@ -8,14 +8,13 @@ import { useShownItems } from '../../hooks/useShownItems';
 import { formatDateTime } from '../../utils/formatters';
 import { alertText, alertTone, splitFiring } from './alertList';
 import { SETTINGS_SECTION_IDS } from './SettingsTab';
-import { useMachineAlerts } from './useMachineAlerts';
+import type { MachineAlerts } from './useMachineAlerts';
 
 /** The list shows this many past alerts at first, and this many more for each click. The firing alerts always show. */
 export const PAST_ALERTS_PAGE_SIZE = 10;
 
-/** The alerts of the machine's alert rules (Settings › Alert rules), in the last week */
-export function AlertsPanel({ machineId }: { machineId: string }) {
-  const { alerts, loaded, failed } = useMachineAlerts(machineId);
+/** The alerts of the machine's alert rules (Settings › Alert rules), in the last week. The page loads them with useMachineAlerts. */
+export function AlertsPanel({ machineId, alerts: { alerts, loaded, failed } }: { machineId: string; alerts: MachineAlerts }) {
   const { firing, past } = splitFiring(alerts);
   const { shown: shownPast, total: pastCount, showMore } = useShownItems(past, PAST_ALERTS_PAGE_SIZE, machineId);
   const firingCount = firing.length;

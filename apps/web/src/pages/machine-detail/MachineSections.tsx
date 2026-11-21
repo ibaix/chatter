@@ -37,10 +37,12 @@ interface MachineSectionsProps {
   onRemove: () => Promise<void>;
   /** The live values, the chart and the alerts */
   dashboard: ReactNode;
+  /** The Dashboard tab shows this number of firing alerts */
+  firingCount: number;
 }
 
 /** The tabs under the machine name: the dashboard, the report, files, tool table and settings */
-export function MachineSections({ machine, machines, now, onUpdate, onRemove, dashboard }: MachineSectionsProps) {
+export function MachineSections({ machine, machines, now, onUpdate, onRemove, dashboard, firingCount }: MachineSectionsProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const openTab = searchParams.get(TAB_PARAM);
   const files = useMachineFiles(machine.id);
@@ -51,7 +53,7 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
   const toolCount = machine.connected && toolTable ? Object.keys(toolTable).length : 0;
 
   const tabs: TabItem<SectionId>[] = [
-    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'dashboard', label: <>Dashboard<FiringCount count={firingCount} /></> },
     { id: 'report', label: 'Report' },
     { id: 'files', label: 'Files' },
     ...(toolCount > 0 ? [{ id: 'tools' as const, label: 'Tool table', count: toolCount }] : []),
@@ -98,3 +100,13 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
   );
 }
 
+/** The number of firing alerts after the Dashboard tab name, in the alarm color. Nothing when no alert fires. */
+function FiringCount({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <span className="ml-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-alarm px-1.5 font-mono text-xs font-bold text-white">
+      {count}
+      <span className="sr-only"> {count === 1 ? 'alert' : 'alerts'} firing</span>
+    </span>
+  );
+}

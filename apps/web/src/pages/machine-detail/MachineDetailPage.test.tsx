@@ -3,7 +3,7 @@ import { Dialog } from '@toolpath/ui';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchMachineAlerts } from '../../api/alerts';
+import { fetchMachineAlerts, type MachineAlert } from '../../api/alerts';
 import { fetchAlertRules } from '../../api/alertRules';
 import { fetchFileTree, fetchUploadFiles } from '../../api/machineFiles';
 import { fetchMachineReport } from '../../api/reports';
@@ -60,6 +60,10 @@ const SENT_FILES = [
 const OFFLINE_RULE: AlertRule = {
   id: 'r1', kind: 'simple', enabled: true, subject: 'not-connected', check: 'above', limit: 0, forMinutes: 10, severity: 'warning',
 };
+
+function firingAlert(name: string): MachineAlert {
+  return { name, machineId: 'm1', labels: { severity: 'critical' }, annotations: {}, start: '2026-11-20T09:00:00.000Z', end: null, firing: true };
+}
 
 const tabNames = () => screen.getAllByRole('tab').map(tab => tab.textContent);
 const openPanel = () => screen.getByRole('tabpanel');
@@ -244,6 +248,46 @@ describe('MachineDetailPage', () => {
       const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
       expect(shownAddress).toBe(`/machine/m1?tab=settings#${rulesSection.id}`);
       await waitFor(() => expect(scrolledTo).toContain(rulesSection));
+    });
+  });
+
+  describe('the firing alerts', () => {
+    const header = () => screen.getByRole('heading', { level: 1, name: 'Mill 1' }).parentElement as HTMLElement;
+
+    it('shows a badge next to the machine name and a count on the Dashboard tab, from one load of the alerts', async () => {
+      vi.mocked(fetchMachineAlerts).mockResolvedValue([firingAlert('Spindle load'), firingAlert('Offline')]);
+      renderPage();
+
+      expect(await within(header()).findByRole('link', { name: '2 alerts firing' })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: 'Dashboard 2 alerts firing' })).toBeInTheDocument();
+      expect(screen.getByText('2 firing now')).toBeInTheDocument();
+      expect(fetchMachineAlerts).toHaveBeenCalledTimes(1);
+    });
+
+    it('says "1 alert firing" for one alert', async () => {
+      vi.mocked(fetchMachineAlerts).mockResolvedValue([firingAlert('Offline')]);
+      renderPage();
+
+      expect(await within(header()).findByRole('link', { name: '1 alert firing' })).toBeInTheDocument();
+    });
+
+    it('opens the Dashboard tab from the badge', async () => {
+      vi.mocked(fetchMachineAlerts).mockResolvedValue([firingAlert('Offline')]);
+      renderPage({ address: '/machine/m1?tab=report' });
+
+      fireEvent.click(await screen.findByRole('link', { name: '1 alert firing' }));
+
+      expect(screen.getByRole('tab', { name: /^Dashboard/ })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('region', { name: 'Alerts' })).toBeInTheDocument();
+    });
+
+    it('shows no badge and no count when no alert fires', async () => {
+      vi.mocked(fetchMachineAlerts).mockResolvedValue([{ ...firingAlert('Offline'), firing: false, end: '2026-11-20T09:05:00.000Z' }]);
+      renderPage();
+
+      await screen.findByText('Offline');
+      expect(screen.queryByRole('link', { name: /firing/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: 'Dashboard' })).toBeInTheDocument();
     });
   });
 });

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useNow } from '../../hooks/useNow';
 import { machineStateOf } from '../../machines/machineStatus';
 import { SUPPORTED_MACHINE_TYPES, type Machine, type MachineUpdate } from '../../types';
+import { splitFiring } from './alertList';
 import { AlertsPanel } from './AlertsPanel';
 import { chartChoicesFor, shownChartChoice, SPINDLE_SPEED, type ChartChoiceId } from './chartValues';
 import { CurrentJobPanel } from './CurrentJobPanel';
@@ -10,6 +11,7 @@ import { MachineHeader } from './MachineHeader';
 import { MachineNotice } from './MachineNotice';
 import { MachineSections } from './MachineSections';
 import MachineHistoryChart from './MachineHistoryChart';
+import { useMachineAlerts } from './useMachineAlerts';
 
 interface MachineDetailPageProps {
   machines: Machine[];
@@ -33,23 +35,40 @@ const KNOWN_TYPES: readonly string[] = SUPPORTED_MACHINE_TYPES;
 function MachineDetailPage({ machines, isLoaded, chatterIsLost = false, onRemove, onUpdate }: MachineDetailPageProps) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const now = useNow(CLOCK_TICK_MS);
-  // The page keeps the chart's value, because the Current job panel leaves that value out
-  const [chosenChartValue, setChosenChartValue] = useState<ChartChoiceId>(SPINDLE_SPEED.id);
   const machine = machines.find(candidate => candidate.id === id && KNOWN_TYPES.includes(candidate.type));
 
   if (!machine) return isLoaded ? <MachineNotFound /> : <p className="m-0 text-zinc-200">Loading the machine…</p>;
 
-  const state = machineStateOf(machine);
-  const chartChoices = chartChoicesFor(machine);
-  const chartChoice = shownChartChoice(chartChoices, chosenChartValue);
   const remove = async () => {
     if (await onRemove(machine.id)) navigate('/');
   };
 
+  return <MachineView machine={machine} machines={machines} chatterIsLost={chatterIsLost} onUpdate={onUpdate} onRemove={remove} />;
+}
+
+interface MachineViewProps {
+  machine: Machine;
+  machines: Machine[];
+  chatterIsLost: boolean;
+  onUpdate: (id: string, updates: MachineUpdate) => Promise<boolean>;
+  onRemove: () => Promise<void>;
+}
+
+/** The page of a machine that Chatter knows */
+function MachineView({ machine, machines, chatterIsLost, onUpdate, onRemove }: MachineViewProps) {
+  const now = useNow(CLOCK_TICK_MS);
+  // The page keeps the chart's value, because the Current job panel leaves that value out
+  const [chosenChartValue, setChosenChartValue] = useState<ChartChoiceId>(SPINDLE_SPEED.id);
+  // One load of the alerts for the badge, the Dashboard tab and the Alerts panel
+  const alerts = useMachineAlerts(machine.id);
+  const firingCount = splitFiring(alerts.alerts).firing.length;
+  const state = machineStateOf(machine);
+  const chartChoices = chartChoicesFor(machine);
+  const chartChoice = shownChartChoice(chartChoices, chosenChartValue);
+
   return (
     <>
-      <MachineHeader machine={machine} state={state} now={now} />
+      <MachineHeader machine={machine} state={state} now={now} firingCount={firingCount} />
       <MachineNotice machine={machine} state={state} now={now} chatterIsLost={chatterIsLost} />
       {/* A new key for each machine, so the files start again */}
       <MachineSections
@@ -58,7 +77,8 @@ function MachineDetailPage({ machines, isLoaded, chatterIsLost = false, onRemove
         machines={machines}
         now={now}
         onUpdate={onUpdate}
-        onRemove={remove}
+        onRemove={onRemove}
+        firingCount={firingCount}
         dashboard={
           <>
             <div className="flex flex-wrap items-stretch gap-5">
@@ -71,7 +91,7 @@ function MachineDetailPage({ machines, isLoaded, chatterIsLost = false, onRemove
                 className="flex-[2_1_28.75rem]"
               />
             </div>
-            <AlertsPanel machineId={machine.id} />
+            <AlertsPanel machineId={machine.id} alerts={alerts} />
           </>
         }
       />
