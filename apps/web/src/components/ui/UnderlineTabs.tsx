@@ -1,5 +1,5 @@
 import { cn } from '@toolpath/ui';
-import type { ReactNode } from 'react';
+import { useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { tabId, tabPanelId } from './tabPanel';
 
 export interface TabItem<T extends string> {
@@ -20,21 +20,56 @@ interface UnderlineTabsProps<T extends string> {
   className?: string;
 }
 
-/** Tabs with a green line under the open one. The page shows the open tab's content itself. */
+/** The tab that a key goes to, from the tab at `index`, or null for a key that does not move */
+function targetIndex(key: string, index: number, count: number): number | null {
+  switch (key) {
+    case 'ArrowRight':
+      return (index + 1) % count;
+    case 'ArrowLeft':
+      return (index - 1 + count) % count;
+    case 'Home':
+      return 0;
+    case 'End':
+      return count - 1;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Tabs with a green line under the open one. The page shows the open tab's content itself.
+ * The keyboard works as in the WAI-ARIA tabs pattern: the Tab key goes to the open tab only, and
+ * Left, Right, Home and End open another tab at once (automatic activation).
+ */
 export function UnderlineTabs<T extends string>({ label, tabs, value, onChange, idPrefix, className }: UnderlineTabsProps<T>) {
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+
+  const moveWithKey = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const target = targetIndex(event.key, index, tabs.length);
+    if (target === null) return;
+    event.preventDefault();
+    buttons.current[target]?.focus();
+    onChange(tabs[target].id);
+  };
+
   return (
     <div role="tablist" aria-label={label} className={cn('flex gap-1 overflow-x-auto border-b border-zinc-800', className)}>
-      {tabs.map(tab => {
+      {tabs.map((tab, index) => {
         const isOpen = tab.id === value;
         return (
           <button
             key={tab.id}
+            ref={button => {
+              buttons.current[index] = button;
+            }}
             type="button"
             role="tab"
             id={tabId(idPrefix, tab.id)}
             aria-selected={isOpen}
             aria-controls={tabPanelId(idPrefix)}
+            tabIndex={isOpen ? 0 : -1}
             onClick={() => onChange(tab.id)}
+            onKeyDown={event => moveWithKey(event, index)}
             className={cn(
               'min-h-12 border-0 border-b-2 bg-transparent px-3 font-bold whitespace-nowrap',
               isOpen ? 'border-primary text-zinc-50' : 'border-transparent text-zinc-200 hover:text-zinc-50',
