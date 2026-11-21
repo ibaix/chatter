@@ -39,6 +39,7 @@ function report(changes: Partial<UpdatesReport> = {}): UpdatesReport {
     isRequestPending: false,
     newest: { checkGitHub: true, version: null, error: null, checkedAt: null, isNewer: false },
     downloadError: null,
+    serverTime: new Date().toISOString(),
     ...changes,
   };
 }
@@ -221,7 +222,7 @@ describe('UpdatesTab', () => {
         .mockResolvedValueOnce(report({ version: '1.3.0', status: status('done', { freedBytes: 300 * MB }) }));
 
       await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
-      expect(screen.getByText('Installing version 1.3.0…')).toBeInTheDocument();
+      expect(screen.getByText(/^Chatter restarts…/)).toBeInTheDocument();
       await act(() => vi.advanceTimersByTimeAsync(POLL_MS));
 
       expect(screen.getByText('Version 1.3.0 is installed')).toBeInTheDocument();
@@ -239,6 +240,111 @@ describe('UpdatesTab', () => {
 
       expect(screen.getByText(title)).toBeInTheDocument();
       expect(screen.getByText('The signature is wrong.')).toBeInTheDocument();
+    });
+  });
+
+  describe('progress of a check or an install', () => {
+    /** The time of the browser. The clock of the Pi is 1 hour later, so a test fails if the page uses the browser clock. */
+    const BROWSER_NOW = Date.parse('2026-11-10T12:00:00.000Z');
+    const PI_CLOCK_AHEAD_MS = 60 * 60_000;
+    /** A time of the Pi clock, some seconds before the current time of the test */
+    const piTime = (secondsAgo = 0) => new Date(Date.now() + PI_CLOCK_AHEAD_MS - secondsAgo * 1000).toISOString();
+
+    const busyReport = (state: UpdateState, changes: Partial<UpdateStatus> = {}) => report({
+      serverTime: piTime(),
+      status: { state, version: '1.3.0', heartbeat: piTime(5), freeBytes: 1024 * MB, ...changes },
+    });
+
+    /** Renders with fake timers, so the test sets each second */
+    async function renderAt(loaded: UpdatesReport) {
+      vi.useFakeTimers({ now: BROWSER_NOW });
+      vi.mocked(fetchUpdatesReport).mockImplementation(async () => loaded);
+      renderUpdatesTab();
+      await act(() => vi.advanceTimersByTimeAsync(0));
+    }
+
+    /** Lets time go by. The server answers each poll with a new report from `next`. */
+    async function wait(ms: number, next?: () => UpdatesReport) {
+      if (next) vi.mocked(fetchUpdatesReport).mockImplementation(async () => next());
+      await act(() => vi.advanceTimersByTimeAsync(ms));
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('tells the step, the start, and the last sign of life of the helper, with the clock of the Pi', async () => {
+      await renderAt(busyReport('installing', { step: 'loading', part: 2, parts: 3, startedAt: piTime(3 * 60) }));
+
+      expect(screen.getByText('Installing version 1.3.0…')).toBeInTheDocument();
+      expect(screen.getByText('Now: the helper loads image 2 of 3.')).toBeInTheDocument();
+      expect(screen.getByText('Started 3 min ago.')).toBeInTheDocument();
+      expect(screen.getByText('Last sign of life: 5 s ago.')).toBeInTheDocument();
+      expect(screen.getByText('On a Pi, an install can take up to about 10 minutes.')).toBeInTheDocument();
+    });
+
+    it('counts on between the polls', async () => {
+      const loaded = busyReport('checking', { step: 'files', startedAt: piTime(59) });
+      await renderAt(loaded);
+      expect(screen.getByText('Started less than 1 min ago.')).toBeInTheDocument();
+      expect(screen.getByText('Now: the helper unpacks the files and examines their checksums.')).toBeInTheDocument();
+      expect(screen.getByText('On a Pi, a check can take up to about 10 minutes.')).toBeInTheDocument();
+
+      await wait(2000, () => loaded);
+
+      expect(screen.getByText('Started 1 min ago.')).toBeInTheDocument();
+      expect(screen.getByText('Last sign of life: 7 s ago.')).toBeInTheDocument();
+    });
+
+    it('counts from the first status that the page saw when the helper gives no start time (an old card)', async () => {
+      await renderAt(busyReport('checking'));
+      expect(screen.getByText('Started less than 1 min ago.')).toBeInTheDocument();
+      expect(screen.queryByText(/^Now:/)).not.toBeInTheDocument();
+
+      await wait(2 * 60_000, () => busyReport('checking'));
+
+      expect(screen.getByText('Started 2 min ago.')).toBeInTheDocument();
+      expect(screen.getByText('Last sign of life: 5 s ago.')).toBeInTheDocument();
+    });
+
+    it('says that Chatter restarts while it does not answer during an install, then shows the result', async () => {
+      await renderAt(busyReport('installing', { step: 'backing-up', startedAt: piTime(60) }));
+
+      await wait(POLL_MS, () => {
+        throw new Error('Chatter is not there');
+      });
+      expect(screen.getByText('Chatter restarts… 1 min')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+      await wait(4 * 60_000);
+      expect(screen.getByText('Chatter restarts… 5 min')).toBeInTheDocument();
+
+      await wait(POLL_MS, () => report({ version: '1.3.0', status: { state: 'done', version: '1.3.0', heartbeat: piTime(), freeBytes: 0 } }));
+      expect(screen.getByText('Version 1.3.0 is installed')).toBeInTheDocument();
+    });
+
+    it('tells what to do when Chatter does not come back in 20 minutes', async () => {
+      await renderAt(busyReport('installing'));
+
+      await wait(POLL_MS, () => {
+        throw new Error('Chatter is not there');
+      });
+      expect(screen.queryByText('Chatter did not come back in 20 minutes')).not.toBeInTheDocument();
+      await wait(20 * 60_000);
+
+      expect(screen.getByText('Chatter did not come back in 20 minutes')).toBeInTheDocument();
+      expect(screen.getByText('journalctl -u chatter-update')).toBeInTheDocument();
+    });
+
+    it('shows no restart message when Chatter does not answer during a check', async () => {
+      await renderAt(busyReport('checking'));
+
+      await wait(POLL_MS, () => {
+        throw new Error('no network');
+      });
+
+      expect(screen.queryByText(/^Chatter restarts/)).not.toBeInTheDocument();
+      expect(screen.getByText('Checking the update file…')).toBeInTheDocument();
     });
   });
 
