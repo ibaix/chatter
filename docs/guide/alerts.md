@@ -116,18 +116,31 @@ When no alert fires, the badge and the number do not show.
 The **Alerts** panel is in the **Dashboard** tab. It shows the alerts of the last 7 days. The alerts that fire now come first, with **Firing now**.
 The panel always shows all the alerts that fire now.
 It shows the newest 10 past alerts. To see 10 more, click **Show more** at the bottom of the list.
-While the page is open, Chatter loads the alerts again every 30 seconds.
+While the page is open, Chatter loads the alerts again every 15 seconds.
 
 ![The Alerts panel: an alert that fires now](../images/chatter-alert-firing.png)
 
 - The text under the alert name tells the value, for example "Spindle load is 94%".
 - A critical alert has a red dot. A warning has a yellow dot.
-- When you remove a rule or turn it off, its alert stops.
+- When you remove a rule or turn it off, its alert stops. Its alert ends 4 minutes after the last check (see [When an alert ends](#when-an-alert-ends)).
 
 Chatter keeps each alert for 1 year after it ends, in `chatter.db`.
 To get a text message, a Slack message, or a message through Apprise when an alert starts and ends, see [Notifications](./notifications.md).
 
 To read the alerts from a program, see [`GET /api/alerts`](../api/history.md#alerts).
+
+## When an alert ends
+
+vmalert checks each rule every 15 seconds, on the values of 30 seconds ago. While the rule is true, vmalert sends the alert to Chatter again at each check.
+When the rule is not true at a check, vmalert tells Chatter that the alert ended. Chatter shows the end at once, and sends the **OK** message.
+So one check that is not true ends the alert, also when the machine changes back at the next check. Then the alert starts again, and you get a new start message.
+
+Sometimes Chatter does not get the end from vmalert, for example while Chatter restarts:
+
+- Chatter reads the alerts of vmalert when it starts, and every 2 minutes. An alert that vmalert does not have any more ends then.
+- An alert that vmalert does not send for more than 4 minutes ends. This is 1 minute from the last send, and 3 more minutes, because a send can come late.
+- During the first 2 minutes after a start, no alert ends in this way. Chatter was off, so vmalert could not send.
+- After a restart of vmalert, it sends a firing alert again with a new start time. Chatter keeps it as the same alert, and sends no second start message.
 
 ## How it works
 
