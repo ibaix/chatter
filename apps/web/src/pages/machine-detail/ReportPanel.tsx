@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type Dispatch, type SetStateAction } from 'react';
 import type { MachineReport } from '../../api/reports';
 import { Panel } from '../../components/ui/Panel';
 import { RangeButtons } from '../../components/ui/RangeButtons';
@@ -9,7 +9,7 @@ import type { Machine } from '../../types';
 import { formatDuration, formatShare } from './reportView';
 import { useMachineReport } from './useMachineReport';
 
-interface ReportRange {
+export interface ReportRange {
   id: string;
   /** The words after "in the last" */
   words: string;
@@ -24,9 +24,23 @@ const REPORT_RANGES: ReportRange[] = [
   { id: '30d', words: '30 days', query: '-30d' },
 ];
 
+/** The range of a new report: 24 hours */
+export const FIRST_REPORT_RANGE = REPORT_RANGES[1];
+
+/** A report range that a parent keeps (from useState), so the range stays while the report is not on the page */
+export type KeptReportRange = [ReportRange, Dispatch<SetStateAction<ReportRange>>];
+
+interface ReportPanelProps {
+  machineId: string;
+  machineType: Machine['type'];
+  /** Without it, the panel keeps the range itself, and loses it when it leaves the page */
+  range?: KeptReportRange;
+}
+
 /** How long the machine ran and was online, the parts it made, and its alarms, in the last 8 hours to 30 days */
-export function ReportPanel({ machineId, machineType }: { machineId: string; machineType: Machine['type'] }) {
-  const [range, setRange] = useState(REPORT_RANGES[1]);
+export function ReportPanel({ machineId, machineType, range: keptRange }: ReportPanelProps) {
+  const ownRange = useState(FIRST_REPORT_RANGE);
+  const [range, setRange] = keptRange ?? ownRange;
   const { report, failed } = useMachineReport(machineId, range.query);
 
   return (

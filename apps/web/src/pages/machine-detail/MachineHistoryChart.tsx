@@ -30,7 +30,7 @@ import { StateChart } from './StateChart';
 import { liveStateOf, segmentAt, type StateSegment } from './stateTimeline';
 import { useChartDrag } from './useChartDrag';
 import { useChartHistory } from './useChartHistory';
-import { useChartClock, useChartView } from './useChartView';
+import { useChartClock, useChartView, type KeptChartView } from './useChartView';
 import { useStateTimeline } from './useStateTimeline';
 
 const MARGIN = { top: 12, right: 16, bottom: 38, left: 52 };
@@ -64,13 +64,15 @@ interface MachineHistoryChartProps {
   /** The choice that the chart shows */
   choice: ChartChoice;
   onChoose: (id: ChartChoiceId) => void;
+  /** The time in the chart, kept by the page, so it stays when the user opens another tab and comes back */
+  view?: KeptChartView;
   className?: string;
 }
 
 /** One machine value, or the machine state, over time, with a menu for the value and buttons for the time range */
-function MachineHistoryChart({ machine, choices, choice, onChoose, className }: MachineHistoryChartProps) {
+function MachineHistoryChart({ machine, choices, choice, onChoose, view: keptView, className }: MachineHistoryChartProps) {
   const clockNow = useChartClock(machine);
-  const { view, pick, moveBy, pan, showNow, zoomTo, clearZoom, zoomed } = useChartView(clockNow);
+  const { view, pick, moveBy, pan, showNow, zoomTo, clearZoom, zoomed } = useChartView(clockNow, keptView);
   const { range, end } = view;
   const isStateChart = choice.id === MACHINE_STATE.id;
   const drag = useChartDrag({ rangeMs: range.ms, end, now: clockNow, margins: isStateChart ? 0 : MARGIN.left + MARGIN.right, onMove: moveBy });

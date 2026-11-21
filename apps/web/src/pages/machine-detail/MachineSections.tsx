@@ -1,11 +1,11 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { tabPanelProps } from '../../components/ui/tabPanel';
 import { UnderlineTabs, type TabItem } from '../../components/ui/UnderlineTabs';
 import type { Machine, MachineUpdate, ToolTable } from '../../types';
 import { FilesSection } from './FilesSection';
 import { FIRST_TAB, TAB_PARAM, type SectionId } from './machineTabs';
-import { ReportPanel } from './ReportPanel';
+import { FIRST_REPORT_RANGE, ReportPanel } from './ReportPanel';
 import { SettingsTab } from './SettingsTab';
 import { ToolTableTab } from './ToolTableTab';
 import { useAlertRules } from './useAlertRules';
@@ -46,6 +46,8 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
   const history = useUploadHistory(machine.id);
   const messages = useUploadMessages();
   const alertRules = useAlertRules(machine.id);
+  // The range of the report stays when the user opens another tab and comes back
+  const reportRange = useState(FIRST_REPORT_RANGE);
   const { toolTable, hasPocketInfo } = toolTableOf(machine);
   const toolCount = machine.connected && toolTable ? Object.keys(toolTable).length : 0;
 
@@ -74,7 +76,7 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
       <UnderlineTabs label="Machine sections" tabs={tabs} value={shownTab} onChange={openTabNamed} idPrefix={ID_PREFIX} />
       <div {...tabPanelProps(ID_PREFIX, shownTab)} className="flex flex-col gap-5">
         {shownTab === 'dashboard' && dashboard}
-        {shownTab === 'report' && <ReportPanel machineId={machine.id} machineType={machine.type} />}
+        {shownTab === 'report' && <ReportPanel machineId={machine.id} machineType={machine.type} range={reportRange} />}
         {CARD_TABS.includes(shownTab) && (
           <div className="rounded-xl border border-zinc-800 bg-zinc-900">
             {shownTab === 'files' && (

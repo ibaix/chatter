@@ -12,6 +12,7 @@ import { MachineNotice } from './MachineNotice';
 import { MachineSections } from './MachineSections';
 import MachineHistoryChart from './MachineHistoryChart';
 import { useMachineAlerts } from './useMachineAlerts';
+import { firstChartView } from './useChartView';
 
 interface MachineDetailPageProps {
   machines: Machine[];
@@ -60,6 +61,8 @@ function MachineView({ machine, machines, chatterIsLost, onUpdate, onRemove }: M
   const now = useNow(CLOCK_TICK_MS);
   // The page keeps the chart's value, because the Current job panel leaves that value out
   const [chosenChartValue, setChosenChartValue] = useState<ChartChoiceId>(SPINDLE_SPEED.id);
+  // The page also keeps the time in the chart, so it stays when the user opens another tab and comes back
+  const chartView = useState(firstChartView);
   // One load of the alerts for the badge, the Dashboard tab and the Alerts panel
   const alerts = useMachineAlerts(machine.id);
   const firingCount = splitFiring(alerts.alerts).firing.length;
@@ -87,6 +90,7 @@ function MachineView({ machine, machines, chatterIsLost, onUpdate, onRemove }: M
                 choices={chartChoices}
                 choice={chartChoice}
                 onChoose={setChosenChartValue}
+                view={chartView}
                 className="flex-[2_1_28.75rem]"
               />
             </div>

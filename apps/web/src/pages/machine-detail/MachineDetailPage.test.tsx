@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchMachineAlerts, type MachineAlert } from '../../api/alerts';
 import { fetchAlertRules } from '../../api/alertRules';
 import { fetchFileTree, fetchUploadFiles, uploadMachineFiles } from '../../api/machineFiles';
+import { fetchValueHistory } from '../../api/history';
 import { fetchMachineReport } from '../../api/reports';
+import { fetchStateTimeline } from '../../api/stateTimeline';
 import { CurrentUserContext } from '../../components/CurrentUser';
 import { testMachine } from '../../test/testMachine';
 import type { FTPTreeNode, Machine } from '../../types';
@@ -25,8 +27,9 @@ vi.mock('../../api/machineFiles', async importOriginal => ({
   fetchUploadFiles: vi.fn(),
   uploadMachineFiles: vi.fn(),
 }));
-// The chart has its own tests. Here it is only a mark on the page.
-vi.mock('./MachineHistoryChart', () => ({ default: () => <section aria-label="History chart" /> }));
+// The chart has its own tests. Here it has no values.
+vi.mock('../../api/history', () => ({ fetchValueHistory: vi.fn() }));
+vi.mock('../../api/stateTimeline', () => ({ fetchStateTimeline: vi.fn() }));
 /** Each render of the header: the machine and its count of firing alerts */
 const headerRenders: { machineId: string; firingCount: number }[] = [];
 vi.mock('./MachineHeader', async importOriginal => {
@@ -97,6 +100,13 @@ describe('MachineDetailPage', () => {
   beforeEach(() => {
     vi.mocked(fetchMachineAlerts).mockReset().mockResolvedValue([]);
     headerRenders.length = 0;
+    vi.mocked(fetchValueHistory).mockReset().mockResolvedValue({ points: [], window: '5s' });
+    vi.mocked(fetchStateTimeline).mockReset().mockResolvedValue([]);
+    // The chart measures its box, and jsdom has no ResizeObserver
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      disconnect() {}
+    });
     vi.mocked(fetchAlertRules).mockReset().mockResolvedValue([]);
     vi.mocked(fetchMachineReport).mockReset().mockReturnValue(new Promise(() => {}));
     vi.mocked(fetchFileTree).mockReset().mockResolvedValue([]);
@@ -122,7 +132,7 @@ describe('MachineDetailPage', () => {
       const panel = openPanel();
       expect(panel).toHaveAttribute('aria-labelledby', screen.getByRole('tab', { name: 'Dashboard' }).id);
       expect(within(panel).getByRole('region', { name: 'Current job' })).toBeInTheDocument();
-      expect(within(panel).getByRole('region', { name: 'History chart' })).toBeInTheDocument();
+      expect(within(panel).getByRole('region', { name: 'Spindle speed chart' })).toBeInTheDocument();
       expect(within(panel).getByRole('region', { name: 'Alerts' })).toBeInTheDocument();
       expect(within(panel).queryByRole('region', { name: 'Report' })).not.toBeInTheDocument();
     });
@@ -212,6 +222,54 @@ describe('MachineDetailPage', () => {
       go('/machine/m2?tab=files');
 
       expect(screen.getByRole('button', { name: 'On the machine' })).toHaveAttribute('aria-pressed', 'true');
+    });
+  });
+
+  describe('the state of the tabs', () => {
+    const pressed = (group: string) =>
+      within(screen.getByRole('group', { name: group })).getAllByRole('button').find(button => button.getAttribute('aria-pressed') === 'true')?.textContent;
+    const chart = () => screen.getByRole('region', { name: 'Spindle speed chart' });
+
+    it('keeps the time range of the chart when the user opens another tab and comes back', () => {
+      renderPage();
+      fireEvent.click(within(within(chart()).getByRole('group', { name: 'Time range' })).getByRole('button', { name: '7d' }));
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Dashboard' }));
+
+      expect(within(chart()).getByRole('button', { name: '7d' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('keeps the time of the chart after a move back in time', () => {
+      renderPage();
+      fireEvent.click(within(chart()).getByRole('button', { name: 'Earlier' }));
+      const movedText = within(chart()).getByText(/from .* to /, { selector: 'span' }).textContent;
+      expect(within(chart()).getByRole('button', { name: 'Now' })).toBeEnabled();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Report' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Dashboard' }));
+
+      expect(within(chart()).getByRole('button', { name: 'Now' })).toBeEnabled();
+      expect(within(chart()).getByText(/from .* to /, { selector: 'span' }).textContent).toBe(movedText);
+    });
+
+    it('keeps the time range of the report when the user opens another tab and comes back', () => {
+      renderPage({ address: '/machine/m1?tab=report' });
+      fireEvent.click(within(screen.getByRole('region', { name: 'Report' })).getByRole('button', { name: '7d' }));
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Report' }));
+
+      expect(pressed('Time range')).toBe('7d');
+    });
+
+    it('starts the chart and the report again for the next machine', () => {
+      renderPage({ address: '/machine/m1?tab=report', machines: [testMachine(), testMachine({ id: 'm2', name: 'Mill 2' })] });
+      fireEvent.click(screen.getByRole('button', { name: '7d' }));
+
+      go('/machine/m2?tab=report');
+
+      expect(pressed('Time range')).toBe('24h');
     });
   });
 
