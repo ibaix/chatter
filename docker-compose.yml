@@ -54,6 +54,10 @@ services:
       - "-storageDataPath=/storage"
       # Keep the machine history for 1 year, then delete it.
       - "-retentionPeriod=1y"
+      # A series keeps one sample for each millisecond. So a history restore that runs two times
+      # (Settings tab of a machine > Advanced) does not double the samples. Chatter writes one sample
+      # for each time anyway, so this does not change the normal history.
+      - "-dedup.minScrapeInterval=1ms"
       # The most memory its caches can use. Small, for a Raspberry Pi with 512 MB.
       # On a Pi Zero 2 W with 4 machines, VictoriaMetrics used about 45 MB (see docs/install/raspberry-pi.md, "Memory on a Pi").
       - "-memory.allowedPercent=30"

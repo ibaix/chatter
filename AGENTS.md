@@ -38,6 +38,7 @@ npm test
 - **Update helper:** on the Pi, Chatter only writes a request file. The helper outside Docker installs only a signed, newer update and trusts nothing from Chatter. Keep that boundary (see [docs/security.md](docs/security.md#updates-on-the-pi-card)).
 - **User data:** Docker Compose takes the project name from the folder name `chatter` (`tools/release/make-docker-package.sh` zips that folder, and the Pi uses `/opt/chatter`). So the volumes are `chatter_chatterbox-data` and `chatter_victoriametrics-data`. Keep the folder name and the volume names in `docker-compose.yml`, or an update cannot find the user's data.
 - **Doc links in released apps:** older app versions link to `guide/update#back-up` and `guide/manage`. Keep these pages and anchors.
+- **History restore:** keep `-dedup.minScrapeInterval=1ms` for VictoriaMetrics in `docker-compose.yml`. Without it, a second restore of a machine history doubles its samples.
 - **Closed ports:** VictoriaMetrics, vmalert and the alert port 3002 have no login. Keep them unpublished in `docker-compose.yml`.
 
 The tests in `tools/guardrails` check some of these rules. If one fails, fix the change, not the test.
