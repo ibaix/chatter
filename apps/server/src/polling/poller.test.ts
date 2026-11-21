@@ -309,6 +309,29 @@ describe('HardwarePoller', () => {
 
   });
 
+  describe('syncTools', () => {
+    it('asks the Brother to read its tools, and sends the new status to the screens', async () => {
+      const machine = await addSpeedio();
+      const toolSync = { lastSyncAt: '2026-11-21T08:00:00.000Z', lastAttemptAt: '2026-11-21T08:00:00.000Z', error: null, running: false };
+      vi.spyOn(BrotherConnector.prototype, 'requestToolSync').mockResolvedValue({ outcome: 'synced', toolSync });
+      const updates = vi.fn();
+      poller.on('update', updates);
+
+      expect(await poller.syncTools(machine.id)).toEqual({ outcome: 'synced', toolSync });
+      expect(updates).toHaveBeenCalled();
+    });
+
+    it('gives not-found for a machine that is not there', async () => {
+      expect(await poller.syncTools('non-existent')).toEqual({ outcome: 'not-found' });
+    });
+
+    it('gives not-supported for a machine that is not a Brother', async () => {
+      const machine = await addRobodrill();
+
+      expect(await poller.syncTools(machine.id)).toEqual({ outcome: 'not-supported' });
+    });
+  });
+
   describe('removeMachine with a Brother machine', () => {
     it('removes machine from map', async () => {
       const machine = await addSpeedio();
