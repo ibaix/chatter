@@ -31,3 +31,6 @@ apps/server/*.log
 
 # Coverage reports (npm run coverage)
 coverage/
+
+# Reports of the code checks (jscpd)
+.quality/
