@@ -72,7 +72,7 @@ Sort each problem into one group:
 ## 4. Report
 
 1. **Checks:** the table of `npm run quality`, with each `✗` and `⊘` explained in one line.
-2. **Findings**, Blocker first. For each: `file:line`, the problem, the evidence (the tool and rule, or the input that breaks it), and the fix in one or two sentences.
+2. **Findings**, Blocker first. For each: `file:line`, the problem, the evidence (the tool and rule, or the input that breaks it), and the fix in one or two sentences. Give each line number from the file as it is now (`file:line` that an editor can open). Do not use the line numbers of the diff output.
 3. **Guardrails:** one line for each guardrail that the change touches: kept, or broken.
 4. **Signals:** lint warnings and unused code in the scope, as numbers. Say plainly that these are not tasks.
 5. If the change has code with no test, say so in one line, and point to `/chatter-review-testing`.

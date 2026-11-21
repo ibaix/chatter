@@ -81,9 +81,11 @@ Coverage is a signal, not a gate. Do not ask for a test only to make the number 
 
 ## 4. Report
 
+Give each line number from the file as it is now (`file:line` that an editor can open). Do not use the line numbers of the diff output.
+
 1. **Checks:** the table of `npm run quality -- --coverage`.
 2. **Changed lines with no test:** the table from `.quality/coverage-changed.log`, only the rows with lines that hold logic.
-3. **Findings**, Blocker first. For each: the file, the problem, and **the test to write**, for example "in `FTPClient.test.ts`, assert that `list()` keeps the first error as `cause` when the server closes the connection".
+3. **Findings**, Blocker first. For each: the `file:line`, the problem, and **the test to write**, for example "in `FTPClient.test.ts`, assert that `list()` keeps the first error as `cause` when the server closes the connection".
 4. **Signals:** the coverage of each workspace from `.quality/coverage-summary.log`. Say plainly that these are not tasks.
 
 If the tests are good, say so in one sentence. Do not look for problems to fill the report.
