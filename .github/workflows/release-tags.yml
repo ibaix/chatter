@@ -1,0 +1,66 @@
+# Gives the image of a release the moving tags latest and X.Y when the release becomes public.
+#
+# A pre-release gets only its own tag X.Y.Z (see docker.yml), so a test build does not reach the users who pull
+# latest. When the release is made public, for example with
+#   gh release edit v1.7.0 --prerelease=false --latest
+# this workflow points latest and 1.7 at the image that was tested. It builds nothing.
+# tools/release/moving-tags.sh decides the tags, so an old release never moves latest back.
+
+name: Release image tags
+
+on:
+  release:
+    types: [released]
+  # To give the tags again by hand: Actions > Release image tags > Run workflow
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The release tag, for example v1.7.0'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  tags:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Give the moving tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          image=ghcr.io/toolpath/chatter
+          version="${TAG#v}"
+          # This also refuses a tag that is not a release tag, such as v1.7.0-rc1
+          tags="$(tools/release/moving-tags.sh "$TAG")"
+          # A release that is made public at once has no image yet: docker.yml publishes it, with its tags
+          if ! docker buildx imagetools inspect "$image:$version" > /dev/null 2>&1; then
+            echo "::notice::$image:$version is not published yet. docker.yml gives its tags."
+            exit 0
+          fi
+          if [ -z "$tags" ]; then
+            echo "::notice::$TAG is older than another public release, so it gets no moving tag."
+            exit 0
+          fi
+          for tag in $tags; do
+            docker buildx imagetools create --tag "$image:$tag" "$image:$version"
+            echo "$image:$tag -> $version"
+          done
