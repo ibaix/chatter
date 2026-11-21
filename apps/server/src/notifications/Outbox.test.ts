@@ -126,6 +126,56 @@ describe('Outbox', () => {
     expect(texts(outbox.takeDue(NOW))).toEqual(['ended - Haas VF-2: In alarm']);
   });
 
+  describe('the hold of a channel', () => {
+    it('holds the channel after a failed message, until the time of the hold, and not the other channels', () => {
+      const id = queue('phones', 1);
+      outbox.takeDue(NOW);
+
+      outbox.markFailed(id, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      queue('phones', 2);
+      queue('slack', 3);
+
+      expect(outbox.takeDue(NOW).map(entry => entry.channelId)).toEqual(['slack']);
+      expect(outbox.takeDue(NOW + 60 * MINUTE).map(entry => entry.channelId)).toEqual(['phones']);
+    });
+
+    it('keeps the longer hold when a shorter one comes', () => {
+      const first = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markFailed(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      const second = queue('phones', 2);
+      outbox.takeDue(NOW + 60 * MINUTE);
+
+      outbox.markRetry(second, 'ntfy answered 503.', NOW + 61 * MINUTE);
+      outbox.markFailed(second, 'ntfy answered 503.', NOW + 30 * MINUTE);
+      queue('phones', 3);
+
+      expect(outbox.takeDue(NOW + 61 * MINUTE - 1)).toEqual([]);
+      expect(outbox.takeDue(NOW + 61 * MINUTE)).toHaveLength(1);
+    });
+
+    it('ends the hold when a message to the channel goes, for example a test', () => {
+      const id = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markFailed(id, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      queue('phones', 2);
+
+      outbox.keepTestResult('phones', { ...moreAlerts(0), kind: 'test', text: 'Test from Chatter.' }, { ok: true, detail: 'ntfy sent it' }, NOW);
+
+      expect(outbox.takeDue(NOW)).toHaveLength(1);
+    });
+
+    it('ends the hold of a removed channel', () => {
+      const id = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markFailed(id, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+
+      outbox.removeChannel('phones');
+
+      expect(db.prepare('SELECT COUNT(*) AS count FROM notification_channel_holds').get()).toEqual({ count: 0 });
+    });
+  });
+
   it('gives a message again after a restart, when Chatter stopped while it was sending the message', () => {
     const id = queue('phones', 1);
     outbox.takeDue(NOW);

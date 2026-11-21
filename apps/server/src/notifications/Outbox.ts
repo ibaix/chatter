@@ -96,6 +96,10 @@ export class Outbox implements MachineRemovalListener {
         sent_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS notification_messages_channel ON notification_messages (channel_id, status);
+      CREATE TABLE IF NOT EXISTS notification_channel_holds (
+        channel_id TEXT PRIMARY KEY,
+        until INTEGER NOT NULL
+      );
     `);
     // A table of an older Chatter has no event column
     const columns = db.pragma('table_info(notification_messages)') as { name: string }[];
@@ -171,22 +175,39 @@ export class Outbox implements MachineRemovalListener {
 
   // Each result ends one try. Nothing changes when the message was deleted while it was being sent.
 
+  /** The channel works again, so its hold ends */
   markSent(id: number, detail: string, now: number): void {
-    this.db.prepare(`
-      UPDATE notification_messages SET status = 'sent', detail = ?, sent_at = ?, attempts = attempts + 1, sending = 0 WHERE id = ?
-    `).run(detail, now, id);
+    this.db.transaction(() => {
+      this.db.prepare(`
+        UPDATE notification_messages SET status = 'sent', detail = ?, sent_at = ?, attempts = attempts + 1, sending = 0 WHERE id = ?
+      `).run(detail, now, id);
+      this.db.prepare(`
+        DELETE FROM notification_channel_holds WHERE channel_id = (SELECT channel_id FROM notification_messages WHERE id = ?)
+      `).run(id);
+    })();
   }
 
+  /** The message waits until `nextTryAt`, and the whole channel too, so no other message goes to a service that refused one */
   markRetry(id: number, error: string, nextTryAt: number): void {
-    this.db.prepare(`
-      UPDATE notification_messages SET last_error = ?, next_try_at = ?, attempts = attempts + 1, sending = 0 WHERE id = ?
-    `).run(error, nextTryAt, id);
+    this.db.transaction(() => {
+      this.db.prepare(`
+        UPDATE notification_messages SET last_error = ?, next_try_at = ?, attempts = attempts + 1, sending = 0 WHERE id = ?
+      `).run(error, nextTryAt, id);
+      this.holdChannelOf(id, nextTryAt);
+    })();
   }
 
-  markFailed(id: number, error: string): void {
-    this.db.prepare(`
-      UPDATE notification_messages SET status = 'failed', last_error = ?, attempts = attempts + 1, sending = 0 WHERE id = ?
-    `).run(error, id);
+  /**
+   * With `holdUntil`, the channel gets no message until then. For example, the service asked for a wait
+   * that ends after the 24 hours of this message, so the message fails, but the next message must wait too.
+   */
+  markFailed(id: number, error: string, holdUntil?: number): void {
+    this.db.transaction(() => {
+      this.db.prepare(`
+        UPDATE notification_messages SET status = 'failed', last_error = ?, attempts = attempts + 1, sending = 0 WHERE id = ?
+      `).run(error, id);
+      if (holdUntil !== undefined) this.holdChannelOf(id, holdUntil);
+    })();
   }
 
   /**
@@ -213,6 +234,7 @@ export class Outbox implements MachineRemovalListener {
   /** The finished messages stay in the list */
   removeChannel(channelId: string): void {
     this.db.prepare("DELETE FROM notification_messages WHERE channel_id = ? AND status = 'waiting'").run(channelId);
+    this.db.prepare('DELETE FROM notification_channel_holds WHERE channel_id = ?').run(channelId);
   }
 
   removeMachine(machineId: string): void {
@@ -229,18 +251,28 @@ export class Outbox implements MachineRemovalListener {
     return rows.map(toNotificationMessage);
   }
 
+  /** A new hold never makes a longer hold of the channel shorter */
+  private holdChannelOf(messageId: number, until: number): void {
+    this.db.prepare(`
+      INSERT INTO notification_channel_holds (channel_id, until)
+      SELECT channel_id, ? FROM notification_messages WHERE id = ?
+      ON CONFLICT (channel_id) DO UPDATE SET until = MAX(until, excluded.until)
+    `).run(until, messageId);
+  }
+
   /**
-   * The first waiting message of each channel that has no message being sent, when its time came.
+   * The first waiting message of each channel that has no message being sent and is not held, when its time came.
    * An event message can go past the head (see headOrMoreMessage), so the check is for each message of the channel.
    */
   private dueHeads(now: number): MessageRow[] {
     return this.db.prepare(`
       SELECT * FROM notification_messages
       WHERE id IN (SELECT MIN(id) FROM notification_messages WHERE status = 'waiting' GROUP BY channel_id)
-        AND next_try_at <= ?
+        AND next_try_at <= @now
         AND channel_id NOT IN (SELECT channel_id FROM notification_messages WHERE sending = 1)
+        AND channel_id NOT IN (SELECT channel_id FROM notification_channel_holds WHERE until > @now)
       ORDER BY id
-    `).all(now) as MessageRow[];
+    `).all({ now }) as MessageRow[];
   }
 
   /**

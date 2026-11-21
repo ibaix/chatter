@@ -5,7 +5,7 @@ import { configureLogging } from '../logging/logger.js';
 import type { ChannelForSending } from './ChannelStore.js';
 import type { ChannelType, OutgoingMessage, SendContext, SendResult } from './channels/ChannelType.js';
 import { Outbox } from './Outbox.js';
-import { GIVE_UP_AFTER_MS, OutboxSender, retryWait } from './OutboxSender.js';
+import { GIVE_UP_AFTER_MS, MAX_HOLD_MS, OutboxSender, retryWait } from './OutboxSender.js';
 
 const NOW = Date.UTC(2026, 10, 13, 9, 0);
 const SECOND = 1000;
@@ -90,6 +90,90 @@ describe('OutboxSender', () => {
     expect(outbox.takeDue(now)).toEqual([]);
     now += 1;
     expect(outbox.takeDue(now)).toHaveLength(1);
+  });
+
+  describe('Retry-After', () => {
+    const HOUR = 60 * MINUTE;
+    const limited = (retryAfterMs: number): SendResult => ({ ok: false, retry: true, error: 'ntfy: the limit is used.', retryAfterMs });
+
+    it('holds the whole channel until the time that the service asked for, and sends nothing to it before then', async () => {
+      const { type, calls } = fakeType([limited(2 * HOUR)]);
+      const first = queue();
+      const sender = senderFor({ phones: { channel: channel('phones'), type, values: {} } });
+      await sender.sendDue();
+
+      // A message that comes while the channel is held waits too
+      now += HOUR;
+      const second = queue();
+      await sender.sendDue();
+      now += HOUR - 1;
+      await sender.sendDue();
+      expect(calls).toHaveLength(1);
+
+      now += 1;
+      await sender.sendDue();
+      expect(calls).toHaveLength(2);
+      expect(statusOf(first)).toMatchObject({ status: 'sent', attempts: 2 });
+      expect(statusOf(second)?.status).toBe('waiting');
+    });
+
+    it('holds only the channel that the service refused', async () => {
+      const phones = fakeType([limited(2 * HOUR)]);
+      const slack = fakeType([]);
+      const sender = senderFor({
+        phones: { channel: channel('phones'), type: phones.type, values: {} },
+        slack: { channel: channel('slack'), type: slack.type, values: {} },
+      });
+      queue('phones');
+      await sender.sendDue();
+
+      queue('slack');
+      await sender.sendDue();
+
+      expect(phones.calls).toHaveLength(1);
+      expect(slack.calls).toHaveLength(1);
+    });
+
+    it('uses its own wait when the service asks for a shorter one, so a busy service does not get a request each 5 seconds', async () => {
+      const { type, calls } = fakeType([limited(SECOND)]);
+      queue();
+      const sender = senderFor({ phones: { channel: channel('phones'), type, values: {} } });
+      await sender.sendDue();
+
+      now += retryWait(0) - 1;
+      await sender.sendDue();
+      expect(calls).toHaveLength(1);
+      now += 1;
+      await sender.sendDue();
+      expect(calls).toHaveLength(2);
+    });
+
+    it('holds the channel for at most 24 hours, and also after the message failed', async () => {
+      const { type, calls } = fakeType([limited(3 * 24 * HOUR)]);
+      const first = queue();
+      const sender = senderFor({ phones: { channel: channel('phones'), type, values: {} } });
+      await sender.sendDue();
+
+      // The next try would come after the 24 hours, so the message failed. The channel is still held.
+      expect(statusOf(first)).toMatchObject({ status: 'failed', lastError: 'ntfy: the limit is used.' });
+      const second = queue();
+      now += MAX_HOLD_MS - 1;
+      await sender.sendDue();
+      expect(calls).toHaveLength(1);
+
+      now += 1;
+      await sender.sendDue();
+      expect(calls).toHaveLength(2);
+      expect(statusOf(second)?.status).toBe('sent');
+    });
+
+    it('logs the wait', async () => {
+      queue();
+
+      await senderFor({ phones: { channel: channel('phones'), type: fakeType([limited(2 * HOUR)]).type, values: {} } }).sendDue();
+
+      expect(logLines.join('\n')).toMatch(/Chatter tries again .*waitSeconds=7200/);
+    });
   });
 
   it('waits longer after each failed try, up to 10 minutes', () => {

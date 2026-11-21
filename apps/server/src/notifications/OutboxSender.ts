@@ -20,6 +20,17 @@ export function retryWait(attempts: number): number {
   return RETRY_WAITS_MS[Math.min(attempts, RETRY_WAITS_MS.length - 1)];
 }
 
+/** The longest wait that Chatter takes from a service. A wrong Retry-After must not stop a channel for days. */
+export const MAX_HOLD_MS = 24 * 60 * 60_000;
+
+/**
+ * The wait before the next try of the channel. The wait of the service (Retry-After) is used when it is longer than the
+ * wait of Chatter. A shorter one is not, so a service that always asks for 1 second does not get a request at each round.
+ */
+function holdAfter(result: { retryAfterMs?: number }, attempts: number): number {
+  return Math.min(Math.max(result.retryAfterMs ?? 0, retryWait(attempts)), MAX_HOLD_MS);
+}
+
 /**
  * One try, which always ends: after the time limit, the signal stops the request, and the result is a failure to try again.
  * The time limit is the one of the channel type, or else `timeoutMs`.
@@ -121,23 +132,26 @@ export class OutboxSender {
     }
   }
 
-  /** A retry that would come after the 24 hours is a failure now */
+  /**
+   * A failure to try again holds the whole channel until the next try. A retry that would come after the 24 hours
+   * is a failure now, but the channel stays held, so the next message does not go to a service that asked for a wait.
+   */
   private saveResult(entry: OutboxEntry, target: ChannelForSending | null, result: SendResult): void {
     const now = this.now();
-    const nextTryAt = now + retryWait(entry.attempts);
     if (result.ok) {
       this.outbox.markSent(entry.id, result.detail, now);
       log.info('Notification sent', { ...logFields(entry, target), detail: result.detail });
-    } else if (result.retry && nextTryAt < entry.createdAt + GIVE_UP_AFTER_MS) {
-      this.outbox.markRetry(entry.id, result.error, nextTryAt);
-      log.warn('Notification not sent. Chatter tries again', { ...logFields(entry, target), error: result.error, waitSeconds: (nextTryAt - now) / 1000 });
-    } else {
-      this.fail(entry, target, result.error);
+      return;
     }
+    if (!result.retry) return this.fail(entry, target, result.error);
+    const nextTryAt = now + holdAfter(result, entry.attempts);
+    if (nextTryAt >= entry.createdAt + GIVE_UP_AFTER_MS) return this.fail(entry, target, result.error, nextTryAt);
+    this.outbox.markRetry(entry.id, result.error, nextTryAt);
+    log.warn('Notification not sent. Chatter tries again', { ...logFields(entry, target), error: result.error, waitSeconds: (nextTryAt - now) / 1000 });
   }
 
-  private fail(entry: OutboxEntry, target: ChannelForSending | null, error: string): void {
-    this.outbox.markFailed(entry.id, error);
+  private fail(entry: OutboxEntry, target: ChannelForSending | null, error: string, holdUntil?: number): void {
+    this.outbox.markFailed(entry.id, error, holdUntil);
     log.warn('Notification not sent. Chatter does not try again', { ...logFields(entry, target), error });
   }
 }
