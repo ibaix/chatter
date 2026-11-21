@@ -1190,3 +1190,49 @@ describe('Brother planned reconnect every 60 seconds, with a real TCP connection
     await vi.waitFor(() => expect(events).toEqual(['connect 1', 'end 1', 'connect 2']));
   });
 });
+
+/** An empty slot of the alarm list: 10 spaces, as the control sends it */
+const EMPTY_ALARM_SLOT = ' '.repeat(10);
+/** The alarm list has about 36 slots */
+const ALARM_SLOTS = 36;
+
+/**
+ * An ALARM reply in the shape of a real Speedio X500 (C00): E01 with each alarm slot, then L01.
+ * `slots` are the first slots; the others are empty.
+ */
+function alarmReply(slots: string[]): string {
+  const e01 = [...slots, ...Array(ALARM_SLOTS - slots.length).fill(EMPTY_ALARM_SLOT)].join(',');
+  const l01 = Array(ALARM_SLOTS).fill(' '.repeat(11)).join(',');
+  return `RLOD    ALARM   00\r\nE01,${e01}\r\nL01,${l01}\r\n\r\n12%`;
+}
+
+/** A communication message (CM, category 09). A Speedio adds one after it gets a command that it does not know. */
+const CM_ENTRY = '0975220008';
+const SV_ALARM = '0312345678';
+
+describe('Brother alarm from the whole alarm list', () => {
+  async function alarmOf(slots: string[]) {
+    const status = await connectorWithReplies({ ...MOCK_RESPONSES, ALARM: alarmReply(slots) }).poll();
+    return { alarm: status.data.alarm, alarmCode: status.data.alarmCode };
+  }
+
+  it('gives no alarm for an empty list', async () => {
+    expect(await alarmOf([])).toEqual({ alarm: false, alarmCode: '' });
+  });
+
+  it('gives no alarm when the list has only a communication message', async () => {
+    expect(await alarmOf([CM_ENTRY])).toEqual({ alarm: false, alarmCode: '' });
+  });
+
+  it('finds a real alarm after a communication message in the first slot', async () => {
+    expect(await alarmOf([CM_ENTRY, SV_ALARM])).toEqual({ alarm: true, alarmCode: 'SV12345678' });
+  });
+
+  it('finds a real alarm in the first slot, as before', async () => {
+    expect(await alarmOf([SV_ALARM])).toEqual({ alarm: true, alarmCode: 'SV12345678' });
+  });
+
+  it('gives the code of the first real alarm when there are more, and skips "no alarm" entries', async () => {
+    expect(await alarmOf(['9000000000', '0512340000', SV_ALARM])).toEqual({ alarm: true, alarmCode: 'IO12340000' });
+  });
+});
