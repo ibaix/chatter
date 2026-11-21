@@ -633,7 +633,8 @@ describe('MachineDetailPage', () => {
       loadRules([OFFLINE_RULE]);
 
       await screen.findByText(/Click a word in a rule to change it/);
-      expect(scrolledTo).toEqual([rulesSection, rulesSection]);
+      // The second scroll is in an effect that runs after the rules show, so wait for it
+      await waitFor(() => expect(scrolledTo).toEqual([rulesSection, rulesSection]));
     });
 
     it('does not move the page when the rules load after the user scrolled', async () => {
