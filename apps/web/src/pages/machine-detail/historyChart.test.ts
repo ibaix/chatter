@@ -344,6 +344,14 @@ describe('compareLoad', () => {
     expect(compareLoad(last, { ...last })).toEqual({ isNewKey: false, delayMs: 0 });
   });
 
+  it('waits for a range with the same values in a new object, such as a second zoom of the same length', () => {
+    expect(compareLoad(last, { ...last, range: { ...tenMinutes }, end: 2_000 })).toEqual({ isNewKey: false, delayMs: MOVE_LOAD_DELAY_MS });
+  });
+
+  it('starts at once when only the range changed', () => {
+    expect(compareLoad(last, { ...last, range: oneHour })).toEqual({ isNewKey: false, delayMs: 0 });
+  });
+
   it('starts at once for a new machine or value', () => {
     expect(compareLoad(last, { ...last, key: 'm2 spindleSpeed', end: 2_000 })).toEqual({ isNewKey: true, delayMs: 0 });
   });
