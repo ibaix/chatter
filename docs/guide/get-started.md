@@ -106,7 +106,8 @@ Some limits:
 - Chatter keeps the history for 1 year. It does not restore history that is older than 1 year. The preview tells how much it leaves out.
 - The file can be at most 2 GB.
 - Only one backup or restore runs at a time.
-- A backup of a long time can take some minutes on a Raspberry Pi. Chatter writes the file to its disk first, so the disk must have free space for it.
+- One day of history with a poll each 2 seconds makes a file of about 150 KB, and one year about 50 MB. With **1-minute averages only**, one year is about 5 MB.
+- A backup or a restore of a long time can take some minutes on a Raspberry Pi. Chatter writes the file to its disk first, so the disk must have free space for it. Behind a reverse proxy, give the proxy a long time limit for an answer, or back up a shorter time range.
 
 ## 4. Add users and give them roles
 
