@@ -42,6 +42,7 @@ import { machineHealthRoutes, type ConnectionHealthSource } from './routes/machi
 import { systemRoutes, type SystemOptions } from './routes/system.js';
 import { supportBundleRoutes } from './routes/supportBundle.js';
 import { dataFolder } from './storage/database.js';
+import { INSTANCE_ID } from './diagnostics/instance.js';
 
 /** Every API address starts with this */
 export const API_PREFIX = '/api';
@@ -105,7 +106,7 @@ export function createApp({
   const loginGuard = { auth, limiter: new LoginLimiter(), loginLog, proxySettings };
   const api = new Hono()
     // The update helper reads the version here, with no login, to see that the new version runs
-    .get('/health', c => c.json({ status: 'ok', uptime: process.uptime(), version }))
+    .get('/health', c => c.json({ status: 'ok', uptime: process.uptime(), version, instance: INSTANCE_ID }))
     .route('/', authRoutes(loginGuard))
     .route('/', sessionRoutes(auth))
     // Every route below needs a login

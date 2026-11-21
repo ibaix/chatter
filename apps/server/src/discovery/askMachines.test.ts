@@ -1,5 +1,17 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
-import { agentTypeOf, devicesOfProbe, foundMTConnectMachine, haasSerialOf, maybeFanuc } from './askMachines.js';
+import { agentTypeOf, askChatter, devicesOfProbe, foundMTConnectMachine, haasSerialOf, maybeFanuc } from './askMachines.js';
+
+/** A web server on 127.0.0.1 that gives `body` on each request. Gives its port and a way to stop it. */
+async function webServer(body: string, status = 200) {
+  const server = createServer((_request, response) => {
+    response.statusCode = status;
+    response.end(body);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  return { port: (server.address() as AddressInfo).port, close: () => new Promise(resolve => server.close(resolve)) };
+}
 
 const probe = (devices: string) => `<?xml version="1.0"?>
 <MTConnectDevices xmlns="urn:mtconnect.org:MTConnectDevices:1.3"><Header/><Devices>${devices}</Devices></MTConnectDevices>`;
@@ -61,5 +73,36 @@ describe('foundMTConnectMachine', () => {
 describe('maybeFanuc', () => {
   it('is not confirmed, because Chatter cannot ask without the FOCAS library', () => {
     expect(maybeFanuc('10.0.0.7')).toMatchObject({ isConfirmed: false, machine: { type: 'fanuc', focasPort: 8193 } });
+  });
+});
+
+describe('askChatter', () => {
+  it('finds another Chatter by its /api/health, with its version and instance name', async () => {
+    const server = await webServer('{"status":"ok","uptime":12,"version":"1.2.0","instance":"0123456789abcdef"}');
+    try {
+      expect(await askChatter('127.0.0.1', server.port)).toEqual({ host: '127.0.0.1', version: '1.2.0', instance: '0123456789abcdef' });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('shows "unknown" for a version that does not have the shape of a version', async () => {
+    const server = await webServer('{"status":"ok","version":"<b>hi</b>"}');
+    try {
+      expect(await askChatter('127.0.0.1', server.port)).toEqual({ host: '127.0.0.1', version: 'unknown' });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('gives null for a web server that is not Chatter', async () => {
+    for (const [body, status] of [['<html>router</html>', 200], ['{"status":"ok"}', 404], [`{"status":"ok","x":"${'a'.repeat(2000)}"}`, 200]] as const) {
+      const server = await webServer(body, status);
+      try {
+        expect(await askChatter('127.0.0.1', server.port), body.slice(0, 20)).toBeNull();
+      } finally {
+        await server.close();
+      }
+    }
   });
 });

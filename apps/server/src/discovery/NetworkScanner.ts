@@ -1,11 +1,11 @@
-import type { AddMachineRequest, FoundMachine } from '@local-chatter/shared';
+import type { AddMachineRequest, FoundChatter, FoundMachine } from '@local-chatter/shared';
 import { addressesIn, type AddressRange } from './addressRange.js';
-import { ANSWER_TIMEOUT_MS, askBrother, askHaas, askMTConnect, MACHINE_PORTS, maybeFanuc, maybeSiemens } from './askMachines.js';
+import { ANSWER_TIMEOUT_MS, askBrother, askChatter, askHaas, askMTConnect, CHATTER_PORT, MACHINE_PORTS, maybeFanuc, maybeSiemens } from './askMachines.js';
 import { isPortOpen, mapWithLimit } from './tcp.js';
 
 /** The ports to try first. Only an open port gets a real question. */
 const KNOCK_PORTS = [
-  MACHINE_PORTS.brother, MACHINE_PORTS.haasQuery, ...MACHINE_PORTS.mtconnect, MACHINE_PORTS.fanuc, MACHINE_PORTS.siemens,
+  MACHINE_PORTS.brother, MACHINE_PORTS.haasQuery, ...MACHINE_PORTS.mtconnect, MACHINE_PORTS.fanuc, MACHINE_PORTS.siemens, CHATTER_PORT,
 ];
 /**
  * No answer in this time means nothing is there. On a wired network a machine answers in a few milliseconds.
@@ -27,10 +27,30 @@ async function openPortsOf(host: string): Promise<Set<number>> {
   return new Set(KNOCK_PORTS.filter((_, index) => isOpen[index]));
 }
 
-/** Ask each open port what machine is there */
-async function machinesAt(host: string): Promise<FoundMachine[]> {
+/** What the scan found at one address: the machines, and another Chatter server */
+export interface FoundAtAddress {
+  machines: FoundMachine[];
+  chatter: FoundChatter | null;
+}
+
+/** What a scan found: the machines that are not added yet, and the other Chatter servers */
+export interface ScanResult {
+  machines: FoundMachine[];
+  chatters: FoundChatter[];
+}
+
+/** Ask each open port what machine is there, and if another Chatter server is there */
+async function foundAt(host: string): Promise<FoundAtAddress> {
   const openPorts = await openPortsOf(host);
-  if (openPorts.size === 0) return [];
+  if (openPorts.size === 0) return { machines: [], chatter: null };
+  const [machines, chatter] = await Promise.all([
+    machinesAt(host, openPorts),
+    openPorts.has(CHATTER_PORT) ? askChatter(host) : null,
+  ]);
+  return { machines, chatter };
+}
+
+async function machinesAt(host: string, openPorts: Set<number>): Promise<FoundMachine[]> {
   const answers = await Promise.all([
     openPorts.has(MACHINE_PORTS.brother) ? askBrother(host) : null,
     openPorts.has(MACHINE_PORTS.haasQuery) ? askHaas(host) : null,
@@ -54,16 +74,26 @@ export class ScanAlreadyRunningError extends Error {
 export class NetworkScanner {
   private isScanning = false;
 
-  /** `findAt` finds the machines at one address. Tests give their own. */
-  constructor(private readonly findAt: (host: string) => Promise<FoundMachine[]> = machinesAt) {}
+  /** `findAt` finds the machines and a Chatter server at one address. Tests give their own. */
+  constructor(private readonly findAt: (host: string) => Promise<FoundAtAddress> = foundAt) {}
 
-  /** The machines in `range` that are not added yet */
-  async scan(range: AddressRange, isAdded: (machine: AddMachineRequest) => boolean): Promise<FoundMachine[]> {
+  /**
+   * The machines in `range` that are not added yet, and the other Chatter servers.
+   * `isThisChatter` leaves out this server itself.
+   */
+  async scan(
+    range: AddressRange,
+    isAdded: (machine: AddMachineRequest) => boolean,
+    isThisChatter: (chatter: FoundChatter) => boolean = () => false,
+  ): Promise<ScanResult> {
     if (this.isScanning) throw new ScanAlreadyRunningError();
     this.isScanning = true;
     try {
-      const found = (await mapWithLimit(addressesIn(range), ADDRESSES_AT_ONCE, this.findAt)).flat();
-      return found.filter(result => !isAdded(result.machine));
+      const found = await mapWithLimit(addressesIn(range), ADDRESSES_AT_ONCE, this.findAt);
+      return {
+        machines: found.flatMap(item => item.machines).filter(result => !isAdded(result.machine)),
+        chatters: found.flatMap(item => (item.chatter && !isThisChatter(item.chatter) ? [item.chatter] : [])),
+      };
     } finally {
       this.isScanning = false;
     }

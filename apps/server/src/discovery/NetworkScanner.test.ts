@@ -1,6 +1,6 @@
 import type { FoundMachine } from '@local-chatter/shared';
 import { describe, expect, it } from 'vitest';
-import { KNOCK_TIMEOUT_MS, longestScanMs, NetworkScanner, ScanAlreadyRunningError } from './NetworkScanner.js';
+import { KNOCK_TIMEOUT_MS, longestScanMs, NetworkScanner, ScanAlreadyRunningError, type FoundAtAddress } from './NetworkScanner.js';
 
 const haasAt = (host: string): FoundMachine => ({
   machine: { type: 'haas', name: 'Haas', host, dataPort: 9998, queryPort: 5051 },
@@ -13,16 +13,25 @@ describe('NetworkScanner', () => {
     const tried: string[] = [];
     const scanner = new NetworkScanner(async host => {
       tried.push(host);
-      return host.endsWith('.10') || host.endsWith('.20') ? [haasAt(host)] : [];
+      return { machines: host.endsWith('.10') || host.endsWith('.20') ? [haasAt(host)] : [], chatter: null };
     });
     const found = await scanner.scan('10.0.0', machine => machine.host === '10.0.0.10');
     expect(tried).toHaveLength(254);
-    expect(found.map(result => result.machine.host)).toEqual(['10.0.0.20']);
+    expect(found.machines.map(result => result.machine.host)).toEqual(['10.0.0.20']);
+  });
+
+  it('lists the other Chatter servers, and leaves out this one', async () => {
+    const scanner = new NetworkScanner(async host => ({
+      machines: [],
+      chatter: host.endsWith('.5') || host.endsWith('.6') ? { host, version: '1.2.0' } : null,
+    }));
+    const { chatters } = await scanner.scan('10.0.0', () => false, chatter => chatter.host === '10.0.0.6');
+    expect(chatters).toEqual([{ host: '10.0.0.5', version: '1.2.0' }]);
   });
 
   it('refuses a second scan while one runs', async () => {
     let release = () => {};
-    const gate = new Promise<FoundMachine[]>(resolve => { release = () => resolve([]); });
+    const gate = new Promise<FoundAtAddress>(resolve => { release = () => resolve({ machines: [], chatter: null }); });
     const scanner = new NetworkScanner(() => gate);
     const first = scanner.scan('10.0.0', () => false);
     await expect(scanner.scan('10.0.0', () => false)).rejects.toBeInstanceOf(ScanAlreadyRunningError);
@@ -34,11 +43,11 @@ describe('NetworkScanner', () => {
     let shouldFail = true;
     const scanner = new NetworkScanner(async () => {
       if (shouldFail) throw new Error('network down');
-      return [];
+      return { machines: [], chatter: null };
     });
     await expect(scanner.scan('10.0.0', () => false)).rejects.toThrow('network down');
     shouldFail = false;
-    await expect(scanner.scan('10.0.0', () => false)).resolves.toEqual([]);
+    await expect(scanner.scan('10.0.0', () => false)).resolves.toEqual({ machines: [], chatters: [] });
   });
 
   it('waits 2 seconds for each port, because WiFi and Docker Desktop on a Mac answer slowly', () => {

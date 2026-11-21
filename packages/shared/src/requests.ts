@@ -22,6 +22,13 @@ export interface FoundMachine {
   detail: string;
 }
 
+/** Another Chatter server that the network scan found. It takes the connection of a machine that it polls too. */
+export interface FoundChatter {
+  host: string;
+  /** The version that its /api/health gives, or "unknown" */
+  version: string;
+}
+
 export interface AddMachineRequest {
   type: SupportedMachineType;
   name: string;

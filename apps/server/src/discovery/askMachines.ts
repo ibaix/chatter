@@ -1,4 +1,4 @@
-import type { FoundMachine } from '@local-chatter/shared';
+import type { FoundChatter, FoundMachine } from '@local-chatter/shared';
 import { parseStringPromise } from 'xml2js';
 import { brotherCommand } from '../machines/brother/brotherProtocol.js';
 import { buildCommandString } from '../machines/haas/HaasConnector.js';
@@ -20,6 +20,9 @@ export const MACHINE_PORTS = {
   fanuc: DEFAULT_DATA_PORTS.fanuc,
   siemens: DEFAULT_DATA_PORTS.siemens,
 } as const;
+
+/** The port of Chatter itself. Another Chatter server on the network takes the connection of each machine that it polls. */
+export const CHATTER_PORT = 3001;
 
 /** The time limit for a machine to answer the question on an open port */
 export const ANSWER_TIMEOUT_MS = 2000;
@@ -159,6 +162,34 @@ export async function askMTConnect(host: string, port: number, timeoutMs = ANSWE
     return foundMTConnectMachine(host, port, await devicesOfProbe(xml));
   } catch {
     // No answer, a time-out, or a reply that is not XML: there is no MTConnect agent on this port
+    return null;
+  }
+}
+
+/** A version as /api/health gives it: "1.2.0", "edge-1a2b3c4" or "development" */
+const VERSION_TEXT = /^[A-Za-z0-9.+-]{1,64}$/;
+/** A health reply is a short JSON object. A longer reply is not Chatter. */
+const MAX_HEALTH_REPLY = 1024;
+
+/**
+ * Chatter: /api/health on port 3001 gives the version, and the random instance name of the server.
+ * The instance name tells this Chatter from another. The version is shown only when it has the shape of a version.
+ */
+export async function askChatter(
+  host: string, port = CHATTER_PORT, timeoutMs = ANSWER_TIMEOUT_MS,
+): Promise<(FoundChatter & { instance?: string }) | null> {
+  try {
+    // No redirects: the scan must never follow a device to an address outside the shop network
+    const response = await fetch(`http://${host}:${port}/api/health`, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
+    if (!response.ok) return null;
+    const text = await response.text();
+    if (text.length > MAX_HEALTH_REPLY) return null;
+    const body = JSON.parse(text) as { status?: unknown; version?: unknown; instance?: unknown };
+    if (body.status !== 'ok') return null;
+    const version = typeof body.version === 'string' && VERSION_TEXT.test(body.version) ? body.version : 'unknown';
+    const instance = typeof body.instance === 'string' && /^[0-9a-f]{16}$/.test(body.instance) ? body.instance : undefined;
+    return { host, version, ...(instance && { instance }) };
+  } catch {
     return null;
   }
 }
