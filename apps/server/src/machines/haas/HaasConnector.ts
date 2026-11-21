@@ -154,7 +154,7 @@ interface SocketOptions {
 }
 
 /** Connect the socket. Rejects on a timeout or an error before the socket connects. */
-function openSocket(socket: net.Socket, options: SocketOptions): Promise<void> {
+export function openSocket(socket: net.Socket, options: SocketOptions): Promise<void> {
   return new Promise((resolve, reject) => {
     socket.setTimeout(options.timeoutMs);
 
@@ -168,7 +168,11 @@ function openSocket(socket: net.Socket, options: SocketOptions): Promise<void> {
       reject(err);
     });
 
-    socket.on('close', options.onDown);
+    // A destroyed socket gives only 'close'. Without a reject here, a disconnect during the connect waits forever.
+    socket.on('close', () => {
+      options.onDown();
+      reject(new Error(`${options.name} connection closed before it opened`));
+    });
 
     socket.connect(options.port, options.host, resolve);
   });
