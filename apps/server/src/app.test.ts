@@ -875,6 +875,32 @@ describe('API Routes', () => {
       expect(uploadFile).not.toHaveBeenCalled();
       expect(uploadFiles).not.toHaveBeenCalled();
     });
+
+    it('stops reading a body with no length at the limit', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const uploadFiles = vi.spyOn(poller.getConnector(machine.id)!, 'uploadFiles');
+      const chunk = new Uint8Array(1024 * 1024);
+      let sent = 0;
+      // A stream with no Content-Length, as a client sends when it does not say the size first
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent > PROGRAM_UPLOAD_LIMIT_BYTES * 2) return controller.close();
+          sent += chunk.length;
+          controller.enqueue(chunk);
+        },
+      });
+
+      const res = await send(`/api/machine/${machine.id}/files/upload-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'multipart/form-data; boundary=x' },
+        body,
+        duplex: 'half',
+      } as RequestInit);
+
+      expect(res.status).toBe(413);
+      expect(sent).toBeLessThan(PROGRAM_UPLOAD_LIMIT_BYTES * 2);
+      expect(uploadFiles).not.toHaveBeenCalled();
+    });
   });
 
   describe('DELETE /api/machine/:id/files', () => {
@@ -935,11 +961,18 @@ describe('API Routes', () => {
       expect(getUploadEvents).toHaveBeenCalledWith('machine1', 42);
     });
 
-    it('returns 400 when the file id is not a whole number', async () => {
-      const res = await call('GET', '/api/machine/machine1/uploads/abc/events');
+    it.each(['abc', '0', '007', '-1', '1.5', '12345678901234567'])('returns 400 when the file id is %s', async fileId => {
+      const res = await call('GET', `/api/machine/machine1/uploads/${fileId}/events`);
 
       expect(res.status).toBe(400);
       expect(getUploadEvents).not.toHaveBeenCalled();
+    });
+
+    it('accepts the largest file id, 16 digits', async () => {
+      const res = await call('GET', '/api/machine/machine1/uploads/1234567890123456/events');
+
+      expect(res.status).toBe(200);
+      expect(getUploadEvents).toHaveBeenCalledWith('machine1', 1234567890123456);
     });
   });
 

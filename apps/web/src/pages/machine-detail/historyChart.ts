@@ -28,7 +28,9 @@ export interface ChartLoad {
  */
 export function compareLoad(last: ChartLoad | null, next: ChartLoad): { isNewKey: boolean; delayMs: number } {
   if (last === null || last.key !== next.key) return { isNewKey: true, delayMs: 0 };
-  const moved = last.range === next.range && last.end !== next.end;
+  // The values that the server reads, not the object: a second zoom of the same length makes a new object
+  const sameRange = last.range.query === next.range.query && last.range.window === next.range.window;
+  const moved = sameRange && last.end !== next.end;
   return { isNewKey: false, delayMs: moved ? MOVE_LOAD_DELAY_MS : 0 };
 }
 
