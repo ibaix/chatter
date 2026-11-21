@@ -81,7 +81,7 @@ function AdvancedGroup({ startOpen, children }: { startOpen: boolean; children: 
 
 /** A button that fills the box with three random words, for a field with `generate` */
 function GenerateButton({ field, onChange }: { field: ChannelField; onChange: (value: string) => void }) {
-  return <Button size="sm" onClick={() => onChange(randomWords())}>Make a random {field.label}</Button>;
+  return <Button size="sm" onClick={() => onChange(randomWords())}>Make a random {field.label.toLowerCase()}</Button>;
 }
 
 const asText = (value: string | string[] | undefined) => (typeof value === 'string' ? value : '');

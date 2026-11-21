@@ -95,7 +95,7 @@ describe('ChannelForm', () => {
       renderForm();
       pickNtfy();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Make a random Topic' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Make a random topic' }));
 
       expect((screen.getByLabelText('Topic') as HTMLInputElement).value).toMatch(/^[a-z]+-[a-z]+-[a-z]+$/);
     });
@@ -113,7 +113,7 @@ describe('ChannelForm', () => {
       renderForm({ onSave });
       pickNtfy();
       type('Name', 'Shop phones');
-      fireEvent.click(screen.getByRole('button', { name: 'Make a random Topic' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Make a random topic' }));
       const topic = (screen.getByLabelText('Topic') as HTMLInputElement).value;
 
       fireEvent.click(screen.getByRole('button', { name: 'Save channel' }));

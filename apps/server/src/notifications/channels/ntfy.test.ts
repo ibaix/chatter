@@ -32,6 +32,8 @@ describe('ntfyChannel', () => {
     ]);
     expect(ntfyChannel.fields[1].hint).toContain('https://ntfy.sh');
     expect(ntfyChannel.fields[0].generate).toBe('words');
+    // The hint names the button of the form
+    expect(ntfyChannel.fields[0].hint).toContain('click Make a random topic.');
     expect(ntfyChannel.fields.filter(field => field.generate)).toHaveLength(1);
     expect(ntfyChannel.fields.filter(field => field.advanced).map(field => field.key)).toEqual(['url', 'token']);
   });

@@ -40,7 +40,7 @@ export const ntfyChannel: ChannelDefinition<NtfySettings> = {
   fields: [
     {
       key: 'topic', label: 'Topic', kind: 'text', required: true, mono: true, generate: 'words',
-      hint: 'Use a name that other people cannot guess, or click Make a random Topic. On ntfy.sh, each person who knows the name can read the alerts.',
+      hint: 'Use a name that other people cannot guess, or click Make a random topic. On ntfy.sh, each person who knows the name can read the alerts.',
     },
     {
       key: 'url', label: 'Server (optional)', kind: 'url', required: false, mono: true, advanced: true,
