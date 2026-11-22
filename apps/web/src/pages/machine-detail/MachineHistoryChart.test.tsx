@@ -274,6 +274,12 @@ describe('MachineHistoryChart', () => {
     fireEvent.pointerUp(target, { clientX: toX, pointerId: 1 });
   }
 
+  /** A keyboard user presses Enter on a button: the button has the focus, and the browser clicks it */
+  function pressEnter(button: HTMLElement) {
+    button.focus();
+    fireEvent.click(button, { detail: 0 });
+  }
+
   /** Two sideways scroll steps on the chart, of a quarter of the range each: -1 goes back half the range, 1 goes on */
   function scrollHalfARange(direction: -1 | 1) {
     for (let step = 0; step < 2; step++) fireEvent.wheel(chartBody(), { deltaX: direction * 80, deltaY: 0 });
@@ -578,6 +584,18 @@ describe('MachineHistoryChart', () => {
       expect(screen.queryByRole('button', { name: 'Clear the zoom' })).not.toBeInTheDocument();
     });
 
+    it('puts the keyboard focus on the strip when the clear button goes away after Enter', async () => {
+      const overview = await overviewOfStateView();
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(/^What the machine did from /);
+
+      pressEnter(screen.getByRole('button', { name: 'Clear the zoom' }));
+
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(document.activeElement).not.toBe(document.body);
+      expect(screen.getByRole('img', { name: /^Overview of the last 10 minutes/ })).toHaveFocus();
+    });
+
     it('reads the timeline once while the strip shows the same time as the chart', async () => {
       await overviewOfStateView();
 
@@ -698,6 +716,27 @@ describe('MachineHistoryChart', () => {
       for (const name of ['10m', '1h', '24h', '7d']) expect(screen.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false');
     });
 
+    it('puts the keyboard focus on the strip when the buttons go away after Enter on the accept button', async () => {
+      await zoomInOnTheMiddle();
+
+      pressEnter(screen.getByRole('button', { name: 'Use as full range' }));
+
+      const overview = await screen.findByRole('img', { name: /^Overview from / });
+      expect(document.activeElement).not.toBe(document.body);
+      expect(overview).toHaveFocus();
+      // The strip takes the focus only from the script: it is not one more stop for the Tab key
+      expect(overview).toHaveAttribute('tabindex', '-1');
+    });
+
+    it('does not move the focus for a click on a button that does not have the focus', async () => {
+      await zoomInOnTheMiddle();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+
+      await screen.findByRole('img', { name: /^Overview from / });
+      expect(document.activeElement).toBe(document.body);
+    });
+
     it('zooms in again inside the accepted range, and clears that zoom back to the accepted range', async () => {
       await zoomInOnTheMiddle();
       fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
@@ -736,6 +775,12 @@ describe('MachineHistoryChart', () => {
   describe('undo and redo', () => {
     const undoButton = () => screen.getByRole('button', { name: 'Previous view' });
     const redoButton = () => screen.getByRole('button', { name: 'Next view' });
+    /** The button is off, but it keeps the focus: it has aria-disabled, not disabled */
+    const expectOff = (button: HTMLElement) => {
+      expect(button).toHaveAttribute('aria-disabled', 'true');
+      expect(button).not.toBeDisabled();
+    };
+    const expectOn = (button: HTMLElement) => expect(button).not.toHaveAttribute('aria-disabled', 'true');
 
     it('has buttons for the previous and the next view in place of Earlier and Later', async () => {
       await overviewOfStateView();
@@ -748,20 +793,59 @@ describe('MachineHistoryChart', () => {
 
     it('can go back only after a change, and on only after a go back', async () => {
       await overviewOfStateView();
-      expect(undoButton()).toBeDisabled();
-      expect(redoButton()).toBeDisabled();
+      expectOff(undoButton());
+      expectOff(redoButton());
 
       fireEvent.click(screen.getByRole('button', { name: '1h' }));
-      expect(undoButton()).toBeEnabled();
-      expect(redoButton()).toBeDisabled();
+      expectOn(undoButton());
+      expectOff(redoButton());
 
       fireEvent.click(undoButton());
       expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
-      expect(undoButton()).toBeDisabled();
-      expect(redoButton()).toBeEnabled();
+      expectOff(undoButton());
+      expectOn(redoButton());
 
       fireEvent.click(redoButton());
       expect(await screen.findByText('What the machine did in the last hour.')).toBeInTheDocument();
+    });
+
+    it('keeps the keyboard focus on Previous view after the last undo, and does nothing for one more Enter', async () => {
+      await overviewOfStateView();
+      fireEvent.click(screen.getByRole('button', { name: '1h' }));
+      await screen.findByText('What the machine did in the last hour.');
+
+      pressEnter(undoButton());
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(undoButton()).toHaveFocus();
+      expectOff(undoButton());
+
+      pressEnter(undoButton());
+      expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(undoButton()).toHaveFocus();
+      // The history did not change: one redo goes to the last view, and then there is no more to redo
+      fireEvent.click(redoButton());
+      expect(await screen.findByText('What the machine did in the last hour.')).toBeInTheDocument();
+      expectOff(redoButton());
+    });
+
+    it('keeps the keyboard focus on Next view after the last redo, and does nothing for one more Enter', async () => {
+      await overviewOfStateView();
+      fireEvent.click(screen.getByRole('button', { name: '1h' }));
+      fireEvent.click(undoButton());
+      await screen.findByText('What the machine did in the last 10 minutes.');
+
+      pressEnter(redoButton());
+      expect(await screen.findByText('What the machine did in the last hour.')).toBeInTheDocument();
+      expect(redoButton()).toHaveFocus();
+      expectOff(redoButton());
+
+      pressEnter(redoButton());
+      expect(screen.getByText('What the machine did in the last hour.')).toBeInTheDocument();
+      expect(redoButton()).toHaveFocus();
+      // The history did not change: one undo goes to the first view, and then there is no more to undo
+      fireEvent.click(undoButton());
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expectOff(undoButton());
     });
 
     it('gives back the strip and the zoom after an accepted zoom', async () => {
@@ -787,7 +871,7 @@ describe('MachineHistoryChart', () => {
       fireEvent.click(undoButton());
 
       expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
-      expect(undoButton()).toBeDisabled();
+      expectOff(undoButton());
     });
 
     it('loads the time of the previous zoom again, also when the two zooms have the same length', async () => {

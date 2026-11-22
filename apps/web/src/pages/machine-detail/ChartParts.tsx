@@ -51,16 +51,42 @@ interface ViewButtonsProps {
 export function ViewButtons({ canUndo, canRedo, canGoToNow, onUndo, onRedo, onNow }: ViewButtonsProps) {
   return (
     <div role="group" aria-label="Move in time" className="inline-flex gap-0.5 rounded-lg bg-zinc-950 p-[0.1875rem]">
-      <button type="button" onClick={onUndo} disabled={!canUndo} className={PAN_BUTTON_CLASS} aria-label="Previous view" title="Previous view">
+      <HistoryButton label="Previous view" enabled={canUndo} onClick={onUndo}>
         <UndoIcon size={16} />
-      </button>
-      <button type="button" onClick={onRedo} disabled={!canRedo} className={PAN_BUTTON_CLASS} aria-label="Next view" title="Next view">
+      </HistoryButton>
+      <HistoryButton label="Next view" enabled={canRedo} onClick={onRedo}>
         <RedoIcon size={16} />
-      </button>
+      </HistoryButton>
       <button type="button" onClick={onNow} disabled={!canGoToNow} className={PAN_BUTTON_CLASS}>
         Now
       </button>
     </div>
+  );
+}
+
+interface HistoryButtonProps {
+  label: string;
+  enabled: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}
+
+/**
+ * The previous view or the next view button. At the end of the history it is off with aria-disabled, not disabled:
+ * the browser takes the focus away from a disabled button, and the next Tab then starts at the top of the page.
+ */
+function HistoryButton({ label, enabled, onClick, children }: HistoryButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={enabled ? onClick : undefined}
+      aria-disabled={enabled ? undefined : true}
+      className={cn(PAN_BUTTON_CLASS, !enabled && 'cursor-default text-zinc-500 hover:text-zinc-500')}
+      aria-label={label}
+      title={label}
+    >
+      {children}
+    </button>
   );
 }
 

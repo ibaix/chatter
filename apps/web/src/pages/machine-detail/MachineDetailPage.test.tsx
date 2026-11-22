@@ -276,18 +276,18 @@ describe('MachineDetailPage', () => {
       fireEvent.click(within(chart()).getByRole('button', { name: 'Previous view' }));
 
       expect(within(chart()).getByRole('button', { name: '10m' })).toHaveAttribute('aria-pressed', 'true');
-      expect(within(chart()).getByRole('button', { name: 'Next view' })).toBeEnabled();
+      expect(within(chart()).getByRole('button', { name: 'Next view' })).not.toHaveAttribute('aria-disabled', 'true');
     });
 
     it('starts a new view history of the chart for the next machine', () => {
       renderPage({ machines: [testMachine(), testMachine({ id: 'm2', name: 'Mill 2' })] });
       fireEvent.click(within(chart()).getByRole('button', { name: '7d' }));
-      expect(within(chart()).getByRole('button', { name: 'Previous view' })).toBeEnabled();
+      expect(within(chart()).getByRole('button', { name: 'Previous view' })).not.toHaveAttribute('aria-disabled', 'true');
 
       go('/machine/m2');
 
       expect(within(chart()).getByRole('button', { name: '10m' })).toHaveAttribute('aria-pressed', 'true');
-      expect(within(chart()).getByRole('button', { name: 'Previous view' })).toBeDisabled();
+      expect(within(chart()).getByRole('button', { name: 'Previous view' })).toHaveAttribute('aria-disabled', 'true');
     });
 
     it('keeps the time range of the report when the user opens another tab and comes back', () => {

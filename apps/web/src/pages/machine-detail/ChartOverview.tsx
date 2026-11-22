@@ -1,5 +1,5 @@
 import { cn } from '@toolpath/ui';
-import { useState, type PointerEvent } from 'react';
+import { useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import { CheckIcon, CloseIcon } from '../../components/ui/icons';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import type { Machine } from '../../types';
@@ -75,6 +75,7 @@ function OverviewPlot(props: OverviewPlotProps) {
   const { segments, overview, live, now, clockNow, width, view, viewEnd, selection, onSelect, left, right, onMove, onZoom, onClearZoom, onAcceptZoom } = props;
   /** Where the pointer went down, or null when the user does not drag */
   const [startX, setStartX] = useState<number | null>(null);
+  const stripRef = useRef<SVGSVGElement>(null);
   const bandRight = width - right;
   const startTime = now - overview.ms;
   const msPerPx = overview.ms / (bandRight - left);
@@ -123,6 +124,15 @@ function OverviewPlot(props: OverviewPlotProps) {
     onSelect(null);
   };
 
+  /**
+   * The accept and the clear buttons go away after a click. When the button had the focus, the focus goes to the strip
+   * under it, so the next Tab goes on from here and not from the top of the page.
+   */
+  const thenFocusStrip = (action: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
+    if (document.activeElement === event.currentTarget) stripRef.current?.focus();
+    action();
+  };
+
   // The buttons are over the middle of the box, and stay inside the strip
   const showAccept = onClearZoom !== undefined && onAcceptZoom !== undefined;
   const buttonsWidth = showAccept ? 2 * ZOOM_BUTTON_SIZE + ZOOM_BUTTON_GAP : ZOOM_BUTTON_SIZE;
@@ -137,7 +147,7 @@ function OverviewPlot(props: OverviewPlotProps) {
           type="button"
           aria-label="Use as full range"
           title="Use as full range"
-          onClick={onAcceptZoom}
+          onClick={thenFocusStrip(onAcceptZoom)}
           className={cn(ZOOM_BUTTON_CLASS, 'hover:bg-primary hover:text-on-primary')}
           style={{ left: buttonsLeft, ...buttonSize }}
         >
@@ -149,7 +159,7 @@ function OverviewPlot(props: OverviewPlotProps) {
           type="button"
           aria-label="Clear the zoom"
           title="Clear the zoom"
-          onClick={onClearZoom}
+          onClick={thenFocusStrip(onClearZoom)}
           className={cn(ZOOM_BUTTON_CLASS, 'hover:bg-zinc-500')}
           style={{ left: clearLeft, ...buttonSize }}
         >
@@ -157,6 +167,8 @@ function OverviewPlot(props: OverviewPlotProps) {
         </button>
       )}
       <svg
+        ref={stripRef}
+        tabIndex={-1}
         width={width}
         height={SVG_HEIGHT}
         role="img"
@@ -165,7 +177,7 @@ function OverviewPlot(props: OverviewPlotProps) {
         onPointerMove={followDrag}
         onPointerUp={endDrag}
         onPointerCancel={cancelDrag}
-        className="block cursor-crosshair touch-none"
+        className="block cursor-crosshair touch-none outline-none focus-visible:ring-2 focus-visible:ring-primary"
       >
         <rect x={left} width={bandRight - left} height={BAND_HEIGHT} rx={3} className="fill-zinc-800" />
         <StateBand segments={segments} startTime={startTime} rangeMs={overview.ms} left={left} width={bandRight - left} y={0} height={BAND_HEIGHT} />
