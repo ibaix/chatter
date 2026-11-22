@@ -3,9 +3,7 @@ import { Link } from 'react-router';
 import { ProgressBar, StateLabel } from '../../components/MachineStateMark';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
 import { alarmLine, alarmOf, offlineReasonOf } from '../../machines/alarm';
-import {
-  isReachable, machineStateOf, machineTypeLabel, NO_VALUE, notPolledText, partCountOf, toolText, type MachineState,
-} from '../../machines/machineStatus';
+import { isReachable, machineStateOf, machineTypeLabel, NO_VALUE, partCountOf, toolText, type MachineState } from '../../machines/machineStatus';
 import { formatAgo } from '../../utils/formatters';
 import type { Machine } from '../../types';
 
@@ -73,18 +71,7 @@ function MachineRow({ machine, now }: { machine: Machine; now: number }) {
       <td className={cn(CELL, 'text-right font-mono')}>{isOnline ? spindleSpeedText(machine.data.spindleSpeed) : NO_VALUE}</td>
       <td className={cn(CELL, 'text-right font-mono')}>{(isOnline && toolText(machine.data)) || NO_VALUE}</td>
       <td className={CELL}>{problemText(machine, state)}</td>
-      <LastPollCell machine={machine} now={now} />
+      <td className={cn(CELL, 'text-right whitespace-nowrap text-zinc-200')}>{formatAgo(machine.lastPollTime, now)}</td>
     </tr>
-  );
-}
-
-/** The time of the last good poll, and a warning when Chatter has had no poll result for too long */
-function LastPollCell({ machine, now }: { machine: Machine; now: number }) {
-  const notPolled = notPolledText(machine, now);
-  return (
-    <td className={cn(CELL, 'text-right whitespace-nowrap text-zinc-200')}>
-      {formatAgo(machine.lastPollTime, now)}
-      {notPolled && <div className="text-xs font-bold text-alarm-soft">{notPolled}</div>}
-    </td>
   );
 }
