@@ -243,6 +243,12 @@ describe('MachineDetailPage', () => {
       within(screen.getByRole('group', { name: group })).getAllByRole('button').find(button => button.getAttribute('aria-pressed') === 'true')?.textContent;
     const chart = () => screen.getByRole('region', { name: 'Spindle speed chart' });
 
+    /** The button is on: it has no aria-disabled, and it is not disabled */
+    const expectOn = (button: HTMLElement) => {
+      expect(button).not.toHaveAttribute('aria-disabled', 'true');
+      expect(button).toBeEnabled();
+    };
+
     it('keeps the time range of the chart when the user opens another tab and comes back', () => {
       renderPage();
       fireEvent.click(within(within(chart()).getByRole('group', { name: 'Time range' })).getByRole('button', { name: '7d' }));
@@ -255,15 +261,39 @@ describe('MachineDetailPage', () => {
 
     it('keeps the time of the chart after a move back in time', () => {
       renderPage();
-      fireEvent.click(within(chart()).getByRole('button', { name: 'Earlier' }));
+      // A sideways scroll of a quarter of the range back
+      fireEvent.wheel(within(chart()).getByRole('group', { name: 'Chart: drag or scroll sideways to move in time' }), { deltaX: -80, deltaY: 0 });
       const movedText = within(chart()).getByText(/from .* to /, { selector: 'span' }).textContent;
-      expect(within(chart()).getByRole('button', { name: 'Now' })).toBeEnabled();
+      expectOn(within(chart()).getByRole('button', { name: 'Now' }));
 
       fireEvent.click(screen.getByRole('tab', { name: 'Report' }));
       fireEvent.click(screen.getByRole('tab', { name: 'Dashboard' }));
 
-      expect(within(chart()).getByRole('button', { name: 'Now' })).toBeEnabled();
+      expectOn(within(chart()).getByRole('button', { name: 'Now' }));
       expect(within(chart()).getByText(/from .* to /, { selector: 'span' }).textContent).toBe(movedText);
+    });
+
+    it('keeps the view history of the chart when the user opens another tab and comes back', () => {
+      renderPage();
+      fireEvent.click(within(within(chart()).getByRole('group', { name: 'Time range' })).getByRole('button', { name: '7d' }));
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Dashboard' }));
+      fireEvent.click(within(chart()).getByRole('button', { name: 'Previous view' }));
+
+      expect(within(chart()).getByRole('button', { name: '10m' })).toHaveAttribute('aria-pressed', 'true');
+      expect(within(chart()).getByRole('button', { name: 'Next view' })).not.toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('starts a new view history of the chart for the next machine', () => {
+      renderPage({ machines: [testMachine(), testMachine({ id: 'm2', name: 'Mill 2' })] });
+      fireEvent.click(within(chart()).getByRole('button', { name: '7d' }));
+      expect(within(chart()).getByRole('button', { name: 'Previous view' })).not.toHaveAttribute('aria-disabled', 'true');
+
+      go('/machine/m2');
+
+      expect(within(chart()).getByRole('button', { name: '10m' })).toHaveAttribute('aria-pressed', 'true');
+      expect(within(chart()).getByRole('button', { name: 'Previous view' })).toHaveAttribute('aria-disabled', 'true');
     });
 
     it('keeps the time range of the report when the user opens another tab and comes back', () => {

@@ -1,6 +1,6 @@
 import { cn } from '@toolpath/ui';
 import type { CSSProperties, PointerEvent, ReactNode } from 'react';
-import { ChevronLeftIcon, ChevronRightIcon } from '../../components/ui/icons';
+import { RedoIcon, UndoIcon } from '../../components/ui/icons';
 import { timeLabelAnchor, type TimeLabel } from './historyChart';
 
 /** The text of the axis labels of both charts */
@@ -35,30 +35,59 @@ export function ChartTooltip({ style, className, children }: { style: CSSPropert
 }
 
 const PAN_BUTTON_CLASS =
-  'inline-flex min-h-8 items-center gap-1 rounded-md border-0 bg-transparent px-2 font-semibold text-zinc-200 hover:text-zinc-50 disabled:cursor-default disabled:text-zinc-500';
+  'inline-flex min-h-8 items-center gap-1 rounded-md border-0 bg-transparent px-2 font-semibold text-zinc-200 hover:text-zinc-50';
 
-interface PanButtonsProps {
+interface ViewButtonsProps {
+  canUndo: boolean;
+  canRedo: boolean;
   /** False for the live chart: it already ends now */
-  canGoLater: boolean;
-  onEarlier: () => void;
-  onLater: () => void;
+  canGoToNow: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
   onNow: () => void;
 }
 
-/** Buttons that move the time of the chart: back, on, and back to now */
-export function PanButtons({ canGoLater, onEarlier, onLater, onNow }: PanButtonsProps) {
+/** Buttons that change the time of the chart: the previous view, the next view, and back to now */
+export function ViewButtons({ canUndo, canRedo, canGoToNow, onUndo, onRedo, onNow }: ViewButtonsProps) {
   return (
     <div role="group" aria-label="Move in time" className="inline-flex gap-0.5 rounded-lg bg-zinc-950 p-[0.1875rem]">
-      <button type="button" onClick={onEarlier} className={PAN_BUTTON_CLASS} aria-label="Earlier">
-        <ChevronLeftIcon size={16} />
-      </button>
-      <button type="button" onClick={onLater} disabled={!canGoLater} className={PAN_BUTTON_CLASS} aria-label="Later">
-        <ChevronRightIcon size={16} />
-      </button>
-      <button type="button" onClick={onNow} disabled={!canGoLater} className={PAN_BUTTON_CLASS}>
+      <TimeButton label="Previous view" enabled={canUndo} onClick={onUndo}>
+        <UndoIcon size={16} />
+      </TimeButton>
+      <TimeButton label="Next view" enabled={canRedo} onClick={onRedo}>
+        <RedoIcon size={16} />
+      </TimeButton>
+      <TimeButton enabled={canGoToNow} onClick={onNow}>
         Now
-      </button>
+      </TimeButton>
     </div>
+  );
+}
+
+interface TimeButtonProps {
+  /** The name and the tooltip of a button that shows only an icon */
+  label?: string;
+  enabled: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}
+
+/**
+ * A button that changes the time of the chart. When it can do nothing, it is off with aria-disabled, not disabled:
+ * the browser takes the focus away from a disabled button, and the next Tab then starts at the top of the page.
+ */
+function TimeButton({ label, enabled, onClick, children }: TimeButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={enabled ? onClick : undefined}
+      aria-disabled={enabled ? undefined : true}
+      className={cn(PAN_BUTTON_CLASS, !enabled && 'cursor-default text-zinc-500 hover:text-zinc-500')}
+      aria-label={label}
+      title={label}
+    >
+      {children}
+    </button>
   );
 }
 

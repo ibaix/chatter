@@ -218,7 +218,7 @@ describe('MachineHistoryChart', () => {
       await screen.findByRole('img', { name: /^Spindle speed in the last 10 minutes/ });
 
       vi.mocked(fetchValueHistory).mockRejectedValueOnce(new Error('Chatter cannot be reached'));
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
 
       expect(await screen.findByText('Could not load the spindle speed history. Reload the page to try again.')).toBeInTheDocument();
       expect(screen.queryByRole('img', { name: /^Spindle speed/ })).not.toBeInTheDocument();
@@ -231,7 +231,7 @@ describe('MachineHistoryChart', () => {
       await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
 
       vi.mocked(fetchValueHistory).mockReturnValue(new Promise(() => {}));
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
 
       expect(await screen.findByRole('status')).toHaveTextContent('Loading');
       expect(screen.getByRole('img', { name: /^Spindle speed from / })).toBeInTheDocument();
@@ -247,7 +247,7 @@ describe('MachineHistoryChart', () => {
 
     it('tells the newest value in the shown time, not in the time after it', async () => {
       const now = Date.now();
-      // After Earlier, the chart shows the 10 minutes that end 5 minutes ago, and loads the 5 minutes after them
+      // After a scroll of half the range back, the chart shows the 10 minutes that end 5 minutes ago, and loads the 5 minutes after them
       vi.mocked(fetchValueHistory).mockResolvedValue({
         points: [{ time: now - 7 * MINUTE, value: 1000 }, { time: now - 2 * MINUTE, value: 2000 }],
         window: '5s',
@@ -255,7 +255,7 @@ describe('MachineHistoryChart', () => {
       render(<ChartWithMenu machine={runningMachine()} />);
       await screen.findByRole('img', { name: /^Spindle speed in the last 10 minutes/ });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
 
       expect(await screen.findByRole('img', { name: /^Spindle speed from .*Newest value: 1,000 RPM\.$/ })).toBeInTheDocument();
     });
@@ -274,6 +274,30 @@ describe('MachineHistoryChart', () => {
     fireEvent.pointerUp(target, { clientX: toX, pointerId: 1 });
   }
 
+  /** A keyboard user presses Enter on a button: the button has the focus, and the browser clicks it */
+  function pressEnter(button: HTMLElement) {
+    button.focus();
+    fireEvent.click(button, { detail: 0 });
+  }
+
+  /** The button is off, but it keeps the focus: it has aria-disabled, not disabled */
+  function expectOff(button: HTMLElement) {
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(button).not.toBeDisabled();
+  }
+
+  function expectOn(button: HTMLElement) {
+    expect(button).not.toHaveAttribute('aria-disabled', 'true');
+    expect(button).not.toBeDisabled();
+  }
+
+  const nowButton = () => screen.getByRole('button', { name: 'Now' });
+
+  /** Two sideways scroll steps on the chart, of a quarter of the range each: -1 goes back half the range, 1 goes on */
+  function scrollHalfARange(direction: -1 | 1) {
+    for (let step = 0; step < 2; step++) fireEvent.wheel(chartBody(), { deltaX: direction * 80, deltaY: 0 });
+  }
+
   /** The machine state view, and its overview strip. The strip goes from 0 to BOX_WIDTH. */
   async function overviewOfStateView() {
     const now = Date.now();
@@ -283,19 +307,37 @@ describe('MachineHistoryChart', () => {
   }
 
   describe('moving in time', () => {
-    it('goes back half a range with Earlier, and back to the live chart with Now', async () => {
+    it('goes back half a range with a sideways scroll, and back to the live chart with Now', async () => {
       render(<ChartWithMenu machine={runningMachine()} />);
-      expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
+      expectOff(nowButton());
 
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
 
       expect(await screen.findByText(`How fast the spindle turned ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Later' })).toBeEnabled();
+      expectOn(nowButton());
 
-      fireEvent.click(screen.getByRole('button', { name: 'Now' }));
+      fireEvent.click(nowButton());
 
       expect(await screen.findByText('How fast the spindle turned in the last 10 minutes.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
+      expectOff(nowButton());
+    });
+
+    it('keeps the keyboard focus on Now after Enter, and does nothing for one more Enter', async () => {
+      await overviewOfStateView();
+      scrollHalfARange(-1);
+      await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`);
+
+      pressEnter(nowButton());
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(nowButton()).toHaveFocus();
+      expectOff(nowButton());
+
+      pressEnter(nowButton());
+      expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(nowButton()).toHaveFocus();
+      // The history did not change: one undo goes back to the time before Now
+      fireEvent.click(screen.getByRole('button', { name: 'Previous view' }));
+      expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
     });
 
     it('moves the time with a sideways scroll, but not with an up or down scroll', async () => {
@@ -387,7 +429,7 @@ describe('MachineHistoryChart', () => {
 
     it('does not drag a chart in the past after now', async () => {
       await overviewOfStateView();
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
       await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`);
 
       // A drag of the full width to the left goes 10 minutes on, but the chart stops at now
@@ -439,29 +481,29 @@ describe('MachineHistoryChart', () => {
       expect(body).toHaveClass('cursor-grab');
     });
 
-    it('goes on in time with Later, and is live again when it gets to now', async () => {
+    it('goes on in time with a sideways scroll, and is live again when it gets to now', async () => {
       await overviewOfStateView();
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
+      scrollHalfARange(-1);
       await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 10 * MINUTE)}.`);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+      scrollHalfARange(1);
       expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+      scrollHalfARange(1);
       expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
+      expectOff(nowButton());
     });
 
     it('goes back to the live chart when the user picks another range', async () => {
       render(<ChartWithMenu machine={runningMachine()} />);
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Now' })).toBeEnabled());
+      scrollHalfARange(-1);
+      await waitFor(() => expectOn(nowButton()));
 
       fireEvent.click(screen.getByRole('button', { name: '1h' }));
 
       expect(await screen.findByText('How fast the spindle turned in the last hour.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
+      expectOff(nowButton());
     });
   });
 
@@ -538,7 +580,7 @@ describe('MachineHistoryChart', () => {
       drag(overview, BOX_WIDTH / 2, BOX_WIDTH);
 
       expect(await screen.findByText('What the machine did in the last 5 minutes.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
+      expectOff(nowButton());
     });
 
     it('does not move a live chart into the past for a click on the strip, also when the clock of Chatter is ahead', async () => {
@@ -571,6 +613,18 @@ describe('MachineHistoryChart', () => {
       expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: '10m' })).toHaveAttribute('aria-pressed', 'true');
       expect(screen.queryByRole('button', { name: 'Clear the zoom' })).not.toBeInTheDocument();
+    });
+
+    it('puts the keyboard focus on the strip when the clear button goes away after Enter', async () => {
+      const overview = await overviewOfStateView();
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(/^What the machine did from /);
+
+      pressEnter(screen.getByRole('button', { name: 'Clear the zoom' }));
+
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(document.activeElement).not.toBe(document.body);
+      expect(screen.getByRole('img', { name: /^Overview of the last 10 minutes/ })).toHaveFocus();
     });
 
     it('reads the timeline once while the strip shows the same time as the chart', async () => {
@@ -612,7 +666,7 @@ describe('MachineHistoryChart', () => {
       await overviewOfStateView();
 
       // The chart shows from 15 to 5 minutes ago. The 10-minute strip goes back with it.
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
 
       const overview = await screen.findByRole('img', { name: name => name.startsWith(`Overview ${viewText(CHART_RANGES[0], NOW - 5 * MINUTE)}.`) });
       const labels = [...overview.querySelectorAll('text')].map(label => label.textContent);
@@ -623,7 +677,7 @@ describe('MachineHistoryChart', () => {
 
     it('clears a zoom in a strip in the past to the time of the strip', async () => {
       await overviewOfStateView();
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
       const overview = await screen.findByRole('img', { name: /^Overview from / });
       // The strip goes from 15 to 5 minutes ago. The zoom is the middle 5 minutes.
       drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
@@ -632,7 +686,290 @@ describe('MachineHistoryChart', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Clear the zoom' }));
 
       expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Now' })).toBeEnabled();
+      expectOn(nowButton());
+    });
+  });
+
+  describe('accepting a zoom', () => {
+    /** Zooms in on the middle 5 minutes of the 10-minute strip: from 7.5 to 2.5 minutes ago */
+    async function zoomInOnTheMiddle() {
+      const overview = await overviewOfStateView();
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`);
+    }
+
+    it('shows the accept button only while the chart is zoomed in, before the clear button', async () => {
+      const overview = await overviewOfStateView();
+      expect(screen.queryByRole('button', { name: 'Use as full range' })).not.toBeInTheDocument();
+
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(/^What the machine did from /);
+
+      const accept = screen.getByRole('button', { name: 'Use as full range' });
+      const clear = screen.getByRole('button', { name: 'Clear the zoom' });
+      expect(accept).toHaveAttribute('title', 'Use as full range');
+      // The user gets to the accept button first with the Tab key
+      expect(accept.compareDocumentPosition(clear)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+
+    it('makes the accept and the clear buttons 20 px, with a gap between them', async () => {
+      await zoomInOnTheMiddle();
+
+      const accept = screen.getByRole('button', { name: 'Use as full range' });
+      const clear = screen.getByRole('button', { name: 'Clear the zoom' });
+      for (const button of [accept, clear]) {
+        expect(button.style.width).toBe('20px');
+        expect(button.style.height).toBe('20px');
+      }
+      expect(parseFloat(clear.style.left) - parseFloat(accept.style.left) - 20).toBeGreaterThanOrEqual(8);
+    });
+
+    /** The accept and the clear buttons as one pair: the x positions of its left edge, its right edge and its middle */
+    function zoomButtonPair() {
+      const accept = screen.getByRole('button', { name: 'Use as full range' });
+      const clear = screen.getByRole('button', { name: 'Clear the zoom' });
+      const left = parseFloat(accept.style.left);
+      const right = parseFloat(clear.style.left) + parseFloat(clear.style.width);
+      return { left, right, middle: (left + right) / 2 };
+    }
+
+    it('puts the accept and the clear buttons over the middle of the box', async () => {
+      await zoomInOnTheMiddle();
+
+      // The box goes from BOX_WIDTH / 4 to 3 * BOX_WIDTH / 4
+      expect(zoomButtonPair().middle).toBe(BOX_WIDTH / 2);
+    });
+
+    it('keeps the two buttons inside the strip when the zoom is at its left edge', async () => {
+      const overview = await overviewOfStateView();
+      drag(overview, 0, 20);
+      await screen.findByRole('button', { name: 'Use as full range' });
+
+      const pair = zoomButtonPair();
+      expect(pair.left).toBe(0);
+      expect(pair.right).toBeLessThanOrEqual(BOX_WIDTH);
+    });
+
+    it('keeps the two buttons inside the strip when the zoom is at its right edge', async () => {
+      const overview = await overviewOfStateView();
+      drag(overview, BOX_WIDTH - 20, BOX_WIDTH);
+      await screen.findByRole('button', { name: 'Use as full range' });
+
+      const clear = screen.getByRole('button', { name: 'Clear the zoom' });
+      expect(parseFloat(clear.style.left) + 20).toBeLessThanOrEqual(BOX_WIDTH);
+      expect(parseFloat(screen.getByRole('button', { name: 'Use as full range' }).style.left)).toBeGreaterThanOrEqual(0);
+    });
+
+    it('makes the zoom the full range of the strip, with no zoom to clear and no range button pressed', async () => {
+      await zoomInOnTheMiddle();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+
+      expect(await screen.findByRole('img', { name: name => name.startsWith(`Overview ${viewText({ ...CHART_RANGES[0], ms: 5 * MINUTE }, NOW - 2.5 * MINUTE)}.`) }))
+        .toBeInTheDocument();
+      expect(screen.getByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Clear the zoom' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Use as full range' })).not.toBeInTheDocument();
+      for (const name of ['10m', '1h', '24h', '7d']) expect(screen.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('puts the keyboard focus on the strip when the buttons go away after Enter on the accept button', async () => {
+      await zoomInOnTheMiddle();
+
+      pressEnter(screen.getByRole('button', { name: 'Use as full range' }));
+
+      const overview = await screen.findByRole('img', { name: /^Overview from / });
+      expect(document.activeElement).not.toBe(document.body);
+      expect(overview).toHaveFocus();
+      // The strip takes the focus only from the script: it is not one more stop for the Tab key
+      expect(overview).toHaveAttribute('tabindex', '-1');
+    });
+
+    it('does not move the focus for a click on a button that does not have the focus', async () => {
+      await zoomInOnTheMiddle();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+
+      await screen.findByRole('img', { name: /^Overview from / });
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it('zooms in again inside the accepted range, and clears that zoom back to the accepted range', async () => {
+      await zoomInOnTheMiddle();
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+      const overview = await screen.findByRole('img', { name: /^Overview from / });
+
+      // The first half of the 5-minute strip: from 7.5 to 5 minutes ago
+      drag(overview, 0, BOX_WIDTH / 2);
+      expect(await screen.findByText(`What the machine did ${pastText(2.5 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear the zoom' }));
+      expect(await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
+    });
+
+    it('keeps the accepted length with Now', async () => {
+      await zoomInOnTheMiddle();
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+
+      fireEvent.click(nowButton());
+
+      expect(await screen.findByText('What the machine did in the last 5 minutes.')).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: /^Overview of the last 5 minutes/ })).toBeInTheDocument();
+    });
+
+    it('shows the range of a range button again after an accepted zoom', async () => {
+      await zoomInOnTheMiddle();
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+
+      fireEvent.click(screen.getByRole('button', { name: '1h' }));
+
+      expect(await screen.findByText('What the machine did in the last hour.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '1h' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('img', { name: /^Overview of the last hour/ })).toBeInTheDocument();
+    });
+  });
+
+  describe('undo and redo', () => {
+    const undoButton = () => screen.getByRole('button', { name: 'Previous view' });
+    const redoButton = () => screen.getByRole('button', { name: 'Next view' });
+
+    it('has buttons for the previous and the next view in place of Earlier and Later', async () => {
+      await overviewOfStateView();
+
+      expect(undoButton()).toHaveAttribute('title', 'Previous view');
+      expect(redoButton()).toHaveAttribute('title', 'Next view');
+      expect(screen.queryByRole('button', { name: 'Earlier' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Later' })).not.toBeInTheDocument();
+    });
+
+    it('can go back only after a change, and on only after a go back', async () => {
+      await overviewOfStateView();
+      expectOff(undoButton());
+      expectOff(redoButton());
+
+      fireEvent.click(screen.getByRole('button', { name: '1h' }));
+      expectOn(undoButton());
+      expectOff(redoButton());
+
+      fireEvent.click(undoButton());
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expectOff(undoButton());
+      expectOn(redoButton());
+
+      fireEvent.click(redoButton());
+      expect(await screen.findByText('What the machine did in the last hour.')).toBeInTheDocument();
+    });
+
+    it('keeps the keyboard focus on Previous view after the last undo, and does nothing for one more Enter', async () => {
+      await overviewOfStateView();
+      fireEvent.click(screen.getByRole('button', { name: '1h' }));
+      await screen.findByText('What the machine did in the last hour.');
+
+      pressEnter(undoButton());
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(undoButton()).toHaveFocus();
+      expectOff(undoButton());
+
+      pressEnter(undoButton());
+      expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(undoButton()).toHaveFocus();
+      // The history did not change: one redo goes to the last view, and then there is no more to redo
+      fireEvent.click(redoButton());
+      expect(await screen.findByText('What the machine did in the last hour.')).toBeInTheDocument();
+      expectOff(redoButton());
+    });
+
+    it('keeps the keyboard focus on Next view after the last redo, and does nothing for one more Enter', async () => {
+      await overviewOfStateView();
+      fireEvent.click(screen.getByRole('button', { name: '1h' }));
+      fireEvent.click(undoButton());
+      await screen.findByText('What the machine did in the last 10 minutes.');
+
+      pressEnter(redoButton());
+      expect(await screen.findByText('What the machine did in the last hour.')).toBeInTheDocument();
+      expect(redoButton()).toHaveFocus();
+      expectOff(redoButton());
+
+      pressEnter(redoButton());
+      expect(screen.getByText('What the machine did in the last hour.')).toBeInTheDocument();
+      expect(redoButton()).toHaveFocus();
+      // The history did not change: one undo goes to the first view, and then there is no more to undo
+      fireEvent.click(undoButton());
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expectOff(undoButton());
+    });
+
+    it('gives back the strip and the zoom after an accepted zoom', async () => {
+      const overview = await overviewOfStateView();
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`);
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+      await screen.findByRole('img', { name: /^Overview from / });
+
+      fireEvent.click(undoButton());
+
+      expect(await screen.findByRole('img', { name: /^Overview of the last 10 minutes/ })).toBeInTheDocument();
+      expect(screen.getByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Clear the zoom' })).toBeInTheDocument();
+    });
+
+    it('gives back the zoom, its box and its buttons after Clear the zoom', async () => {
+      const overview = await overviewOfStateView();
+      // The zoom is the middle 5 minutes of the strip: its box goes from BOX_WIDTH / 4 to 3 * BOX_WIDTH / 4
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`);
+      fireEvent.click(screen.getByRole('button', { name: 'Clear the zoom' }));
+      await screen.findByText('What the machine did in the last 10 minutes.');
+
+      fireEvent.click(undoButton());
+
+      expect(await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
+      const box = screen.getByRole('img', { name: /^Overview of the last 10 minutes/ }).querySelector('rect.stroke-zinc-50');
+      expect(box).toHaveAttribute('x', String(BOX_WIDTH / 4));
+      expect(box).toHaveAttribute('width', String(BOX_WIDTH / 2));
+      expect(screen.getByRole('button', { name: 'Use as full range' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Clear the zoom' })).toBeInTheDocument();
+    });
+
+    it('goes back before a series of moves in one step', async () => {
+      await overviewOfStateView();
+      scrollHalfARange(-1);
+      drag(chartBody(), 100, 100 + BOX_WIDTH / 2);
+      await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 10 * MINUTE)}.`);
+
+      fireEvent.click(undoButton());
+
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expectOff(undoButton());
+    });
+
+    it('loads the time of the previous zoom again, also when the two zooms have the same length', async () => {
+      const overview = await overviewOfStateView();
+      // Two zooms of 2.5 minutes: from 7.5 to 5 minutes ago, then from 5 to 2.5 minutes ago
+      drag(overview, BOX_WIDTH / 4, BOX_WIDTH / 2);
+      await screen.findByText(`What the machine did ${pastText(2.5 * MINUTE, NOW - 5 * MINUTE)}.`);
+      drag(overview, BOX_WIDTH / 2, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(`What the machine did ${pastText(2.5 * MINUTE, NOW - 2.5 * MINUTE)}.`);
+      // The chart loads one more range after the first zoom: up to 2.5 minutes ago
+      const loadsOfFirstZoom = () => vi.mocked(fetchStateTimeline).mock.calls.filter(call => call[2] === NOW - 2.5 * MINUTE).length;
+      await waitFor(() => expect(loadsOfFirstZoom()).toBe(1));
+
+      fireEvent.click(undoButton());
+
+      expect(await screen.findByText(`What the machine did ${pastText(2.5 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
+      await waitFor(() => expect(loadsOfFirstZoom()).toBe(2));
+    });
+
+    it('keeps the history when the user picks another value', async () => {
+      render(<ChartWithMenu machine={testMachine({}, { spindleSpeed: 1200, spindleLoad: 30 })} />);
+      fireEvent.click(screen.getByRole('button', { name: '1h' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Value in the chart: Spindle speed' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Spindle load' }));
+      await screen.findByText('How hard the spindle worked in the last hour.');
+
+      fireEvent.click(undoButton());
+
+      expect(await screen.findByText('How hard the spindle worked in the last 10 minutes.')).toBeInTheDocument();
     });
   });
 });

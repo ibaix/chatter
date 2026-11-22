@@ -8,7 +8,7 @@ import { useBoxSize } from '../../hooks/useBoxSize';
 import { STATE_LABELS } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
 import { ChartOverview } from './ChartOverview';
-import { AXIS_LABEL_CLASS, ChartTooltip, offsetXOf, PanButtons, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
+import { AXIS_LABEL_CLASS, ChartTooltip, offsetXOf, TimeLabels, ViewButtons, ZoomHighlight, type ZoomSelection } from './ChartParts';
 import { MACHINE_STATE, type ChartChoice, type ChartChoiceId, type ChartValue } from './chartValues';
 import {
   axisTicks,
@@ -37,8 +37,6 @@ const MARGIN = { top: 12, right: 16, bottom: 38, left: 52 };
 /** The machine state strip under the plot, above the time labels */
 const STRIP_GAP = 5;
 const STRIP_HEIGHT = 6;
-/** The Earlier and Later buttons move the time by half the range */
-const BUTTON_STEP = 0.5;
 /** The space between a value label and the left end of its grid line */
 const VALUE_LABEL_GAP = 8;
 /** The distance from the bottom of the chart to the time labels */
@@ -64,7 +62,7 @@ interface MachineHistoryChartProps {
   /** The choice that the chart shows */
   choice: ChartChoice;
   onChoose: (id: ChartChoiceId) => void;
-  /** The time in the chart, kept by the page, so it stays when the user opens another tab and comes back */
+  /** The time in the chart and its history, kept by the page, so they stay when the user opens another tab and comes back */
   view?: KeptChartView;
   className?: string;
 }
@@ -72,7 +70,7 @@ interface MachineHistoryChartProps {
 /** One machine value, or the machine state, over time, with a menu for the value and buttons for the time range */
 function MachineHistoryChart({ machine, choices, choice, onChoose, view: keptView, className }: MachineHistoryChartProps) {
   const clockNow = useChartClock(machine);
-  const { view, pick, moveBy, pan, showNow, zoomTo, clearZoom, zoomed } = useChartView(clockNow, keptView);
+  const { view, pick, moveBy, showNow, zoomTo, clearZoom, acceptZoom, undo, redo, canUndo, canRedo, zoomed } = useChartView(clockNow, keptView);
   const { range, end } = view;
   const isStateChart = choice.id === MACHINE_STATE.id;
   const drag = useChartDrag({ rangeMs: range.ms, end, now: clockNow, margins: isStateChart ? 0 : MARGIN.left + MARGIN.right, onMove: moveBy });
@@ -92,12 +90,7 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, view: keptVie
           <span className="text-xs text-zinc-300">{choice.description} {viewText(range, end)}.</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <PanButtons
-            canGoLater={end !== null}
-            onEarlier={() => pan(-BUTTON_STEP)}
-            onLater={() => pan(BUTTON_STEP)}
-            onNow={showNow}
-          />
+          <ViewButtons canUndo={canUndo} canRedo={canRedo} canGoToNow={end !== null} onUndo={undo} onRedo={redo} onNow={showNow} />
           <RangeButtons options={CHART_RANGES} value={range} onChange={pick} />
         </div>
       </div>
@@ -128,6 +121,7 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, view: keptVie
         onMove={moveBy}
         onZoom={zoomTo}
         onClearZoom={zoomed ? clearZoom : undefined}
+        onAcceptZoom={zoomed ? acceptZoom : undefined}
       />
     </section>
   );
