@@ -312,9 +312,39 @@ describe.each(BACKENDS)('history backup routes (%s VictoriaMetrics)', (_name, ma
     expect((await request('DELETE', `/machine/${machineId}/history-restore/${restoreId}`, 'admin')).status).toBe(404);
   });
 
-  it('gives 409 while another backup waits for its download', async () => {
-    await request('POST', `/machine/${machineId}/history-backup`, 'admin', {});
+  it('gives 409 while the backup of another machine waits for its download, and a new backup of the same machine replaces it', async () => {
+    const first = await request('POST', `/machine/${machineId}/history-backup`, 'admin', {});
+    const { id: firstId } = await first.json() as { id: string };
+    const other = poller.getMachines().find(machine => machine.id !== machineId)!;
+    expect((await request('POST', `/machine/${other.id}/history-backup`, 'admin', {})).status).toBe(409);
     const second = await request('POST', `/machine/${machineId}/history-backup`, 'admin', {});
-    expect(second.status).toBe(409);
+    expect(second.status).toBe(200);
+    expect((await request('GET', `/machine/${machineId}/history-backup/${firstId}`, 'admin')).status).toBe(404);
+  });
+
+  it('stops a backup when the request stops, so the next backup can run', async () => {
+    const exportSeries = backend.store.exportSeries.bind(backend.store);
+    let started = () => {};
+    const exportStarted = new Promise<void>(resolve => {
+      started = resolve;
+    });
+    // The export waits until its signal stops it
+    backend.store.exportSeries = async (...args) => {
+      started();
+      await new Promise<void>((_resolve, reject) => {
+        args[3].addEventListener('abort', () => reject(args[3].reason), { once: true });
+      });
+      return exportSeries(...args);
+    };
+    const stop = new AbortController();
+    const first = app.request(`/api/machine/${machineId}/history-backup`, {
+      method: 'POST', headers: { Cookie: cookies.admin, 'Content-Type': 'application/json' }, body: '{}', signal: stop.signal,
+    });
+    await exportStarted;
+    stop.abort(new Error('The proxy stopped waiting'));
+    await first.catch(() => null);
+    backend.store.exportSeries = exportSeries;
+    const other = poller.getMachines().find(machine => machine.id !== machineId)!;
+    expect((await request('POST', `/machine/${other.id}/history-backup`, 'admin', {})).status).toBe(200);
   });
 });

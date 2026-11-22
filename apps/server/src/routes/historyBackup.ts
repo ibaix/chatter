@@ -44,7 +44,7 @@ export function historyBackupRoutes(poller: HardwarePoller, backups: HistoryBack
       if (!machine) return notFound(c);
       const { from = null, to = Date.now(), averagesOnly = false } = c.req.valid('json');
       return replyOrRefusal(c, async () => {
-        const { id, fileName, manifest } = await backups.prepareBackup(machine, { from, to, averagesOnly }, c.var.user.username);
+        const { id, fileName, manifest } = await backups.prepareBackup(machine, { from, to, averagesOnly }, c.var.user.username, c.req.raw.signal);
         return c.json({ id, fileName, parts: manifest.parts, data: manifest.data });
       });
     })

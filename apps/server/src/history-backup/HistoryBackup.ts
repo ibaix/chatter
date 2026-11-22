@@ -170,18 +170,27 @@ export class HistoryBackup {
     await rm(this.folder, { recursive: true, force: true });
   }
 
-  /** Read the history of the machine into files. The download of the file comes next. */
-  async prepareBackup(machine: BackupMachine, options: BackupOptions, user: string): Promise<PreparedBackup> {
+  /**
+   * Read the history of the machine into files. The download of the file comes next.
+   * `signal` is the request: when the browser or a proxy stops it, the backup stops and frees the place.
+   */
+  async prepareBackup(machine: BackupMachine, options: BackupOptions, user: string, signal?: AbortSignal): Promise<PreparedBackup> {
+    // A backup of the same machine that nobody downloads yet (for example after a proxy time limit) gives its place
+    if (this.prepared?.machineId === machine.id) await this.dropPrepared(this.prepared.id);
     this.start('backup');
     const id = randomUUID();
     const folder = path.join(this.folder, `backup-${id}`);
     const abort = new AbortController();
+    const stop = () => abort.abort(signal?.reason);
+    signal?.addEventListener('abort', stop, { once: true });
     try {
+      if (signal?.aborted) throw signal.reason;
       await mkdir(folder, { recursive: true });
       const budget = new ByteBudget(ARCHIVE_LIMITS.archiveBytes, () => new BackupRefusedError(
         `The backup is larger than ${gigabytes(ARCHIVE_LIMITS.archiveBytes)}. Choose a shorter time range, or 1-minute averages only.`, 413,
       ));
       const manifest = await this.writeBackupParts(folder, machine, options, budget, abort.signal);
+      abort.signal.throwIfAborted();
       const fileName = `chatter-history-${fileNamePart(machine.name)}-${new Date(this.now()).toISOString().slice(0, 10)}.tar.gz`;
       const timer = setTimeout(() => void this.dropPrepared(id), WAIT_FOR_NEXT_STEP_MS);
       timer.unref();
@@ -193,6 +202,8 @@ export class HistoryBackup {
       await rm(folder, { recursive: true, force: true });
       this.running = null;
       throw error;
+    } finally {
+      signal?.removeEventListener('abort', stop);
     }
   }
 
@@ -359,12 +370,12 @@ export class HistoryBackup {
     for (const [name, pattern] of series) {
       await this.requireFreeBytes(0);
       const exported = await this.history.exportSeries(machine.id, pattern, range, signal);
-      parts[name] = await writeGzipPart(path.join(folder, localName(name)), countedSeries(exported, span), budget);
+      parts[name] = await writeGzipPart(path.join(folder, localName(name)), countedSeries(exported, span), budget, signal);
     }
-    parts[PERIODS_PART] = await writeGzipPart(path.join(folder, localName(PERIODS_PART)), this.periodLines(machine.id, range, span), budget);
+    parts[PERIODS_PART] = await writeGzipPart(path.join(folder, localName(PERIODS_PART)), this.periodLines(machine.id, range, span), budget, signal);
     const rules = this.alertRules.rulesOf(machine.id).map(withoutId);
     const rulesText = `${JSON.stringify({ rules }, null, 2)}\n`;
-    parts[RULES_PART] = await writeGzipPart(path.join(folder, localName(RULES_PART)), oneText(rulesText, rules.length), budget, false);
+    parts[RULES_PART] = await writeGzipPart(path.join(folder, localName(RULES_PART)), oneText(rulesText, rules.length), budget, signal, false);
     return {
       format: ARCHIVE_FORMAT,
       formatVersion: FORMAT_VERSION,
@@ -596,7 +607,9 @@ function countedSeries(exported: AsyncIterable<Uint8Array>, span: TimeSpan): Cou
 }
 
 /** Write the lines to a new file, gzip or not, with the sha256 and the size of the file */
-async function writeGzipPart(file: string, lines: AsyncIterable<string> & Partial<CountedLines>, budget: ByteBudget, gzip = true): Promise<PartFacts> {
+async function writeGzipPart(
+  file: string, lines: AsyncIterable<string> & Partial<CountedLines>, budget: ByteBudget, signal: AbortSignal, gzip = true,
+): Promise<PartFacts> {
   const hash = createHash('sha256');
   let bytes = 0;
   const measure = new Transform({
@@ -620,7 +633,7 @@ async function writeGzipPart(file: string, lines: AsyncIterable<string> & Partia
     }
   }
   const stages = gzip ? [Readable.from(counted()), createGzip(), measure] : [Readable.from(counted()), measure];
-  await pipeline([...stages, createWriteStream(file, { flags: 'wx' })]);
+  await pipeline([...stages, createWriteStream(file, { flags: 'wx' })], { signal });
   return { bytes, sha256: hash.digest('hex'), count: lines.count?.() ?? count };
 }
 

@@ -52,6 +52,33 @@ function failAsDiskFull(stream: WriteStream): void {
   };
 }
 
+/**
+ * The export of VictoriaMetrics gives lines without end, until its signal stops it.
+ * `started` resolves at the first line. restore() gives back the normal export.
+ */
+function endlessExport(victoria: FakeVictoria) {
+  const exportSeries = victoria.exportSeries.bind(victoria);
+  const signals: AbortSignal[] = [];
+  let started = () => {};
+  const startedPromise = new Promise<void>(resolve => {
+    started = resolve;
+  });
+  victoria.exportSeries = async (machineId, _pattern, _range, signal) => {
+    signals.push(signal);
+    return (async function* () {
+      for (let time = 0; !signal.aborted; time += 1000) {
+        // Random values, so gzip cannot make the part small
+        const values = Array.from({ length: 1000 }, () => Math.random());
+        const timestamps = values.map((_value, index) => time * 1000 + index);
+        yield Buffer.from(`${JSON.stringify({ metric: { __name__: 'chatter_spindle_speed', machine: machineId, type: 'brother' }, values, timestamps })}\n`);
+        started();
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    })();
+  };
+  return { started: startedPromise, signals, restore: () => { victoria.exportSeries = exportSeries; } };
+}
+
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
 const NOW = Date.UTC(2026, 10, 21, 12);
@@ -160,7 +187,7 @@ describe('HistoryBackup', () => {
 
     it('allows one backup at a time, and deletes its files after the download', async () => {
       const prepared = await backups.prepareBackup(source, ALL, 'admin');
-      await expect(backups.prepareBackup(source, ALL, 'admin')).rejects.toMatchObject({ status: 409 });
+      await expect(backups.prepareBackup(target, ALL, 'admin')).rejects.toMatchObject({ status: 409 });
       await expect(receive(Buffer.from('x'))).rejects.toMatchObject({ status: 409 });
       expect(filesLeft()).toHaveLength(1);
 
@@ -168,6 +195,36 @@ describe('HistoryBackup', () => {
       await new Promise(resolve => setTimeout(resolve, 20));
       expect(filesLeft()).toEqual([]);
       expect(() => backups.download(prepared.id, source.id, 'admin')).toThrow(BackupRefusedError);
+      await backups.prepareBackup(source, ALL, 'admin');
+    });
+
+    it('a new backup of the same machine replaces a prepared backup whose download did not start', async () => {
+      const first = await backups.prepareBackup(source, ALL, 'admin');
+      const second = await backups.prepareBackup(source, { ...ALL, averagesOnly: true }, 'admin');
+      expect(filesLeft()).toHaveLength(1);
+      expect(() => backups.download(first.id, source.id, 'admin')).toThrow(BackupRefusedError);
+      const entries = await unpack(Buffer.from(await new Response(backups.download(second.id, source.id, 'admin').stream).arrayBuffer()));
+      expect(entries.has('history/raw.jsonl.gz')).toBe(false);
+    });
+
+    it('a new backup does not replace a backup whose download runs', async () => {
+      const prepared = await backups.prepareBackup(source, ALL, 'admin');
+      const reader = backups.download(prepared.id, source.id, 'admin').stream.getReader();
+      await reader.read();
+      await expect(backups.prepareBackup(source, ALL, 'admin')).rejects.toMatchObject({ status: 409 });
+      await reader.cancel();
+    });
+
+    it('stops, deletes its files and frees the place when the request stops', async () => {
+      const exported = endlessExport(victoria);
+      const request = new AbortController();
+      const prepare = backups.prepareBackup(source, ALL, 'admin', request.signal);
+      await exported.started;
+      request.abort(new Error('The browser closed the connection'));
+      await expect(prepare).rejects.toThrow();
+      expect(exported.signals.every(signal => signal.aborted)).toBe(true);
+      expect(filesLeft()).toEqual([]);
+      exported.restore();
       await backups.prepareBackup(source, ALL, 'admin');
     });
 
