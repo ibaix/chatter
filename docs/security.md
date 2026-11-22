@@ -41,7 +41,9 @@ Chatter itself cannot install an update. It only puts the update file and a requ
 
 ## Diagnostics
 
-Only an Admin can use **Settings > Diagnostics** and the routes behind it: `/api/logs`, `/api/logs/stream`, `/api/logs/debug`, `/api/support-bundle`, `/api/system/facts`, `/api/system/restart-chatter`, and `/api/system/restart-pi`.
+Only an Admin can use **Settings > Diagnostics** and the routes behind it: `/api/logs`, `/api/logs/stream`, `/api/logs/debug`, `/api/support-bundle`, `/api/system/facts`, `/api/system/restart-chatter`, `/api/system/restart-pi`, and `/api/updates/helper-log` (the role must manage updates).
+Only an Admin can test or reconnect a machine: `/api/machine/:id/test` and `/api/machine/:id/reconnect` (the role must manage machines).
+Each logged-in user can read the connection of a machine: `/api/machine/:id/health`.
 
 - **The log hides secrets.** Before Chatter writes a line, it hides each value with a name such as password, token, secret, authorization, API key, or cookie, the user and password in an address, secret values in the query of an address, and the tokens in Telegram, Discord and Slack addresses. The log in memory, the log file, the log download, the live log, and the support bundle get only the hidden lines.
 - **The support bundle hides the saved secrets, but not all text.** The machine settings lose each password field: they tell only if a password is saved. The notification channels have their type, name, and routing only: not their saved settings. The messages have their status and error, not their text. But an error text or a log line can contain an address, a topic, or a phone number. The support bundle is for your own support. Read it before you send it to another person.
