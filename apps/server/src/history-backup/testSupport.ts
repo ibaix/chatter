@@ -122,3 +122,22 @@ export function addHistory(victoria: FakeVictoria, machine: { id: string; type: 
   }
   victoria.add(labels('chatter_running:avg1h'), to, 0.5);
 }
+
+/** For tests: the imports wait until release(). `started` resolves at the first import. */
+export function holdImports(store: HistoryStore): { started: Promise<void>; release: () => void } {
+  const importLines = store.importLines.bind(store);
+  let release = () => {};
+  const free = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  let started = () => {};
+  const startedPromise = new Promise<void>(resolve => {
+    started = resolve;
+  });
+  store.importLines = async body => {
+    started();
+    await free;
+    return importLines(body);
+  };
+  return { started: startedPromise, release };
+}

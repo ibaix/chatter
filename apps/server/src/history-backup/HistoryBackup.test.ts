@@ -12,7 +12,7 @@ import { StatePeriodStore } from '../recording/StatePeriodStore.js';
 import { ARCHIVE_LIMITS, FORMAT_VERSION, type Manifest } from './archive.js';
 import { changeArchive, linesOf, pack, partOf, unpack } from './archiveTestSupport.js';
 import { BackupRefusedError, HistoryBackup, type BackupMachine, type BackupOptions } from './HistoryBackup.js';
-import { addHistory, FakeVictoria } from './testSupport.js';
+import { addHistory, FakeVictoria, holdImports } from './testSupport.js';
 
 /** For tests that make the disk fail, or that see which files the code opens */
 const fsHooks = vi.hoisted(() => ({
@@ -409,9 +409,29 @@ describe('HistoryBackup', () => {
       expect(filesLeft()).toEqual([]);
       const preview = await receive(await backUp());
       expect(filesLeft()).toHaveLength(1);
-      await backups.cancelRestore(preview.id);
+      await backups.cancelRestore(preview.id, target.id);
       expect(filesLeft()).toEqual([]);
       await expect(backups.restore(preview.id, target, { alertRules: false }, 'admin')).rejects.toMatchObject({ status: 404 });
+    });
+
+    it('refuses to cancel a restore while it runs, and keeps its file', async () => {
+      const preview = await receive(await backUp());
+      const held = holdImports(victoria);
+      const running = backups.restore(preview.id, target, { alertRules: false }, 'admin');
+      await held.started;
+      await expect(backups.cancelRestore(preview.id, target.id)).rejects.toMatchObject({ status: 409 });
+      expect(filesLeft()).toHaveLength(1);
+      held.release();
+      expect(await running).toMatchObject({ samples: 14400 + AVERAGES });
+      expect(filesLeft()).toEqual([]);
+    });
+
+    it('cancels only the file of the same machine', async () => {
+      const preview = await receive(await backUp());
+      await expect(backups.cancelRestore(preview.id, source.id)).rejects.toMatchObject({ status: 404 });
+      expect(filesLeft()).toHaveLength(1);
+      await backups.cancelRestore(preview.id, target.id);
+      expect(filesLeft()).toEqual([]);
     });
 
     it('keeps one file at a time: a new upload replaces the last one', async () => {

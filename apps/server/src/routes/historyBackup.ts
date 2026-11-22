@@ -82,8 +82,8 @@ export function historyBackupRoutes(poller: HardwarePoller, backups: HistoryBack
       return replyOrRefusal(c, async () => c.json(await backups.restore(c.req.param('restoreId'), machine, options, c.var.user.username)));
     })
 
-    .delete('/machine/:id/history-restore/:restoreId', canManageChatter, async c => {
-      await backups.cancelRestore(c.req.param('restoreId'));
+    .delete('/machine/:id/history-restore/:restoreId', canManageChatter, async c => replyOrRefusal(c, async () => {
+      await backups.cancelRestore(c.req.param('restoreId'), c.req.param('id'));
       return c.json({ message: 'The restore file is deleted' });
-    });
+    }));
 }

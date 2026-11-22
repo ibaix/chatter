@@ -315,8 +315,13 @@ export class HistoryBackup {
     }
   }
 
-  /** Delete a received restore file that the user does not want */
-  async cancelRestore(id: string): Promise<void> {
+  /** Delete a received restore file that the user does not want. Not while its restore runs: the restore reads the file. */
+  async cancelRestore(id: string, machineId: string): Promise<void> {
+    const pending = this.pending;
+    if (!pending || pending.preview.id !== id || pending.machineId !== machineId) {
+      throw new BackupRefusedError('This restore file is not there. It was deleted already.', 404);
+    }
+    if (this.running === 'restore') throw new BackupRefusedError('The restore of this file runs now. It cannot be cancelled.', 409);
     await this.dropPending(id);
   }
 

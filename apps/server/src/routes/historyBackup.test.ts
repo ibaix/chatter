@@ -14,7 +14,7 @@ import type { UserAccounts } from '../auth/userAccounts.js';
 import { unpack } from '../history-backup/archiveTestSupport.js';
 import { HistoryBackup } from '../history-backup/HistoryBackup.js';
 import { sampleFacts, textLines } from '../history-backup/relabel.js';
-import { addHistory, FakeVictoria } from '../history-backup/testSupport.js';
+import { addHistory, FakeVictoria, holdImports } from '../history-backup/testSupport.js';
 import { VictoriaHistory, type HistoryStore } from '../history-backup/victoriaHistory.js';
 import { MetricsReader, type HistorySource } from '../recording/MetricsReader.js';
 import { captureLog } from '../logging/testSupport.js';
@@ -294,6 +294,22 @@ describe.each(BACKENDS)('history backup routes (%s VictoriaMetrics)', (_name, ma
     const res = await uploadTo(siemens.id, archive);
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: expect.stringMatching(/type brother.*type siemens/) });
+  });
+
+  it('cancels a restore file only for its machine, and not while its restore runs', async () => {
+    const archive = await backUp();
+    const { id: restoreId } = await (await uploadTo(machineId, archive)).json() as { id: string };
+    const other = poller.getMachines().find(machine => machine.id !== machineId)!;
+    expect((await request('DELETE', `/machine/${other.id}/history-restore/${restoreId}`, 'admin')).status).toBe(404);
+
+    const held = holdImports(backend.store);
+    const running = request('POST', `/machine/${machineId}/history-restore/${restoreId}`, 'admin', { alertRules: false });
+    await held.started;
+    const cancel = await request('DELETE', `/machine/${machineId}/history-restore/${restoreId}`, 'admin');
+    expect(cancel.status).toBe(409);
+    held.release();
+    expect((await running).status).toBe(200);
+    expect((await request('DELETE', `/machine/${machineId}/history-restore/${restoreId}`, 'admin')).status).toBe(404);
   });
 
   it('gives 409 while another backup waits for its download', async () => {
