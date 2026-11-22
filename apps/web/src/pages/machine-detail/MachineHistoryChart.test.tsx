@@ -693,7 +693,33 @@ describe('MachineHistoryChart', () => {
       expect(parseFloat(clear.style.left) - parseFloat(accept.style.left) - 20).toBeGreaterThanOrEqual(8);
     });
 
-    it('keeps the two buttons inside the strip when the zoom is at its edge', async () => {
+    /** The accept and the clear buttons as one pair: the x positions of its left edge, its right edge and its middle */
+    function zoomButtonPair() {
+      const accept = screen.getByRole('button', { name: 'Use as full range' });
+      const clear = screen.getByRole('button', { name: 'Clear the zoom' });
+      const left = parseFloat(accept.style.left);
+      const right = parseFloat(clear.style.left) + parseFloat(clear.style.width);
+      return { left, right, middle: (left + right) / 2 };
+    }
+
+    it('puts the accept and the clear buttons over the middle of the box', async () => {
+      await zoomInOnTheMiddle();
+
+      // The box goes from BOX_WIDTH / 4 to 3 * BOX_WIDTH / 4
+      expect(zoomButtonPair().middle).toBe(BOX_WIDTH / 2);
+    });
+
+    it('keeps the two buttons inside the strip when the zoom is at its left edge', async () => {
+      const overview = await overviewOfStateView();
+      drag(overview, 0, 20);
+      await screen.findByRole('button', { name: 'Use as full range' });
+
+      const pair = zoomButtonPair();
+      expect(pair.left).toBe(0);
+      expect(pair.right).toBeLessThanOrEqual(BOX_WIDTH);
+    });
+
+    it('keeps the two buttons inside the strip when the zoom is at its right edge', async () => {
       const overview = await overviewOfStateView();
       drag(overview, BOX_WIDTH - 20, BOX_WIDTH);
       await screen.findByRole('button', { name: 'Use as full range' });
