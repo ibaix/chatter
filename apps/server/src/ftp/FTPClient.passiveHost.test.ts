@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import net from 'net';
 import { PassThrough } from 'stream';
+import * as ftp from 'basic-ftp';
 import { FTPClient } from './FTPClient.js';
 
 // A rogue machine can name any host in its PASV reply, so Chatter would open a connection to a host of its choice.
@@ -126,6 +127,7 @@ describe('FTPClient data connection with a PASV reply that names another host', 
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await machine.close();
   });
 
@@ -155,5 +157,21 @@ describe('FTPClient data connection with a PASV reply that names another host', 
     expect(machine.decoyConnections).toBe(0);
     expect(machine.dataConnections).toBe(1);
     expect(files.map(file => file.name)).toEqual(['O1000', 'O2000']);
+  });
+
+  // A socket that never connected has no remote address. With no host, a connection goes to this computer.
+  // So the client must open no data connection at all.
+  it('opens no data connection when the address of the control connection is not known', async () => {
+    const send = ftp.Client.prototype.send;
+    vi.spyOn(ftp.Client.prototype, 'send').mockImplementation(async function (this: ftp.Client, command: string) {
+      const reply = await send.call(this, command);
+      if (command === 'PASV') Object.defineProperty(this.ftp.socket, 'remoteAddress', { get: () => undefined });
+      return reply;
+    });
+
+    await expect(ftpClient.downloadFile('O1000', new PassThrough())).rejects.toThrow('FTP download error');
+
+    expect(machine.decoyConnections).toBe(0);
+    expect(machine.dataConnections).toBe(0);
   });
 });
