@@ -5,6 +5,7 @@ import { HardwarePoller } from './polling/poller.js';
 import type { Auth } from './auth/Auth.js';
 import type { UserAccounts } from './auth/userAccounts.js';
 import { loggedInAuth } from './auth/testSupport.js';
+import { SESSION_COOKIE } from './auth/authRoutes.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
@@ -1294,6 +1295,68 @@ describe('API Routes', () => {
       const body = await res.json() as { error: string };
       expect(res.status).toBe(400);
       expect(body.error).toContain('Malformed JSON');
+    });
+  });
+
+  describe('who may read the content of a program', () => {
+    const roleCookies: Record<'viewer' | 'operator' | 'admin', string> = { viewer: '', operator: '', admin: '' };
+
+    beforeAll(async () => {
+      roleCookies.admin = cookie;
+      for (const role of ['viewer', 'operator'] as const) {
+        const login = { username: role, password: 'test-password' };
+        await accounts.add({ ...login, role });
+        roleCookies[role] = `${SESSION_COOKIE}=${await auth.logIn(login, { userAgent: 'test browser', address: '127.0.0.1' })}`;
+      }
+    });
+
+    /** A machine whose connector gives one file in its tree and the text "G00 X0" for a download */
+    async function machineWithFile(): Promise<string> {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const connector = poller.getConnector(machine.id)!;
+      vi.spyOn(connector, 'getFileTree').mockResolvedValue([{ name: 'O1000.NC', path: '/PRG/O1000.NC', type: 'file', size: 6 }] as never);
+      vi.spyOn(connector, 'downloadFile').mockImplementation(async (_path, output) => { output.write('G00 X0'); });
+      vi.mocked(getUploadEventById).mockResolvedValue({ id: 1, file_name: 'O1000.NC', file_content: 'G00 X0' } as never);
+      return machine.id;
+    }
+
+    const contentPaths = (id: string) => [
+      `/api/machine/${id}/files/download?path=/PRG/O1000.NC`,
+      `/api/machine/${id}/uploads/events/1`,
+    ];
+    const listPaths = (id: string) => [
+      `/api/machine/${id}/files?path=/PRG`,
+      `/api/machine/${id}/uploads`,
+      `/api/machine/${id}/uploads/1/events`,
+    ];
+
+    const getAs = (role: keyof typeof roleCookies, path: string) => app.request(path, { headers: { Cookie: roleCookies[role] } });
+
+    it('refuses the content of a program to a Viewer', async () => {
+      const id = await machineWithFile();
+      for (const path of contentPaths(id)) {
+        const res = await getAs('viewer', path);
+        expect(res.status, path).toBe(403);
+        expect(await res.text(), path).not.toContain('G00 X0');
+      }
+      expect(poller.getConnector(id)!.downloadFile).not.toHaveBeenCalled();
+      expect(getUploadEventById).not.toHaveBeenCalled();
+    });
+
+    it.each(['operator', 'admin'] as const)('gives the content of a program to an %s', async role => {
+      const id = await machineWithFile();
+      for (const path of contentPaths(id)) {
+        const res = await getAs(role, path);
+        expect(res.status, path).toBe(200);
+        expect(await res.text(), path).toContain('G00 X0');
+      }
+    });
+
+    it.each(['viewer', 'operator', 'admin'] as const)('gives the program names and dates to a %s', async role => {
+      const id = await machineWithFile();
+      for (const path of listPaths(id)) {
+        expect((await getAs(role, path)).status, path).toBe(200);
+      }
     });
   });
 });
