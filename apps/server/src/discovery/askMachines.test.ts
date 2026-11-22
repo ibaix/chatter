@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
-import { agentTypeOf, askChatter, devicesOfProbe, foundMTConnectMachine, haasSerialOf, maybeFanuc } from './askMachines.js';
+import { agentTypeOf, askChatter, askMTConnect, devicesOfProbe, foundMTConnectMachine, haasSerialOf, maybeFanuc } from './askMachines.js';
 
 /** A web server on 127.0.0.1 that gives `body` on each request. Gives its port and a way to stop it. */
 async function webServer(body: string, status = 200) {
@@ -99,6 +99,41 @@ describe('foundMTConnectMachine', () => {
 
   it('gives null when the agent has no device', () => {
     expect(foundMTConnectMachine('10.0.0.5', 5000, [])).toBeNull();
+  });
+});
+
+describe('askMTConnect', () => {
+  it('finds the agent by its /probe page', async () => {
+    const server = await webServer(probe(okuma));
+    try {
+      expect((await askMTConnect('127.0.0.1', server.port))?.machine).toMatchObject({ name: 'OKUMA GENOS M560-V', mtConnectPort: server.port });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('stops reading an endless reply after 1 MB, and does not wait for its end', async () => {
+    const server = await endlessServer('<?xml version="1.0"?><MTConnectDevices><!--');
+    try {
+      const startedAt = Date.now();
+      expect(await askMTConnect('127.0.0.1', server.port, LONG_TIMEOUT_MS)).toBeNull();
+      expect(Date.now() - startedAt).toBeLessThan(1000);
+      await vi.waitFor(() => expect(server.clientLeft()).toBe(true));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('does not read a reply that says that it is longer than 1 MB', async () => {
+    const server = await endlessServer('<?xml version="1.0"?><MTConnectDevices>', { 'Content-Length': String(5 * 1024 * 1024) });
+    try {
+      const startedAt = Date.now();
+      expect(await askMTConnect('127.0.0.1', server.port, LONG_TIMEOUT_MS)).toBeNull();
+      expect(Date.now() - startedAt).toBeLessThan(1000);
+      await vi.waitFor(() => expect(server.clientLeft()).toBe(true));
+    } finally {
+      await server.close();
+    }
   });
 });
 

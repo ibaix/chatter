@@ -33,6 +33,8 @@ const BROTHER_PROGRAM_PATTERN = /%[^%]*%/;
 const HAAS_SERIAL_PATTERN = /SERIAL NUMBER,\s*(\S+)/;
 /** Every MTConnect probe reply has this root tag */
 const MTCONNECT_PROBE_TAG = 'MTConnectDevices';
+/** A probe reply of an agent with many machines is some hundred KB. A longer reply is not read, so the Pi keeps its memory. */
+const MAX_PROBE_REPLY = 1024 * 1024;
 
 /** Brother: the "MEM" request gives the program in memory, between % signs */
 export async function askBrother(host: string, port: number = MACHINE_PORTS.brother, timeoutMs = ANSWER_TIMEOUT_MS): Promise<FoundMachine | null> {
@@ -157,8 +159,8 @@ export async function askMTConnect(host: string, port: number, timeoutMs = ANSWE
     // No redirects: the scan must never follow a device to an address outside the shop network
     const response = await fetch(`http://${host}:${port}/probe`, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
     if (!response.ok) return null;
-    const xml = await response.text();
-    if (!xml.includes(MTCONNECT_PROBE_TAG)) return null;
+    const xml = await textUpTo(response, MAX_PROBE_REPLY);
+    if (xml === null || !xml.includes(MTCONNECT_PROBE_TAG)) return null;
     return foundMTConnectMachine(host, port, await devicesOfProbe(xml));
   } catch {
     // No answer, a time-out, or a reply that is not XML: there is no MTConnect agent on this port
