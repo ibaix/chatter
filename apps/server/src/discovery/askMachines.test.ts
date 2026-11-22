@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { agentTypeOf, askChatter, devicesOfProbe, foundMTConnectMachine, haasSerialOf, maybeFanuc } from './askMachines.js';
 
 /** A web server on 127.0.0.1 that gives `body` on each request. Gives its port and a way to stop it. */
@@ -12,6 +12,38 @@ async function webServer(body: string, status = 200) {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   return { port: (server.address() as AddressInfo).port, close: () => new Promise(resolve => server.close(resolve)) };
 }
+
+/**
+ * A web server that sends `start` and then a body with no end, as fast as the client reads it.
+ * With a Content-Length in `headers`, it sends only `start`, and then waits with the connection open.
+ * It tells when the client stopped the connection.
+ */
+async function endlessServer(start: string, headers: Record<string, string> = {}) {
+  let clientLeft = false;
+  const chunk = Buffer.alloc(64 * 1024, 'a');
+  const server = createServer((_request, response) => {
+    response.writeHead(200, headers);
+    response.write(start);
+    const send = () => {
+      while (!response.destroyed && response.write(chunk)) { /* until the socket buffer is full */ }
+    };
+    response.on('drain', send);
+    response.on('close', () => { clientLeft = true; });
+    if (!headers['Content-Length']) send();
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  return {
+    port: (server.address() as AddressInfo).port,
+    clientLeft: () => clientLeft,
+    close: () => {
+      server.closeAllConnections();
+      return new Promise(resolve => server.close(resolve));
+    },
+  };
+}
+
+/** A time limit much longer than the ask should take, so an ask that waits for the end of the body fails the test */
+const LONG_TIMEOUT_MS = 4000;
 
 const probe = (devices: string) => `<?xml version="1.0"?>
 <MTConnectDevices xmlns="urn:mtconnect.org:MTConnectDevices:1.3"><Header/><Devices>${devices}</Devices></MTConnectDevices>`;
@@ -103,6 +135,30 @@ describe('askChatter', () => {
       } finally {
         await server.close();
       }
+    }
+  });
+
+  it('stops reading an endless reply after 1 KB, and does not wait for its end', async () => {
+    const server = await endlessServer('{"status":"ok","x":"');
+    try {
+      const startedAt = Date.now();
+      expect(await askChatter('127.0.0.1', server.port, LONG_TIMEOUT_MS)).toBeNull();
+      expect(Date.now() - startedAt).toBeLessThan(1000);
+      await vi.waitFor(() => expect(server.clientLeft()).toBe(true));
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('does not read a reply that says that it is longer than 1 KB', async () => {
+    const server = await endlessServer('{"status":"ok"}', { 'Content-Length': '5000000' });
+    try {
+      const startedAt = Date.now();
+      expect(await askChatter('127.0.0.1', server.port, LONG_TIMEOUT_MS)).toBeNull();
+      expect(Date.now() - startedAt).toBeLessThan(1000);
+      await vi.waitFor(() => expect(server.clientLeft()).toBe(true));
+    } finally {
+      await server.close();
     }
   });
 });

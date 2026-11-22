@@ -166,9 +166,35 @@ export async function askMTConnect(host: string, port: number, timeoutMs = ANSWE
   }
 }
 
+/**
+ * The text of a reply, or null when it is longer than `maxBytes`. It reads the body in parts and stops at the limit,
+ * so a device with a large or endless reply does not fill the memory of the Pi. A longer Content-Length stops it at once.
+ */
+async function textUpTo(response: Response, maxBytes: number): Promise<string | null> {
+  if (Number(response.headers.get('content-length')) > maxBytes) {
+    await response.body?.cancel().catch(() => {});
+    return null;
+  }
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    parts.push(value);
+  }
+  return Buffer.concat(parts).toString('utf8');
+}
+
 /** A version as /api/health gives it: "1.2.0", "edge-1a2b3c4" or "development" */
 const VERSION_TEXT = /^[A-Za-z0-9.+-]{1,64}$/;
-/** A health reply is a short JSON object. A longer reply is not Chatter. */
+/** A health reply is a short JSON object (bytes). A longer reply is not Chatter. */
 const MAX_HEALTH_REPLY = 1024;
 
 /**
@@ -182,8 +208,8 @@ export async function askChatter(
     // No redirects: the scan must never follow a device to an address outside the shop network
     const response = await fetch(`http://${host}:${port}/api/health`, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
     if (!response.ok) return null;
-    const text = await response.text();
-    if (text.length > MAX_HEALTH_REPLY) return null;
+    const text = await textUpTo(response, MAX_HEALTH_REPLY);
+    if (text === null) return null;
     const body = JSON.parse(text) as { status?: unknown; version?: unknown; instance?: unknown };
     if (body.status !== 'ok') return null;
     const version = typeof body.version === 'string' && VERSION_TEXT.test(body.version) ? body.version : 'unknown';
