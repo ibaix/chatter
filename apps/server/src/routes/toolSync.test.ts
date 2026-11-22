@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { loggedInAuth } from '../auth/testSupport.js';
+import type { UserAccounts } from '../auth/userAccounts.js';
 import { HardwarePoller } from '../polling/poller.js';
 import { errorOf, testApp, type TestApp } from './testSupport.js';
 
@@ -10,24 +11,31 @@ const PASSWORD = 'a-good-password';
 describe('POST /api/machine/:id/tools/sync', () => {
   let app: TestApp;
   let poller: HardwarePoller;
+  let operatorCookie: string;
   let viewerCookie: string;
+
+  /** Adds a user with this role, logs in, and gives the session cookie */
+  async function cookieOf(username: string, role: 'viewer' | 'operator', accounts: UserAccounts) {
+    await accounts.add({ username, password: PASSWORD, role });
+    const login = await app.request('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password: PASSWORD }),
+    });
+    return (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+  }
 
   beforeEach(async () => {
     const parts = await loggedInAuth();
     poller = new HardwarePoller(new Database(':memory:'));
     app = testApp({ auth: parts.auth, accounts: parts.accounts, poller });
-    await parts.accounts.add({ username: 'jo', password: PASSWORD, role: 'viewer' });
-    const login = await app.request('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'jo', password: PASSWORD }),
-    });
-    viewerCookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+    operatorCookie = await cookieOf('jo', 'operator', parts.accounts);
+    viewerCookie = await cookieOf('vi', 'viewer', parts.accounts);
   });
 
-  const sync = (cookie = viewerCookie) => app.request('/api/machine/speedio/tools/sync', { method: 'POST', headers: { Cookie: cookie } });
+  const sync = (cookie = operatorCookie) => app.request('/api/machine/speedio/tools/sync', { method: 'POST', headers: { Cookie: cookie } });
 
-  it('reads the tools for each user who can see the machine, also a viewer', async () => {
+  it('reads the tools for an Operator', async () => {
     const syncTools = vi.spyOn(poller, 'syncTools').mockResolvedValue({ outcome: 'synced', toolSync: TOOL_SYNC });
 
     const res = await sync();
@@ -35,6 +43,19 @@ describe('POST /api/machine/:id/tools/sync', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ toolSync: TOOL_SYNC });
     expect(syncTools).toHaveBeenCalledWith('speedio');
+  });
+
+  // A Viewer only looks. Chatter still reads the tool table by itself for each role.
+  it('refuses a Viewer, with a cookie or with HTTP Basic, and does not read the tools', async () => {
+    const syncTools = vi.spyOn(poller, 'syncTools').mockResolvedValue({ outcome: 'synced', toolSync: TOOL_SYNC });
+    const basic = `Basic ${Buffer.from(`vi:${PASSWORD}`).toString('base64')}`;
+
+    const withCookie = await sync(viewerCookie);
+    const withBasic = await app.request('/api/machine/speedio/tools/sync', { method: 'POST', headers: { Authorization: basic } });
+
+    expect(withCookie.status).toBe(403);
+    expect(withBasic.status).toBe(403);
+    expect(syncTools).not.toHaveBeenCalled();
   });
 
   it('needs a login', async () => {

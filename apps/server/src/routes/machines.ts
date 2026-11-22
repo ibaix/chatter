@@ -16,6 +16,7 @@ function unknownOutcome(result: never): never {
 /** List, add, change, and remove machines */
 export function machineRoutes(poller: HardwarePoller) {
   const canManageMachines = requirePermission('manage-machines');
+  const canSyncTools = requirePermission('sync-tools');
   return new Hono()
     .get('/machines', c => c.json(poller.getMachines()))
 
@@ -40,9 +41,10 @@ export function machineRoutes(poller: HardwarePoller) {
       return updated ? c.json(updated) : notFound(c);
     })
 
-    // Read the tool table now. Each user who can see the machine can ask: the read changes nothing on the machine.
+    // Read the tool table now. The read changes nothing on the machine, but it is an action: a Viewer only looks.
+    // Chatter also reads the tool table by itself, in the poll, not through this route.
     // Each error has the outcome, so the screen can tell when the error no longer applies.
-    .post('/machine/:id/tools/sync', async c => {
+    .post('/machine/:id/tools/sync', canSyncTools, async c => {
       const result = await poller.syncTools(c.req.param('id'));
       switch (result.outcome) {
         case 'synced': return c.json({ toolSync: result.toolSync }, 200);

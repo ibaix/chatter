@@ -256,9 +256,8 @@ describe('UpdatesTab', () => {
       status: { state, version: '1.3.0', heartbeat: piTime(5), freeBytes: 1024 * MB, ...changes },
     });
 
-    /** Renders with fake timers, so the test sets each second */
+    /** Renders the page. The clock stays still until the test lets time go by. */
     async function renderAt(loaded: UpdatesReport) {
-      vi.useFakeTimers({ now: BROWSER_NOW });
       vi.mocked(fetchUpdatesReport).mockImplementation(async () => loaded);
       renderUpdatesTab();
       await act(() => vi.advanceTimersByTimeAsync(0));
@@ -269,6 +268,14 @@ describe('UpdatesTab', () => {
       if (next) vi.mocked(fetchUpdatesReport).mockImplementation(async () => next());
       await act(() => vi.advanceTimersByTimeAsync(ms));
     }
+
+    /**
+     * Stops the clock before each test makes its reports. With the real clock, the clock can move
+     * between piTime() for serverTime and piTime(5) for heartbeat, and the page then shows "4 s ago".
+     */
+    beforeEach(() => {
+      vi.useFakeTimers({ now: BROWSER_NOW });
+    });
 
     afterEach(() => {
       vi.useRealTimers();

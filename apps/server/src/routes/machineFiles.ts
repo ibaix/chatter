@@ -85,8 +85,10 @@ async function recordSentFiles(machineId: string, plan: UploadPlan, sentPaths: s
 
 /** Read, send, and delete the program files on a machine (over FTP) */
 export function machineFileRoutes(poller: HardwarePoller) {
+  const canReadFiles = requirePermission('read-files');
   const canSendFiles = requirePermission('send-files');
   return new Hono()
+    // Names, sizes and dates only. Each role can see them.
     .get('/machine/:id/files', checkedQuery(fileTreeQuery), async c => {
       const { path = ROOT_FOLDER, depth = DEFAULT_TREE_DEPTH } = c.req.valid('query');
       const connector = poller.getConnector(c.req.param('id'));
@@ -95,7 +97,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
       return c.json(await connector.getFileTree(path, parseInt(depth)));
     })
 
-    .get('/machine/:id/files/download', checkedQuery(filePathQuery), async c => {
+    .get('/machine/:id/files/download', canReadFiles, checkedQuery(filePathQuery), async c => {
       const { path } = c.req.valid('query');
       const connector = poller.getConnector(c.req.param('id'));
       if (!connector) return notFound(c);
