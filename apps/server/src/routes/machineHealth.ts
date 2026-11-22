@@ -17,7 +17,7 @@ export interface ConnectionHealthSource {
 export const RECONNECT_MESSAGES = {
   started: 'Chatter disconnected the machine, and polls it again now.',
   'poll-in-progress': 'A poll of this machine has not ended, so Chatter does not start a second poll. '
-    + 'Chatter disconnected the machine. If the machine stays offline for some minutes, restart Chatter in Settings > Diagnostics.',
+    + 'Chatter disconnected the machine. 1 minute after the start of the poll, Chatter stops the wait for it and polls the machine again.',
   'not-polled': 'Chatter does not poll this machine now. Try again in some seconds.',
 } as const;
 

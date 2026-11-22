@@ -116,7 +116,9 @@ describe('machine health routes', () => {
       vi.spyOn(poller, 'reconnectMachine').mockReturnValue('poll-in-progress');
       const res = await request(`/api/machine/${machineId}/reconnect`, 'POST');
       expect(res.status).toBe(409);
-      expect(await errorOf(res)).toBe(RECONNECT_MESSAGES['poll-in-progress']);
+      // Chatter drops a poll that has not ended after 1 minute, so a restart is not necessary
+      expect(await errorOf(res)).toBe('A poll of this machine has not ended, so Chatter does not start a second poll. '
+        + 'Chatter disconnected the machine. 1 minute after the start of the poll, Chatter stops the wait for it and polls the machine again.');
     });
 
     it('says so when the machine is not polled', async () => {
