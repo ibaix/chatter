@@ -19,6 +19,7 @@ These limits are known. They are not bugs, but you must know them:
 
 - **Every computer on the network can open Chatter** on port 3001. Use a firewall rule if only some computers must reach it.
 - **No HTTPS by itself.** Other people on the network can read the login cookie, and the password that a program sends. To use HTTPS, put a reverse proxy in front of Chatter (see [Use HTTPS](./guide/https.md)).
+- **Chatter sends no HSTS header.** HSTS tells a browser to use only HTTPS for an address. On a LAN address with plain HTTP, it can lock the users out. If your proxy gives HTTPS, the proxy can send HSTS. Chatter sends the other security headers: other sites cannot show Chatter in a frame, and the page loads scripts only from Chatter.
 - **Trust only the address of your proxy** in **Settings > HTTPS and proxy**, or with `TRUST_PROXY`. A wrong address lets a computer hide its real address, and so get around the 15 minute wait after 10 wrong passwords. An Admin can end the wait for a computer in **Settings > Logins**.
 - **FTP is not encrypted.** The FTP username, the FTP password, and the files go over the network as plain text.
 - **The machines have no login on their data ports** (Brother, Haas, MTConnect, FANUC). Anyone on the network can read the machine data from those ports. A Siemens control has a login only if you set one up for OPC UA (see [Siemens machines](./guide/siemens.md)).
