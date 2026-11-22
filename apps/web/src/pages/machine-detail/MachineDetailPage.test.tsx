@@ -118,7 +118,7 @@ describe('MachineDetailPage', () => {
     });
     vi.mocked(fetchAlertRules).mockReset().mockResolvedValue([]);
     vi.mocked(fetchMachineReport).mockReset().mockReturnValue(new Promise(() => {}));
-    vi.mocked(fetchFileTree).mockReset().mockResolvedValue([]);
+    vi.mocked(fetchFileTree).mockReset().mockResolvedValue({ nodes: [], isCutShort: false });
     vi.mocked(fetchUploadFiles).mockReset().mockResolvedValue([]);
     vi.mocked(fetchUploadEvents).mockReset().mockResolvedValue([
       { id: 21, uploaded_at: '2026-11-19T10:00:00.000Z', remote_path: '/', target_name: null },
@@ -346,6 +346,40 @@ describe('MachineDetailPage', () => {
       expect(fetchUploadFiles).toHaveBeenCalledTimes(1);
     });
 
+    // The server keeps at most 5000 entries in one list. The user must know that files can be missing.
+    const CUT_SHORT_NOTE = 'List cut short. Chatter shows only the first 5000 files and folders.';
+    const PROGRAM = { name: 'O1000', path: '/O1000', type: 'file', size: 10 } as FTPTreeNode;
+
+    it('tells the user when the server cut the file list short', async () => {
+      vi.mocked(fetchFileTree).mockResolvedValue({ nodes: [PROGRAM], isCutShort: true });
+      renderPage();
+      await openFilesTab();
+
+      expect(await screen.findByText(CUT_SHORT_NOTE)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'O1000' })).toBeInTheDocument();
+    });
+
+    it('shows no cut-short note for a complete file list', async () => {
+      vi.mocked(fetchFileTree).mockResolvedValue({ nodes: [PROGRAM], isCutShort: false });
+      renderPage();
+      await openFilesTab();
+
+      await screen.findByRole('button', { name: 'O1000' });
+      expect(screen.queryByText(CUT_SHORT_NOTE)).not.toBeInTheDocument();
+    });
+
+    it('removes the cut-short note when the next list is complete', async () => {
+      vi.mocked(fetchFileTree).mockResolvedValueOnce({ nodes: [PROGRAM], isCutShort: true });
+      renderPage();
+      await openFilesTab();
+      await screen.findByText(CUT_SHORT_NOTE);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Load the files again' }));
+
+      await waitFor(() => expect(screen.queryByText(CUT_SHORT_NOTE)).not.toBeInTheDocument());
+      expect(fetchFileTree).toHaveBeenCalledTimes(2);
+    });
+
     it('loads the files at once when the address opens the Files tab', async () => {
       renderPage({ address: '/machine/m1?tab=files' });
 
@@ -442,9 +476,10 @@ describe('MachineDetailPage', () => {
     });
 
     it('sends to the folder that was open, also from the Upload history view', async () => {
-      vi.mocked(fetchFileTree).mockImplementation(async (_id, path) =>
-        path === '/' ? [{ name: 'PROGRAMS', path: '/PROGRAMS', type: 'directory', size: 0 } as FTPTreeNode] : [],
-      );
+      vi.mocked(fetchFileTree).mockImplementation(async (_id, path) => ({
+        nodes: path === '/' ? [{ name: 'PROGRAMS', path: '/PROGRAMS', type: 'directory', size: 0 } as FTPTreeNode] : [],
+        isCutShort: false,
+      }));
       renderPage({ role: 'operator' });
       await openFilesTab();
       fireEvent.click(await screen.findByRole('button', { name: 'PROGRAMS' }));

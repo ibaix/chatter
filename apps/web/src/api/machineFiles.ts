@@ -1,4 +1,4 @@
-import type { FTPTreeNode, UploadEvent, UploadFile } from '../types';
+import { FILE_LIST_CUT_SHORT_HEADER, type FileTree, type FTPTreeNode, type UploadEvent, type UploadFile } from '../types';
 import { readAtMost } from '../utils/readAtMost';
 import { api } from './client';
 import { errorOf, jsonOrThrow } from './replies';
@@ -26,9 +26,11 @@ function formFlag(isOn: boolean): 'true' | 'false' {
   return isOn ? 'true' : 'false';
 }
 
-export async function fetchFileTree(machineId: string, path: string): Promise<FTPTreeNode[]> {
+/** The files below `path`. The server tells in a header when it cut the list short. */
+export async function fetchFileTree(machineId: string, path: string): Promise<FileTree> {
   const response = await machine.files.$get({ param: { id: machineId }, query: { path, depth: String(FILE_TREE_DEPTH) } });
-  return jsonOrThrow(response, 'Failed to fetch files');
+  const nodes = await jsonOrThrow<FTPTreeNode[]>(response, 'Failed to fetch files');
+  return { nodes, isCutShort: response.headers.get(FILE_LIST_CUT_SHORT_HEADER) === 'true' };
 }
 
 /** The address that downloads one file. The browser opens it, so it is not a fetch call. */
