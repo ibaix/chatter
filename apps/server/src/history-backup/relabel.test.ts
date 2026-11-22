@@ -3,7 +3,7 @@ import { ArchiveError } from './archive.js';
 import { relabelLine, sampleFacts, textLines } from './relabel.js';
 
 const NOW = Date.UTC(2026, 10, 21);
-const target = { machineId: 'new-id', machineType: 'brother', notBefore: NOW - 1000_000, notAfter: NOW };
+const target = { machineId: 'new-id', sourceMachineId: 'old-id', machineType: 'brother', notBefore: NOW - 1000_000, notAfter: NOW };
 
 function exported(metric: Record<string, string>, values: unknown[], timestamps: unknown[]): string {
   return JSON.stringify({ metric, values, timestamps });
@@ -38,6 +38,21 @@ describe('relabelLine', () => {
     expect(() => relabelLine(line, target)).toThrow(ArchiveError);
   });
 
+  it.each([
+    ['a label that Chatter does not write', { __name__: 'chatter_running', machine: 'old-id', type: 'brother', job: 'x' }, /label job/],
+    ['a series of another machine', { __name__: 'chatter_running', machine: 'other-id', type: 'brother' }, /another machine/],
+    ['a series with no machine label', { __name__: 'chatter_running', type: 'brother' }, /no machine label/],
+    ['a machine label that looks like a selector', { __name__: 'chatter_running', machine: 'old-id",machine="x', type: 'brother' }, /another machine/],
+    ['a type label that looks like a selector', { __name__: 'chatter_running', machine: 'old-id', type: 'brother",x="y' }, /another machine type/],
+  ])('refuses %s', (_case, metric, message) => {
+    expect(() => relabelLine(exported(metric, [1], [NOW]), target)).toThrow(message);
+  });
+
+  it('gives the restored series only the labels __name__, machine and type', () => {
+    const line = exported({ type: 'brother', __name__: 'chatter_running', machine: 'old-id' }, [1], [NOW]);
+    expect(JSON.parse(relabelLine(line, target).line!).metric).toEqual({ __name__: 'chatter_running', machine: 'new-id', type: 'brother' });
+  });
+
   it('refuses a series of another machine type', () => {
     const line = exported({ __name__: 'chatter_running', machine: 'old-id', type: 'haas' }, [1], [NOW]);
     expect(() => relabelLine(line, target)).toThrow('another machine type');
@@ -47,9 +62,9 @@ describe('relabelLine', () => {
     ['text that is not JSON', '{"metric":'],
     ['no metric', JSON.stringify({ values: [1], timestamps: [NOW] })],
     ['a label that is not text', exported({ __name__: 'chatter_running', type: 'brother', machine: 5 as unknown as string }, [1], [NOW])],
-    ['more values than times', exported({ __name__: 'chatter_running', type: 'brother' }, [1, 2], [NOW])],
-    ['a value that is not a number', exported({ __name__: 'chatter_running', type: 'brother' }, ['1'], [NOW])],
-    ['a time that is not a whole number', exported({ __name__: 'chatter_running', type: 'brother' }, [1], [NOW + 0.5])],
+    ['more values than times', exported({ __name__: 'chatter_running', machine: 'old-id', type: 'brother' }, [1, 2], [NOW])],
+    ['a value that is not a number', exported({ __name__: 'chatter_running', machine: 'old-id', type: 'brother' }, ['1'], [NOW])],
+    ['a time that is not a whole number', exported({ __name__: 'chatter_running', machine: 'old-id', type: 'brother' }, [1], [NOW + 0.5])],
   ])('refuses %s', (_case, line) => {
     expect(() => relabelLine(line, target)).toThrow(ArchiveError);
   });

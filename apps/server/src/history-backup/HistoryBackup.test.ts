@@ -381,6 +381,14 @@ describe('HistoryBackup', () => {
       expect(victoria.importRequests).toBe(0);
     });
 
+    it('refuses a file whose history is of another machine than its manifest names', async () => {
+      const archive = await changeArchive(await backUp(), (_entries, manifest) => {
+        manifest.machine.id = 'brother_9';
+      });
+      expect((await refusalOf(archive)).message).toMatch(/another machine than the machine of its manifest/);
+      expect(victoria.importRequests).toBe(0);
+    });
+
     it('refuses a count that is not the one in the manifest', async () => {
       const archive = await changeArchive(await backUp(), (_entries, manifest) => {
         manifest.parts['state-periods.jsonl.gz']!.count = 1;

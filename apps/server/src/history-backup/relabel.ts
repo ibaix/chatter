@@ -9,10 +9,14 @@ const CHATTER_METRIC = /^chatter_[a-z0-9_]+(:avg1[mh])?$/;
 const MACHINE_LABEL = 'machine';
 const TYPE_LABEL = 'type';
 const NAME_LABEL = '__name__';
+/** Chatter writes only these labels. A restore refuses a series with another label. */
+const KNOWN_LABELS = new Set([NAME_LABEL, MACHINE_LABEL, TYPE_LABEL]);
 
 /** Where the samples of a restore go, and the times that the history can keep */
 export interface RelabelTarget {
   machineId: string;
+  /** The machine that the manifest names. Each series of the file must be of this machine. */
+  sourceMachineId: string;
   machineType: string;
   /** VictoriaMetrics deletes older samples at once, so they are left out */
   notBefore: number;
@@ -45,18 +49,26 @@ interface ExportedLine extends Omit<ExportedSeries, 'values'> {
 
 /**
  * The line with the machine label of the target machine. No other label changes.
- * Refuses a line that is not a chatter_* series of the same machine type, and a sample in the future.
+ * Refuses a line that is not a chatter_* series of the machine of the manifest and of the same machine type,
+ * a line with another label, and a sample in the future.
  */
 export function relabelLine(text: string, target: RelabelTarget): RelabelledLine {
   const series = withoutStaleMarkers(parseSeries(text));
-  if (series.metric[TYPE_LABEL] !== target.machineType) throw new ArchiveError('The file has history of another machine type.');
+  const { metric } = series;
+  const unknown = Object.keys(metric).find(label => !KNOWN_LABELS.has(label));
+  if (unknown !== undefined) {
+    throw new ArchiveError(`The file has a series with the label ${unknown.slice(0, 100)}. Chatter writes only the labels __name__, machine and type.`);
+  }
+  if (metric[MACHINE_LABEL] === undefined) throw new ArchiveError('The file has a series with no machine label.');
+  if (metric[MACHINE_LABEL] !== target.sourceMachineId) throw new ArchiveError('The file has history of another machine than the machine of its manifest.');
+  if (metric[TYPE_LABEL] !== target.machineType) throw new ArchiveError('The file has history of another machine type.');
   const keep = series.timestamps.map(time => time >= target.notBefore);
   if (series.timestamps.some(time => time > target.notAfter)) throw new ArchiveError('The file has history with a time in the future.');
   const samples = keep.filter(Boolean).length;
   const tooOld = keep.length - samples;
   if (samples === 0) return { line: null, samples, tooOld };
   const relabelled: ExportedSeries = {
-    metric: { ...series.metric, [MACHINE_LABEL]: target.machineId },
+    metric: { [NAME_LABEL]: metric[NAME_LABEL], [MACHINE_LABEL]: target.machineId, [TYPE_LABEL]: metric[TYPE_LABEL] },
     values: tooOld === 0 ? series.values : series.values.filter((_value, index) => keep[index]),
     timestamps: tooOld === 0 ? series.timestamps : series.timestamps.filter((_time, index) => keep[index]),
   };

@@ -339,9 +339,12 @@ export class HistoryBackup {
     }
   }
 
-  private relabelTarget(target: BackupMachine): RelabelTarget {
+  private relabelTarget(target: BackupMachine, manifest: Manifest): RelabelTarget {
     const now = this.now();
-    return { machineId: target.id, machineType: target.type, notBefore: now - KEEP_PERIODS_MS, notAfter: now + CLOCK_SKEW_MS };
+    return {
+      machineId: target.id, sourceMachineId: manifest.machine.id, machineType: target.type,
+      notBefore: now - KEEP_PERIODS_MS, notAfter: now + CLOCK_SKEW_MS,
+    };
   }
 
   private async writeBackupParts(
@@ -390,7 +393,7 @@ export class HistoryBackup {
 
   /** Read each part to its end, so a bad line is found before anything is written */
   private async checkContent(folder: string, manifest: Manifest, target: BackupMachine) {
-    const relabel = this.relabelTarget(target);
+    const relabel = this.relabelTarget(target, manifest);
     const counts = { rawSamples: 0, averageSamples: 0, periods: 0, alertRules: 0 };
     const tooOld = { samples: 0, periods: 0 };
     for (const part of HISTORY_PARTS) {
@@ -436,7 +439,7 @@ export class HistoryBackup {
   }
 
   private async importAllHistory(pending: PendingRestore, target: BackupMachine): Promise<number> {
-    const relabel = this.relabelTarget(target);
+    const relabel = this.relabelTarget(target, pending.manifest);
     let samples = 0;
     for (const part of HISTORY_PARTS) {
       if (pending.manifest.parts[part]) samples += await this.importHistory(path.join(pending.folder, localName(part)), relabel);
