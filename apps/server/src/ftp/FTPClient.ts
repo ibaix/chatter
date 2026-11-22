@@ -14,7 +14,10 @@ const DOWNLOAD_NO_DATA_TIMEOUT_MS = 30_000;
 /** The raw LIST does not wait for the server to close the data connection, so it waits this long for the listing */
 const RAW_LIST_TRANSFER_WAIT_MS = 1_000;
 
-/** "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)": four address bytes, then the port as two bytes */
+/**
+ * "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)": four address bytes, then the port as two bytes.
+ * Only the port is used: the data connection goes to the host of the control connection.
+ */
 const PASV_REPLY_PATTERN = /\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)/;
 const BYTE_SIZE = 256;
 
@@ -162,17 +165,31 @@ async function trySetBinaryMode(client: ftp.Client): Promise<void> {
   }
 }
 
+/**
+ * The address of the passive data connection. A rogue machine can name any host in its PASV reply,
+ * so Chatter would connect to a host of its choice. So the host is always the address of the control
+ * connection (the machine), and only the port comes from the reply. EPSV in basic-ftp does the same.
+ */
 async function requestPassiveAddress(client: ftp.Client): Promise<PassiveAddress> {
   const reply = await client.send('PASV');
   const match = reply.message.match(PASV_REPLY_PATTERN);
   if (!match) {
     throw new Error('Could not parse PASV response');
   }
-  const [, h1, h2, h3, h4, portHigh, portLow] = match;
+  const [portHigh, portLow] = match.slice(5);
   return {
-    host: `${h1}.${h2}.${h3}.${h4}`,
+    host: controlConnectionHost(client),
     port: parseInt(portHigh) * BYTE_SIZE + parseInt(portLow)
   };
+}
+
+/** The address that the control connection is connected to, as an IPv4 address when the socket is dual-stack */
+function controlConnectionHost(client: ftp.Client): string {
+  const host = client.ftp.socket.remoteAddress;
+  if (host === undefined) {
+    throw new Error('The control connection is closed, so the data connection cannot open');
+  }
+  return host.replace(/^::ffff:/i, '');
 }
 
 /**
