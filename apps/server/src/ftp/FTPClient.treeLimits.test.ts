@@ -107,6 +107,44 @@ describe('FTPClient.getFileTree limits', () => {
     expect(tree.at(-1)?.name).toBe(`O${MAX_TREE_ENTRIES - 1}`);
   });
 
+  // The web app shows a note when the list is cut short, so the user knows that files are missing
+  it('tells the caller when it cut the tree short', async () => {
+    listingOf = () => Array.from({ length: MAX_TREE_ENTRIES + 1 }, (_, index) => file(`O${index}`));
+
+    const tree = await new FTPClient({ host: '192.168.1.50' }).readFileTree('/', 1);
+
+    expect(tree.nodes).toHaveLength(MAX_TREE_ENTRIES);
+    expect(tree.isCutShort).toBe(true);
+  });
+
+  it('tells the caller when it opened no more folders because the tree was full', async () => {
+    // The root fills the tree, so the walk cannot open the folders in it
+    listingOf = folderPath => (folderPath === '/' ? Array.from({ length: MAX_TREE_ENTRIES }, (_, index) => folder(`D${index}`)) : [file('O1')]);
+
+    const tree = await new FTPClient({ host: '192.168.1.50' }).readFileTree('/', 2);
+
+    expect(tree.nodes).toHaveLength(MAX_TREE_ENTRIES);
+    expect(tree.isCutShort).toBe(true);
+  });
+
+  it(`does not call a tree of exactly ${MAX_TREE_ENTRIES} entries cut short`, async () => {
+    listingOf = () => Array.from({ length: MAX_TREE_ENTRIES }, (_, index) => file(`O${index}`));
+
+    const tree = await new FTPClient({ host: '192.168.1.50' }).readFileTree('/', 1);
+
+    expect(tree.nodes).toHaveLength(MAX_TREE_ENTRIES);
+    expect(tree.isCutShort).toBe(false);
+  });
+
+  it('does not call a tree cut short when it stops at the depth that the caller asks for', async () => {
+    listingOf = () => [folder('SUB'), file('O1000')];
+
+    const tree = await new FTPClient({ host: '192.168.1.50' }).readFileTree('/', 2);
+
+    expect(levelsOf(tree.nodes)).toBe(2);
+    expect(tree.isCutShort).toBe(false);
+  });
+
   it(`writes no warning for a tree of exactly ${MAX_TREE_ENTRIES} entries`, async () => {
     listingOf = () => Array.from({ length: MAX_TREE_ENTRIES }, (_, index) => file(`O${index}`));
 

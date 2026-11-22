@@ -8,7 +8,7 @@ import { loggedInAuth } from './auth/testSupport.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
-import { PROGRAM_UPLOAD_LIMIT_BYTES, SUPPORTED_MACHINE_TYPES } from '@local-chatter/shared';
+import { FILE_LIST_CUT_SHORT_HEADER, PROGRAM_UPLOAD_LIMIT_BYTES, SUPPORTED_MACHINE_TYPES, type FTPTreeNode } from '@local-chatter/shared';
 
 // Mock the db module
 vi.mock('./storage/database.js', () => ({
@@ -818,23 +818,48 @@ describe('API Routes', () => {
     // Each folder level is a LIST on the machine, so a deep tree can keep the machine and Chatter busy for a long time
     it.each(['0', '6', '50', '99999999999', 'abc', '-1', '1.5'])('refuses depth=%s and sends nothing to the machine', async depth => {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
-      const getFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'getFileTree');
+      const readFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree');
 
       const res = await call('GET', `/api/machine/${machine.id}/files?depth=${depth}`);
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('depth must be a whole number from 1 to 5');
-      expect(getFileTree).not.toHaveBeenCalled();
+      expect(readFileTree).not.toHaveBeenCalled();
     });
 
     it.each([['1', 1], ['3', 3], ['5', 5]])('lists the tree for depth=%s', async (depth, expectedDepth) => {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
-      const getFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'getFileTree').mockResolvedValue([]);
+      const readFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [], isCutShort: false });
 
       const res = await call('GET', `/api/machine/${machine.id}/files?path=/PRG&depth=${depth}`);
 
       expect(res.status).toBe(200);
-      expect(getFileTree).toHaveBeenCalledWith('/PRG', expectedDepth);
+      expect(readFileTree).toHaveBeenCalledWith('/PRG', expectedDepth);
+    });
+
+    // The web app shows a note when the list is cut short. The body stays a plain list, as the API docs show it.
+    const PROGRAM: FTPTreeNode = { name: 'O1000', type: 'file', size: 10, path: '/O1000' };
+
+    it('tells the web app in a header when the list was cut short', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [PROGRAM], isCutShort: true });
+
+      const res = await send(`/api/machine/${machine.id}/files`, { method: 'GET' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get(FILE_LIST_CUT_SHORT_HEADER)).toBe('true');
+      expect(await res.json()).toEqual([PROGRAM]);
+    });
+
+    it('sends no cut-short header for a full list', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [PROGRAM], isCutShort: false });
+
+      const res = await send(`/api/machine/${machine.id}/files`, { method: 'GET' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get(FILE_LIST_CUT_SHORT_HEADER)).toBeNull();
+      expect(await res.json()).toEqual([PROGRAM]);
     });
   });
 
@@ -1172,13 +1197,13 @@ describe('API Routes', () => {
 
     it('refuses a file list of a folder with a line break', async () => {
       const { id, connector } = await brotherConnector();
-      const getFileTree = vi.spyOn(connector, 'getFileTree');
+      const readFileTree = vi.spyOn(connector, 'readFileTree');
 
       const res = await call('GET', `/api/machine/${id}/files?path=${encodeURIComponent('/PRG\r\nDELE O1234')}`);
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
-      expect(getFileTree).not.toHaveBeenCalled();
+      expect(readFileTree).not.toHaveBeenCalled();
     });
 
     it('refuses a delete with a line break', async () => {

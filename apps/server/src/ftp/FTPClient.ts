@@ -4,8 +4,9 @@ import * as ftp from 'basic-ftp';
 // Not in the index of basic-ftp. It opens the data socket exactly as basic-ftp's own PASV and EPSV do.
 import { connectForPassiveTransfer } from 'basic-ftp/dist/transfer.js';
 import { ftpErrorMessage } from './ftpErrorMessage.js';
+import { FILE_TREE_ENTRY_LIMIT } from '@local-chatter/shared';
 import { createLogger } from '../logging/logger.js';
-import type { FTPConfig, FTPFileInfo, FTPTreeNode, FTPUploadFile, FTPUploadResult } from '../types/index.js';
+import type { FileTree, FTPConfig, FTPFileInfo, FTPTreeNode, FTPUploadFile, FTPUploadResult } from '../types/index.js';
 
 const DEFAULT_FTP_PORT = 21;
 const DEFAULT_FTP_USER = 'anonymous';
@@ -16,7 +17,7 @@ const DEFAULT_TREE_DEPTH = 2;
  */
 export const MAX_TREE_DEPTH = 5;
 /** The most entries (files and folders) in one tree, so a very large or rogue FTP server cannot fill the memory */
-export const MAX_TREE_ENTRIES = 5000;
+export const MAX_TREE_ENTRIES = FILE_TREE_ENTRY_LIMIT;
 const ROOT_PATH = '/';
 
 /** The manual download gives up when no byte arrives in this time */
@@ -286,17 +287,22 @@ export class FTPClient {
   }
 
   async getFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FTPTreeNode[]> {
+    return (await this.readFileTree(path, depth)).nodes;
+  }
+
+  /** The file tree, and whether the walk cut it at MAX_TREE_ENTRIES entries. The depth limit does not count as a cut. */
+  async readFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FileTree> {
     assertSafeFtpArgument(path);
     if (depth <= 0) {
-      return [];
+      return { nodes: [], isCutShort: false };
     }
     const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, isCut: false };
     try {
-      const tree = await this.withConnection({ verbose: false }, client => this.buildTree(client, { path, depth: Math.min(depth, MAX_TREE_DEPTH), walk }));
+      const nodes = await this.withConnection({ verbose: false }, client => this.buildTree(client, { path, depth: Math.min(depth, MAX_TREE_DEPTH), walk }));
       if (walk.isCut) {
         log.warn(`The file tree on ${this.host} is too large. Chatter shows only the first ${MAX_TREE_ENTRIES} entries.`, { path });
       }
-      return tree;
+      return { nodes, isCutShort: walk.isCut };
     } catch (err) {
       throw new Error(ftpErrorMessage(err, this.host, this.port), { cause: err });
     }
