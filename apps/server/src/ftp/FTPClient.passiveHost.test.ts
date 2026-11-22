@@ -204,14 +204,19 @@ async function startFakeMachine({
   };
 }
 
-/** After the PASV reply, the control socket tells no remote address, as a socket that never connected does */
-function forgetControlAddressAfterPasv(): void {
+/** After the PASV reply, the control socket tells this remote address */
+function setControlAddressAfterPasv(address: string | undefined): void {
   const request = ftp.FTPContext.prototype.request;
   vi.spyOn(ftp.FTPContext.prototype, 'request').mockImplementation(async function (this: ftp.FTPContext, command: string) {
     const reply = await request.call(this, command);
-    if (command === 'PASV') Object.defineProperty(this.socket, 'remoteAddress', { get: () => undefined });
+    if (command === 'PASV') Object.defineProperty(this.socket, 'remoteAddress', { get: () => address });
     return reply;
   });
+}
+
+/** After the PASV reply, the control socket tells no remote address, as a socket that never connected does */
+function forgetControlAddressAfterPasv(): void {
+  setControlAddressAfterPasv(undefined);
 }
 
 /** The hosts of all the connections that the client starts */
@@ -357,6 +362,27 @@ describe('basic-ftp data connection with a PASV reply that names another host (a
     expect(machine.dataConnections).toBe(1);
     expect(machine.decoyConnections).toBe(0);
     expect(new Set(connectHosts())).toEqual(new Set([NAT_CONTROL_HOST]));
+  });
+
+  // A dual-stack socket tells an IPv4 address as ::ffff:127.0.0.1. The data connection must use the plain IPv4 text.
+  it('opens the download data connection to the plain IPv4 text of an IPv4-mapped control address', async () => {
+    setControlAddressAfterPasv(`::ffff:${NAT_CONTROL_HOST}`);
+    const destination = new PassThrough();
+    const text = collectText(destination);
+
+    await ftpClient.downloadFile('O1000', destination);
+
+    expect(text()).toBe(PROGRAM_TEXT);
+    expect(connectHosts()).toEqual([NAT_CONTROL_HOST, NAT_CONTROL_HOST]);
+  });
+
+  it('opens the basic-ftp data connection to the plain IPv4 text of an IPv4-mapped control address', async () => {
+    setControlAddressAfterPasv(`::ffff:${NAT_CONTROL_HOST}`);
+
+    const files = await ftpClient.listFiles('/');
+
+    expect(files.map(file => file.name)).toEqual(['O1000', 'O2000']);
+    expect(connectHosts()).toEqual([NAT_CONTROL_HOST, NAT_CONTROL_HOST]);
   });
 
   it('opens no data connection when the address of the control connection is not known', async () => {
