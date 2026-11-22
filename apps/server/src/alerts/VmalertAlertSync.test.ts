@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureLog, type CapturedLog } from '../logging/testSupport.js';
 import { type Alert, AlertStore, VMALERT_LEASE_MS } from './AlertStore.js';
-import { MAX_RULES_REPLY_BYTES, VmalertAlertSync } from './VmalertAlertSync.js';
+import { MAX_RULES_REPLY_BYTES, SYNC_INTERVAL_MS, VmalertAlertSync } from './VmalertAlertSync.js';
 
 const NOW = Date.UTC(2026, 11, 21, 22, 12);
 const MINUTE_MS = 60_000;
@@ -51,12 +51,12 @@ describe('VmalertAlertSync', () => {
   let requests: { url: string; init: RequestInit }[];
   let syncCount: number;
 
-  function syncWith(answer: () => Response | Promise<Response>) {
+  function syncWith(answer: () => Response | Promise<Response>, afterSync = () => { syncCount++; }) {
     const fetch = (async (url: string | URL | Request, init: RequestInit = {}) => {
       requests.push({ url: String(url), init });
       return answer();
     }) as typeof globalThis.fetch;
-    return new VmalertAlertSync({ url: 'http://vmalert:8880', store, fetch, now: () => NOW, afterSync: () => { syncCount++; } });
+    return new VmalertAlertSync({ url: 'http://vmalert:8880', store, fetch, now: () => NOW, afterSync });
   }
 
   beforeEach(() => {
@@ -69,6 +69,39 @@ describe('VmalertAlertSync', () => {
 
   afterEach(() => {
     log.restore();
+    vi.useRealTimers();
+  });
+
+  it('syncs at the start and then every 2 minutes, until it stops', async () => {
+    vi.useFakeTimers();
+    const sync = syncWith(() => Response.json(vmalertReply()));
+
+    sync.start();
+    sync.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requests).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(SYNC_INTERVAL_MS);
+    expect(requests).toHaveLength(2);
+
+    sync.stop();
+    await vi.advanceTimersByTimeAsync(2 * SYNC_INTERVAL_MS);
+    expect(requests).toHaveLength(2);
+  });
+
+  it.each([
+    ['the alert store fails', () => {
+      vi.spyOn(store, 'updateFromVmalert').mockImplementation(() => { throw new Error('database is locked'); });
+      return syncWith(() => Response.json(vmalertReply()));
+    }],
+    ['the search for the alert changes fails', () => syncWith(() => Response.json(vmalertReply()), () => { throw new Error('database is locked'); })],
+  ])('writes an error in the log and does not throw when %s', async (_name, makeSync) => {
+    const sync = makeSync();
+
+    await expect(sync.syncNow()).resolves.toBe(false);
+
+    expect(log.text('error')).toContain('Could not update the alerts from vmalert');
+    expect(log.text('error')).toContain('database is locked');
   });
 
   it('renews the alerts that still fire in vmalert, resolves the alerts that are gone, and then finds the changes', async () => {
