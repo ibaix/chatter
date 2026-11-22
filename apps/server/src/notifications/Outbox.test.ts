@@ -245,6 +245,47 @@ describe('Outbox', () => {
       expect(texts(outbox.takeDue(NOW))).toEqual(['started Alarm 0']);
     });
 
+    /** Sends each message that the outbox gives at `now`, one at a time, and gives their texts */
+    function sendAll(now: number): string[] {
+      const sent: string[] = [];
+      for (let entry = outbox.takeDue(now)[0]; entry; entry = outbox.takeDue(now)[0]) {
+        sent.push(entry.message.text);
+        outbox.markSent(entry.id, 'ntfy sent it', now);
+      }
+      return sent;
+    }
+
+    const TEST: OutgoingMessage = { ...moreAlerts(0), kind: 'test', text: 'Test from Chatter.' };
+
+    it(`still sends one summary message and then only the newest ${BACKLOG_SEND}, when a test ends the hold early`, () => {
+      holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M'), named('E', 'M')]);
+
+      outbox.keepTestResult('phones', TEST, { ok: true, detail: 'ntfy sent it' }, NOW + 10 * MINUTE);
+
+      expect(sendAll(NOW + 10 * MINUTE)).toEqual([
+        'Chatter could not send 3 alerts while the channel was blocked: A on M (1), B on M (1), In alarm on Haas VF-2 (1). Open Chatter to see them.',
+        'started C', 'started D', 'started E',
+      ]);
+    });
+
+    it('makes no summary for the messages that came after the hold ended, also when the message of the hold failed for good', () => {
+      const first = holdWith([]);
+      outbox.takeDue(NOW + 60 * MINUTE);
+      outbox.markFailed(first, 'ntfy refused the message.');
+      Array.from({ length: 6 }, (_, index) => queue('phones', 20 + index, named(`Alarm ${index}`, 'M'), NOW + DAY));
+
+      expect(texts(outbox.takeDue(NOW + DAY))).toEqual(['started Alarm 0']);
+    });
+
+    it('makes no summary for the messages that came after a hold of a failed message ended', () => {
+      const id = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markFailed(id, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      Array.from({ length: 6 }, (_, index) => queue('phones', 20 + index, named(`Alarm ${index}`, 'M'), NOW + DAY));
+
+      expect(texts(outbox.takeDue(NOW + DAY))).toEqual(['started Alarm 0']);
+    });
+
     it('does not put a test message in the summary message', () => {
       const test = queue('phones', null, { ...moreAlerts(0), kind: 'test', text: 'Test from Chatter.' }, NOW);
       holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M'), named('E', 'M')]);

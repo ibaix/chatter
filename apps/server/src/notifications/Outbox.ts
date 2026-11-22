@@ -236,11 +236,26 @@ export class Outbox implements MachineRemovalListener {
     return row?.status ?? null;
   }
 
-  /** A test goes at once, not through the outbox. Its result goes in the message list, so the admin sees it there too. */
+  /**
+   * A test goes at once, not through the outbox. Its result goes in the message list, so the admin sees it there too.
+   * A test that went shows that the channel works again, so the hold of the channel ends (see endHold).
+   */
   keepTestResult(channelId: string, message: OutgoingMessage, result: ChannelTestResult, now: number): void {
-    const id = this.insert({ channelId, alertId: null, message }, now);
-    if (result.ok) this.markSent(id, result.detail, now);
-    else this.markFailed(id, result.error);
+    this.db.transaction(() => {
+      const id = this.insert({ channelId, alertId: null, message }, now);
+      if (!result.ok) return this.markFailed(id, result.error);
+      this.saveSent(id, result.detail, now);
+      this.endHold(channelId, now);
+    })();
+  }
+
+  /**
+   * The hold of the channel ends now, for example after a test that went, or after the admin saved the channel.
+   * The hold row stays, so the messages that waited during the hold still go as one summary and the newest
+   * BACKLOG_SEND (see summaryAfterHold). The row goes when the next queued message goes (see markSent).
+   */
+  endHold(channelId: string, now: number): void {
+    this.db.prepare('UPDATE notification_channel_holds SET until = MIN(until, ?) WHERE channel_id = ?').run(now, channelId);
   }
 
   /** The first waiting message of each channel, when its time came and the channel is not at its limit */
@@ -259,12 +274,10 @@ export class Outbox implements MachineRemovalListener {
 
   // Each result ends one try. Nothing changes when the message was deleted while it was being sent.
 
-  /** The channel works again, so its hold ends */
+  /** The channel works again, so its hold ends, and the summary of the hold is not due any more */
   markSent(id: number, detail: string, now: number): void {
     this.db.transaction(() => {
-      this.db.prepare(`
-        UPDATE notification_messages SET status = 'sent', detail = ?, sent_at = ?, attempts = attempts + 1, sending = 0 WHERE id = ?
-      `).run(detail, now, id);
+      this.saveSent(id, detail, now);
       this.db.prepare(`
         DELETE FROM notification_channel_holds WHERE channel_id = (SELECT channel_id FROM notification_messages WHERE id = ?)
       `).run(id);
@@ -335,6 +348,12 @@ export class Outbox implements MachineRemovalListener {
     return rows.map(toNotificationMessage);
   }
 
+  private saveSent(id: number, detail: string, now: number): void {
+    this.db.prepare(`
+      UPDATE notification_messages SET status = 'sent', detail = ?, sent_at = ?, attempts = attempts + 1, sending = 0 WHERE id = ?
+    `).run(detail, now, id);
+  }
+
   /** A new hold never makes a longer hold of the channel shorter */
   private holdChannelOf(messageId: number, until: number): void {
     this.db.prepare(`
@@ -374,15 +393,21 @@ export class Outbox implements MachineRemovalListener {
   }
 
   /**
-   * The summary message, when the channel was held and more than BACKLOG_SEND + 1 messages wait.
-   * All but the newest BACKLOG_SEND become "grouped", so the list still shows each one. A test message is not in it.
-   * dueHeads gives only a channel whose hold ended. The hold stays until a message goes, so a summary waits for it too.
+   * The summary message, when more than BACKLOG_SEND + 1 messages waited while the channel was held.
+   * All but the newest BACKLOG_SEND of them become "grouped", so the list still shows each one. A test message is not in it.
+   * dueHeads gives only a channel whose hold ended. The hold row stays until a queued message goes, so a summary waits for it too.
+   * Only a message that Chatter queued before the end of the hold waited. A row can stay after the hold ended, for example
+   * when the message of the hold failed for good. So the messages that came later get no summary.
    */
   private summaryAfterHold(channelId: string, now: number): OutboxEntry | null {
-    if (!this.db.prepare('SELECT 1 FROM notification_channel_holds WHERE channel_id = ?').get(channelId)) return null;
+    const hold = this.db.prepare('SELECT until FROM notification_channel_holds WHERE channel_id = ?').get(channelId) as
+      { until: number } | undefined;
+    if (!hold) return null;
     const waiting = this.db.prepare(`
-      SELECT * FROM notification_messages WHERE channel_id = ? AND status = 'waiting' AND sending = 0 AND kind != 'test' ORDER BY id DESC
-    `).all(channelId) as MessageRow[];
+      SELECT * FROM notification_messages
+      WHERE channel_id = ? AND status = 'waiting' AND sending = 0 AND kind != 'test' AND created_at < ?
+      ORDER BY id DESC
+    `).all(channelId, hold.until) as MessageRow[];
     if (waiting.length <= BACKLOG_SEND + 1) return null;
     const merged = waiting.slice(BACKLOG_SEND);
     const markGrouped = this.db.prepare("UPDATE notification_messages SET status = 'grouped', detail = ? WHERE id = ?");
