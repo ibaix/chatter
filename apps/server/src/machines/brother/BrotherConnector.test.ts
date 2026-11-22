@@ -1,6 +1,6 @@
 import net from 'net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { BrotherConnector, NO_REPLY_ERROR, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
+import { BrotherConnector, NO_REPLY_ERROR, REPLY_STATUS_KEY, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
 import type { BrotherMachineConfig, DataItemTransform } from '../../types/index.js';
 
 /**
@@ -346,17 +346,24 @@ describe('Brother control type detection (C00 vs D00)', () => {
     expect(status.data.controlType).toBe('C00');
   });
 
-  it('is a D00 control when ATCTL fails and ATCTLD gives ATC pots', async () => {
-    const { ATCTL, ...replies } = MOCK_RESPONSES;
-    const connector = connectorWithReplies({ ...replies, ATCTLD: ATCTL.replace('ATCTL ', 'ATCTLD') });
+  it('is a D00 control when ATCTL is unknown and ATCTLD gives ATC pots', async () => {
+    const connector = connectorWithReplies({
+      ...MOCK_RESPONSES,
+      ATCTL: 'RLOD    ATCTL   08\r\n01%',
+      ATCTLD: MOCK_RESPONSES.ATCTL.replace('ATCTL ', 'ATCTLD'),
+    });
 
     const status = await connector.poll();
 
     expect(status.data.controlType).toBe('D00');
   });
 
-  it('has no control type when neither command gives ATC pots', async () => {
-    const connector = connectorWithReplies({ ...MOCK_RESPONSES, ATCTL: 'RLOD    ATCTL   00\r\nOTHER,data\r\n\r\n00%' });
+  it('has no control type when the control knows neither command', async () => {
+    const connector = connectorWithReplies({
+      ...MOCK_RESPONSES,
+      ATCTL: 'RLOD    ATCTL   08\r\n01%',
+      ATCTLD: 'RLOD    ATCTLD  08\r\n02%',
+    });
 
     const status = await connector.poll();
 
@@ -699,5 +706,216 @@ describe('Brother command when the connection closes', () => {
 
     expect(status.connected).toBe(false);
     expect(status.errors.join('; ')).toContain('The connection closed before the machine answered');
+  });
+});
+
+/** An empty slot of the alarm list: 10 spaces, as the control sends it */
+const EMPTY_ALARM_SLOT = ' '.repeat(10);
+/** The alarm list has about 36 slots */
+const ALARM_SLOTS = 36;
+
+/**
+ * An ALARM reply in the shape of a real Speedio X500 (C00): E01 with each alarm slot, then L01.
+ * `slots` are the first slots; the others are empty.
+ */
+function alarmReply(slots: string[]): string {
+  const e01 = [...slots, ...Array(ALARM_SLOTS - slots.length).fill(EMPTY_ALARM_SLOT)].join(',');
+  const l01 = Array(ALARM_SLOTS).fill(' '.repeat(11)).join(',');
+  return `RLOD    ALARM   00\r\nE01,${e01}\r\nL01,${l01}\r\n\r\n12%`;
+}
+
+/** A communication message (CM, category 09). A Speedio adds one after it gets a command that it does not know. */
+const CM_ENTRY = '0975220008';
+const SV_ALARM = '0312345678';
+
+describe('Brother alarm from the whole alarm list', () => {
+  async function alarmOf(slots: string[]) {
+    const status = await connectorWithReplies({ ...MOCK_RESPONSES, ALARM: alarmReply(slots) }).poll();
+    return { alarm: status.data.alarm, alarmCode: status.data.alarmCode };
+  }
+
+  it('gives no alarm for an empty list', async () => {
+    expect(await alarmOf([])).toEqual({ alarm: false, alarmCode: '' });
+  });
+
+  it('gives no alarm when the list has only a communication message', async () => {
+    expect(await alarmOf([CM_ENTRY])).toEqual({ alarm: false, alarmCode: '' });
+  });
+
+  it('finds a real alarm after a communication message in the first slot', async () => {
+    expect(await alarmOf([CM_ENTRY, SV_ALARM])).toEqual({ alarm: true, alarmCode: 'SV12345678' });
+  });
+
+  it('finds a real alarm in the first slot, as before', async () => {
+    expect(await alarmOf([SV_ALARM])).toEqual({ alarm: true, alarmCode: 'SV12345678' });
+  });
+
+  it('gives the code of the first real alarm when there are more, and skips "no alarm" entries', async () => {
+    expect(await alarmOf(['9000000000', '0512340000', SV_ALARM])).toEqual({ alarm: true, alarmCode: 'IO12340000' });
+  });
+});
+
+/** The real reply of a Speedio X500 (C00) to ATCTLD: status 08, a command that it does not know */
+const UNKNOWN_ATCTLD = 'RLOD    ATCTLD  08\r\n02%';
+const UNKNOWN_ATCTL = 'RLOD    ATCTL   08\r\n01%';
+const D00_ATCTLD = MOCK_RESPONSES.ATCTL.replace('ATCTL ', 'ATCTLD');
+
+/** Each command that the connector sent, in order */
+const sentCommands = (connector: BrotherConnector) => vi.mocked(connector.sendCommand).mock.calls.map(([command]) => command);
+
+/** Connect at once, with no real socket, when the connector connects */
+function connectWithNoSocket(connector: BrotherConnector): void {
+  Object.assign(connector, { socket: { destroy: () => {} } });
+  vi.spyOn(connector, 'connect').mockImplementation(async () => {
+    Object.assign(connector, { socket: { destroy: () => {} }, connected: true });
+  });
+}
+
+/** Poll `count` times, and connect again before each poll */
+async function pollWithReconnects(connector: BrotherConnector, count: number): Promise<void> {
+  connectWithNoSocket(connector);
+  for (let i = 0; i < count; i++) {
+    connector.disconnect();
+    await connector.poll();
+  }
+}
+
+describe('Brother control type, found once by the reply status', () => {
+  it('gives the status of the reply', () => {
+    const connector = newConnector();
+
+    expect(connector.parseResponse(UNKNOWN_ATCTLD)[REPLY_STATUS_KEY]).toEqual(['08']);
+    expect(connector.parseResponse(MOCK_RESPONSES.PANEL)[REPLY_STATUS_KEY]).toEqual(['00']);
+    expect(connector.parseResponse(MOCK_RESPONSES.TOLNI1)[REPLY_STATUS_KEY]).toEqual(['00']);
+  });
+
+  it('never sends ATCTLD to a C00 control, across reconnects', async () => {
+    const connector = connectorWithReplies({ ...MOCK_RESPONSES, ATCTLD: UNKNOWN_ATCTLD });
+
+    await pollWithReconnects(connector, 3);
+
+    expect(sentCommands(connector)).not.toContain('ATCTLD');
+    expect(connector.getStatus().data.controlType).toBe('C00');
+  });
+
+  it('is a C00 control when ATCTL answers with status 00 and no pots, and does not try ATCTLD', async () => {
+    const connector = connectorWithReplies({ ...MOCK_RESPONSES, ATCTL: 'RLOD    ATCTL   00\r\n\r\n00%', ATCTLD: UNKNOWN_ATCTLD });
+
+    const status = await connector.poll();
+
+    expect(status.data.controlType).toBe('C00');
+    expect(sentCommands(connector)).not.toContain('ATCTLD');
+  });
+
+  it('on a D00 control, sends ATCTL one time only, and then ATCTLD', async () => {
+    const connector = connectorWithReplies({ ...MOCK_RESPONSES, ATCTL: UNKNOWN_ATCTL, ATCTLD: D00_ATCTLD });
+
+    await pollWithReconnects(connector, 3);
+
+    expect(sentCommands(connector).filter(command => command === 'ATCTL')).toHaveLength(1);
+    expect(sentCommands(connector).filter(command => command === 'ATCTLD').length).toBeGreaterThanOrEqual(3);
+    expect(connector.getStatus().data.controlType).toBe('D00');
+    expect(connector.getStatus().data.toolTable?.[1]).toMatchObject({ toolNum: 1 });
+  });
+
+  it('asks no ATC command again when the control knows neither, and still reads the tool data', async () => {
+    const connector = connectorWithReplies({ ...MOCK_RESPONSES, ATCTL: UNKNOWN_ATCTL, ATCTLD: UNKNOWN_ATCTLD });
+
+    await pollWithReconnects(connector, 3);
+
+    expect(sentCommands(connector).filter(command => command.startsWith('ATCTL'))).toEqual(['ATCTL', 'ATCTLD']);
+    expect(connector.getStatus().data.controlType).toBeNull();
+    expect(sentCommands(connector).filter(command => command === 'TOLNI1')).toHaveLength(3);
+  });
+
+  it('sends no macro command when no macro is set', async () => {
+    const connector = connectorWithReplies(MOCK_RESPONSES);
+
+    await connector.poll();
+
+    expect(sentCommands(connector).some(command => command.startsWith('MCRN'))).toBe(false);
+  });
+});
+
+/** The first send of `command` fails: `fail` runs, and its error is the result */
+function failFirstSend(connector: BrotherConnector, command: string, fail: () => Error): void {
+  const answer = vi.mocked(connector.sendCommand).getMockImplementation()!;
+  let failed = false;
+  vi.mocked(connector.sendCommand).mockImplementation(async sent => {
+    if (sent === command && !failed) {
+      failed = true;
+      throw fail();
+    }
+    return answer(sent);
+  });
+}
+
+describe('Brother control type when a send fails during the detection', () => {
+  it.each([
+    ['"Not connected", after the machine closed its side and before the close event', () => () => new Error('Not connected')],
+    ['a closed connection', (connector: BrotherConnector) => () => {
+      connector.connected = false;
+      return new Error('The connection closed before the machine answered');
+    }],
+  ])('does not remember "knows neither" after %s on ATCTL, and finds C00 later', async (_, failure) => {
+    const connector = connectorWithReplies({ ...MOCK_RESPONSES, ATCTLD: UNKNOWN_ATCTLD });
+    connectWithNoSocket(connector);
+    failFirstSend(connector, 'ATCTL', failure(connector));
+
+    const failed = await connector.poll();
+    await pollWithReconnects(connector, 1);
+
+    expect(failed.errors.join('; ')).toMatch(/Poll failed/);
+    expect(sentCommands(connector)).not.toContain('ATCTLD');
+    expect(connector.getStatus().data.controlType).toBe('C00');
+    expect(connector.getStatus().data.hasPocketInfo).toBe(true);
+  });
+
+  it('on a D00, finds D00 later when ATCTLD gets "Not connected", and does not send ATCTL again', async () => {
+    const connector = connectorWithReplies({ ...MOCK_RESPONSES, ATCTL: UNKNOWN_ATCTL, ATCTLD: D00_ATCTLD });
+    connectWithNoSocket(connector);
+    failFirstSend(connector, 'ATCTLD', () => new Error('Not connected'));
+
+    await connector.poll();
+    await pollWithReconnects(connector, 2);
+
+    expect(sentCommands(connector).filter(command => command === 'ATCTL')).toHaveLength(1);
+    expect(connector.getStatus().data.controlType).toBe('D00');
+    expect(connector.getStatus().data.hasPocketInfo).toBe(true);
+    expect(connector.getStatus().data.toolTable?.[1]).toMatchObject({ toolNum: 1 });
+  });
+});
+
+describe('Brother control type when the machine does not answer ATCTL, with a real TCP connection', () => {
+  let server: net.Server | null = null;
+  let connector: BrotherConnector | undefined;
+
+  afterEach(async () => {
+    connector?.disconnect();
+    if (server) await closeServer(server);
+    server = null;
+  });
+
+  it('sends ATCTL again at the next detection, finds C00, and sends no ATCTLD after the timeout', async () => {
+    const commands: string[] = [];
+    server = await startServer(socket => {
+      socket.on('data', chunk => {
+        const command = /CLOD\s+(\S+)/.exec(chunk.toString('ascii'))?.[1] ?? '';
+        commands.push(command);
+        // The first ATCTL gets no reply
+        if (command === 'ATCTL' && commands.filter(sent => sent === 'ATCTL').length === 1) return;
+        socket.write('%' + (MOCK_RESPONSES[command] ?? UNKNOWN_ATCTLD));
+      });
+    });
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: portOf(server), timeout: SHORT_TIMEOUT_MS });
+
+    const first = await connector.poll();
+    const next = await connector.poll();
+
+    expect(first.errors).toEqual([NO_REPLY_ERROR]);
+    expect(next.errors).toEqual([]);
+    expect(next.data.controlType).toBe('C00');
+    expect(commands).not.toContain('ATCTLD');
+    expect(commands.filter(sent => sent === 'ATCTL').length).toBeGreaterThanOrEqual(2);
   });
 });

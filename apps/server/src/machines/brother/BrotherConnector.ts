@@ -65,9 +65,22 @@ const DATA_ITEMS: DataItem[] = [
   ['partGoal',     'WKCNTR', 'A01', 2, 'int'],
   ['toolNumber',   'PDSP',   'X01', 3, 'int'],
   ['spindleSpeed', 'PDSP',   'X01', 1, 'int'],
-  ['alarm',        'ALARM',  'E01', 0, 'bool', TRANSFORMS.alarm],
-  ['alarmCode',    'ALARM',  'E01', 0, 'string', TRANSFORMS.alarmCode],
 ];
+
+/** The command for the alarm list. Its E01 line has one slot for each alarm or message. */
+const ALARM_COMMAND = 'ALARM';
+
+/**
+ * The alarm and its code, from all the slots of the E01 alarm list. A slot can hold a communication message (CM)
+ * or "no alarm" (OM). A Speedio puts a CM entry in the list when it gets a command that it does not know, so a
+ * real alarm can be in a later slot. The alarm code is the code of the first real alarm.
+ */
+function alarmOfList(slots: string[]): { alarm: boolean; alarmCode: string } {
+  const firstAlarm = slots.map(slot => withoutQuotes(slot)).find(slot => slot !== '' && TRANSFORMS.alarm(slot) === true);
+  return firstAlarm === undefined
+    ? { alarm: false, alarmCode: '' }
+    : { alarm: true, alarmCode: String(TRANSFORMS.alarmCode(firstAlarm)) };
+}
 
 /** The value of each type when the machine sends nothing */
 const EMPTY_VALUES: Record<DataItemType, string | number | boolean> = {
@@ -146,8 +159,18 @@ const MAX_TOOL_NUMBER = 99;
 /** The position of each value in a row of the tool data reply */
 const TOOL_DATA_COLUMN = { length: 0, lengthWear: 1, diameter: 2, diameterWear: 3, name: 8 } as const;
 
-/** A valid ATC reply has M## keys */
-function isValidAtcResponse(response: ParsedResponse): boolean {
+/** The key of the reply status in a parsed reply. No data key of a Brother starts with @. */
+export const REPLY_STATUS_KEY = '@status';
+/** The header line of a reply: "RLOD", the command, and a status of 2 digits */
+const REPLY_HEADER = /^RLOD\s+\S+?\s*(\d{2})$/;
+
+/**
+ * The control knows the ATC command: the reply status is 00, also with no pots (an empty magazine).
+ * A reply with no status line counts as known only when it has pots (M## keys).
+ */
+function isKnownAtcReply(response: ParsedResponse): boolean {
+  const status = response[REPLY_STATUS_KEY]?.[0];
+  if (status !== undefined) return status === '00';
   return Object.keys(response).some(key => /^M\d{2}$/.test(key));
 }
 
@@ -168,6 +191,11 @@ export class BrotherConnector extends BaseMachineConnector {
   private hasPocketInfo = false;
   private controlType: ControlType | null = null;
   private atcCommand: AtcCommand | null = null;
+  /**
+   * The ATC commands that the control does not know (a reply status other than 00). This stays for the life of the
+   * connector, also after a reconnect, so Chatter never sends a command that the control does not know again.
+   */
+  private unknownAtcCommands = new Set<AtcCommand>();
   private toolDataCommand: string;
   private macroCommand: string;
   private dataItems: DataItem[];
@@ -292,7 +320,11 @@ export class BrotherConnector extends BaseMachineConnector {
     });
   }
 
-  /** Each reply line is "KEY,value,value,..."; lines with no comma are headers */
+  /**
+   * Each reply line is "KEY,value,value,..."; lines with no comma are headers. The status of the header line
+   * "RLOD    <command>  00" is under REPLY_STATUS_KEY: 00 is good, another value (for example 08) means that the
+   * control does not know the command.
+   */
   parseResponse(response: string): ParsedResponse {
     const result: ParsedResponse = {};
     for (const line of response.split('\r\n')) {
@@ -300,26 +332,45 @@ export class BrotherConnector extends BaseMachineConnector {
       if (parts.length > 1) {
         result[parts[0]] = parts.slice(1).map(s => s.trim());
       }
+      const status = REPLY_HEADER.exec(line)?.[1];
+      if (status !== undefined) result[REPLY_STATUS_KEY] = [status];
     }
     return result;
   }
 
-  /** Find which ATC command this control supports. With neither, the tool table has no pots. */
-  private async detectControlType(): Promise<void> {
-    if (this.atcCommand !== null) return;
+  /** True when Chatter found the ATC command, or found that the control knows neither command */
+  private get atcDetectionDone(): boolean {
+    return this.atcCommand !== null || ATC_COMMANDS.every(({ command }) => this.unknownAtcCommands.has(command));
+  }
 
+  /**
+   * Find which ATC command this control knows. Only the reply status decides. An error from a send (no reply, or a
+   * closed connection) tells nothing about the control: the poll fails, and the next poll asks again.
+   * Chatter does not ask a command again when the control did not know it: an unknown command adds a CM entry to
+   * its alarm list. With neither command, the tool table has no pots.
+   */
+  private async detectControlType(): Promise<void> {
     for (const { command, controlType } of ATC_COMMANDS) {
-      try {
-        if (isValidAtcResponse(await this.sendCommand(command))) {
-          this.atcCommand = command;
-          this.controlType = controlType;
-          return;
-        }
-      } catch (err) {
-        // A control that does not know this command; try the next one. With no reply or no connection, stop.
-        if (err instanceof NoReplyError || !this.connected) throw err;
+      if (this.unknownAtcCommands.has(command)) continue;
+      if (isKnownAtcReply(await this.sendCommand(command))) {
+        this.atcCommand = command;
+        this.controlType = controlType;
+        return;
       }
+      this.unknownAtcCommands.add(command);
     }
+  }
+
+  /**
+   * Forget what Chatter found about the control: the ATC command, the control type and the tool table.
+   * Use it when the address changes, because a different control can be at the new address.
+   */
+  forgetControl(): void {
+    this.atcCommand = null;
+    this.controlType = null;
+    this.unknownAtcCommands.clear();
+    this.toolTable = {};
+    this.hasPocketInfo = false;
   }
 
   /** The tool in each pot, from the ATC reply */
@@ -388,7 +439,7 @@ export class BrotherConnector extends BaseMachineConnector {
   /** Find the control type the first time, then send the poll commands. Gives null when a command fails. */
   private async readMachine(): Promise<Record<string, ParsedResponse> | null> {
     try {
-      if (this.controlType === null) {
+      if (!this.atcDetectionDone) {
         await this.detectControlType();
       }
       return await this.sendPollCommands();
@@ -405,7 +456,7 @@ export class BrotherConnector extends BaseMachineConnector {
 
   /** Send each command once, and get the replies by command */
   private async sendPollCommands(): Promise<Record<string, ParsedResponse>> {
-    const commands = [...new Set(this.dataItems.map(([, command]) => command)), this.toolDataCommand];
+    const commands = [...new Set([...this.dataItems.map(([, command]) => command), ALARM_COMMAND]), this.toolDataCommand];
     if (this.atcCommand) {
       commands.push(this.atcCommand);
     }
@@ -424,6 +475,8 @@ export class BrotherConnector extends BaseMachineConnector {
         this.data[label] = parseValue(raw, type, transform);
       }
     }
+    const alarmSlots = responses[ALARM_COMMAND]?.E01;
+    if (alarmSlots) Object.assign(this.data, alarmOfList(alarmSlots));
   }
 
   getStatus(): BrotherMachineStatus {
