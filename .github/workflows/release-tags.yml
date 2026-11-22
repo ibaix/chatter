@@ -12,7 +12,7 @@ on:
   release:
     types: [released]
   # To give the tags again by hand: Actions > Release image tags > Run workflow. Pick main or a release tag
-  # in "Use workflow from". The job does not run from another branch.
+  # in "Use workflow from". On another branch, the job is skipped with no error.
   workflow_dispatch:
     inputs:
       tag:

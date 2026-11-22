@@ -3,8 +3,8 @@
 # with its parts (one image for each processor, and the build attestations), so people can still pull old versions.
 #
 # It runs after each "Docker image" run of a release tag, because only a release pushes images.
-# To run it by hand: Actions > ghcr cleanup > Run workflow. Pick main in "Use workflow from".
-# The job does not run from another branch. Pick "dry run" to see what it would delete, without deleting.
+# To run it by hand: Actions > ghcr cleanup > Run workflow. Pick main or a release tag in "Use workflow from".
+# On another branch, the job is skipped with no error. Pick "dry run" to see what it would delete, without deleting.
 
 name: ghcr cleanup
 
