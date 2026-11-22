@@ -41,6 +41,8 @@ describe('VictoriaHistory', () => {
     expect(asked.searchParams.get('start')).toBe('1.000');
     expect(asked.searchParams.get('end')).toBe('5.500');
     expect(asked.searchParams.get('max_rows_per_line')).toBe('10000');
+    // Block by block, so VictoriaMetrics does not hold a whole series in memory
+    expect(asked.searchParams.get('reduce_mem_usage')).toBe('1');
   });
 
   it('leaves out the start for all the history', async () => {

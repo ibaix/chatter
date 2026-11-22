@@ -8,6 +8,8 @@ type Labels = Record<string, string>;
 const MINUTE_MS = 60_000;
 /** The fake gives its export in pieces of this size, so a line is often split between pieces */
 const PIECE_BYTES = 1000;
+/** The samples in one block of an unmerged export */
+const UNMERGED_BLOCK = 7;
 
 /**
  * For tests: VictoriaMetrics in memory, with the deduplication that docker-compose.yml turns on
@@ -38,14 +40,26 @@ export class FakeVictoria implements HistoryStore, HistorySource {
     for (const [key, series] of this.series) if (series.labels.machine === machineId) this.series.delete(key);
   }
 
+  /**
+   * As VictoriaMetrics with reduce_mem_usage=1 can export, when its data is not merged yet: a series in many small blocks,
+   * the blocks not in time order, and some samples two times
+   */
+  unmergedExport = false;
+
   async exportSeries(machineId: string, namePattern: string, { from, to }: ExportRange): Promise<AsyncIterable<Uint8Array>> {
     const name = new RegExp(`^(?:${namePattern})$`);
     const lines: string[] = [];
     for (const { labels, samples } of this.series.values()) {
       if (labels.machine !== machineId || !name.test(labels.__name__)) continue;
       const inRange = [...samples].filter(([time]) => (from === null || time >= from) && time <= to).sort(([a], [b]) => a - b);
-      for (let start = 0; start < inRange.length; start += EXPORT_ROWS_PER_LINE) {
-        const block = inRange.slice(start, start + EXPORT_ROWS_PER_LINE);
+      const size = this.unmergedExport ? UNMERGED_BLOCK : EXPORT_ROWS_PER_LINE;
+      const blocks: [number, number][][] = [];
+      for (let start = 0; start < inRange.length; start += size) blocks.push(inRange.slice(start, start + size));
+      if (this.unmergedExport && blocks.length > 0) {
+        blocks.reverse();
+        blocks.push(blocks[0].slice(0, 2), blocks[blocks.length - 1]);
+      }
+      for (const block of blocks) {
         lines.push(JSON.stringify({ metric: labels, values: block.map(([, value]) => value), timestamps: block.map(([time]) => time) }));
       }
     }

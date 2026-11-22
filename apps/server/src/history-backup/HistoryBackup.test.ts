@@ -8,6 +8,7 @@ import type { NewAlertRule } from '@local-chatter/shared';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AlertRuleService } from '../alert-rules/AlertRuleService.js';
 import { captureLog } from '../logging/testSupport.js';
+import { KEEP_PERIODS_MS } from '../recording/StatePeriodRecorder.js';
 import { StatePeriodStore } from '../recording/StatePeriodStore.js';
 import { ARCHIVE_LIMITS, FORMAT_VERSION, type Manifest } from './archive.js';
 import { changeArchive, linesOf, pack, partOf, unpack } from './archiveTestSupport.js';
@@ -300,6 +301,32 @@ describe('HistoryBackup', () => {
       const result = await backups.restore(preview.id, target, { alertRules: false }, 'admin');
       expect(result.samples).toBe(14400 + AVERAGES + 2);
       expect(victoria.valuesIn('chatter_running:avg1m', target.id, NOW - HOUR + 1, NOW)).toEqual([0.5, 0.25]);
+    });
+
+    it('backs up and restores an export with blocks out of time order and samples two times, as reduce_mem_usage=1 gives', async () => {
+      victoria.unmergedExport = true;
+      const entries = await unpack(await backUp());
+      const manifest = JSON.parse(entries.get('manifest.json')!.toString()) as Manifest;
+      expect(manifest.data).toEqual({ first: NOW - 3 * HOUR, last: NOW - HOUR });
+      const raw = linesOf(entries.get('history/raw.jsonl.gz')!);
+      expect(manifest.parts['history/raw.jsonl.gz']!.count).toBe(raw.reduce((sum, line) => sum + JSON.parse(line).values.length, 0));
+      expect(manifest.parts['history/raw.jsonl.gz']!.count).toBeGreaterThan(14400);
+
+      // A later Chatter: the first 1.5 hours are older than the history keeps
+      const notBefore = NOW - 1.5 * HOUR;
+      const later = new HistoryBackup({
+        folder: path.join(folder, 'later'), history: victoria, statePeriods: periods, alertRules: rules, version: '1.4.0',
+        now: () => notBefore + KEEP_PERIODS_MS, freeBytes: async () => freeBytes,
+      });
+      const archive = await backUp();
+      const preview = await later.receiveRestore(upload(archive), archive.length, target, 'admin');
+      const counted = JSON.parse((await unpack(archive)).get('manifest.json')!.toString()) as Manifest;
+      expect(preview.counts.rawSamples + preview.counts.averageSamples + preview.tooOld.samples)
+        .toBe(counted.parts['history/raw.jsonl.gz']!.count + counted.parts['history/averages.jsonl.gz']!.count);
+      await later.restore(preview.id, target, { alertRules: false }, 'admin');
+      const time = (line: string) => Number(line.split(' ')[2]);
+      expect(victoria.samplesOf(target.id)).toEqual(victoria.samplesOf(source.id).filter(line => time(line) >= notBefore));
+      expect(victoria.samplesOf(target.id).length).toBeGreaterThan(0);
     });
 
     it('refuses a file of another machine type', async () => {

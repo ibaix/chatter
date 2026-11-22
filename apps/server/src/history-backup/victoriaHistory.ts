@@ -39,6 +39,10 @@ export class VictoriaHistory implements HistoryStore {
       'match[]': `{__name__=~"${namePattern}",machine="${escapeLabelValue(machineId)}"}`,
       end: seconds(to),
       max_rows_per_line: String(EXPORT_ROWS_PER_LINE),
+      // VictoriaMetrics sends each block as it reads it, and does not hold a whole series in memory first. Then a series
+      // can be on many lines, not in time order, and a sample that is not merged yet can come two times. The backup
+      // does not need the time order, and the deduplication of the restore keeps one sample for each time.
+      reduce_mem_usage: '1',
     });
     if (from !== null) params.set('start', seconds(from));
     // The export itself can take long on a Pi. The time limit stops only a VictoriaMetrics that does not start to answer.
