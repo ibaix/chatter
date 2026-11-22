@@ -30,25 +30,6 @@ export interface BaseMachine {
   macros?: MacroConfig[];
   /** How long the polls take. Only connectors that measure their polls send it. */
   pollTimings?: PollTimings;
-  /** When Chatter last had a poll result of the machine. Only while Chatter polls it. */
-  pollClock?: PollClock;
-}
-
-/** When Chatter last had a poll result of a machine. The pages show "Not polled for N min" when it is too long ago. */
-export interface PollClock {
-  /** The end of the last poll (good or bad), or the start of the polling before the first poll ends (ISO text) */
-  lastEndedAt: string;
-  /** With no poll result for this long, the poll is stuck */
-  overdueAfterMs: number;
-  /** The start of a poll that has not ended yet (ISO text), or null */
-  inProgressSince: string | null;
-}
-
-/** The time in ms since the last poll result, when it is too long ago. Null when the polls come in time. */
-export function overduePollMs(clock: PollClock | undefined, now: number): number | null {
-  if (!clock) return null;
-  const sinceMs = now - Date.parse(clock.lastEndedAt);
-  return sinceMs > clock.overdueAfterMs ? sinceMs : null;
 }
 
 /** One change of the connection of a machine, as the server log tells it */
@@ -71,7 +52,6 @@ export interface MachineHealth {
   events: ConnectionEvent[];
   /** The time of the last good poll (ISO text), or null */
   lastPollTime: string | null;
-  pollClock: PollClock | null;
 }
 
 // ============================================

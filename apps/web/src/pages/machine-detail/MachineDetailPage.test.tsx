@@ -33,7 +33,7 @@ vi.mock('../../api/machineFiles', async importOriginal => ({
 // The chart has its own tests. Here it has no values.
 vi.mock('../../api/history', () => ({ fetchValueHistory: vi.fn() }));
 vi.mock('../../api/diagnostics', () => ({
-  fetchMachineHealth: vi.fn().mockResolvedValue({ offlineSince: null, lastError: null, events: [], lastPollTime: null, pollClock: null }),
+  fetchMachineHealth: vi.fn().mockResolvedValue({ offlineSince: null, lastError: null, events: [], lastPollTime: null }),
   testMachineConnection: vi.fn(),
   reconnectMachine: vi.fn(),
 }));

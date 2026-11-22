@@ -55,15 +55,14 @@ describe('machine health routes', () => {
     it('tells each logged-in user the health of a machine', async () => {
       const res = await request(`/api/machine/${machineId}/health`, 'GET', viewerCookie);
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ offlineSince: null, lastError: null, events: [], lastPollTime: null, pollClock: null });
+      expect(await res.json()).toEqual({ offlineSince: null, lastError: null, events: [], lastPollTime: null });
     });
 
-    it('tells the last error, the changes, and the poll times of a polled machine', async () => {
+    it('tells the last error and the changes of a polled machine', async () => {
       poller.start();
       await vi.waitFor(() => expect(connections.health(machineId).lastError).not.toBeNull());
       const health = await (await request(`/api/machine/${machineId}/health`)).json() as MachineHealth;
       expect(health.lastError?.text).toMatch(/ECONNREFUSED/);
-      expect(health.pollClock).toMatchObject({ overdueAfterMs: 60_000 });
     });
 
     it('gives 404 for an unknown machine', async () => {
@@ -79,7 +78,8 @@ describe('machine health routes', () => {
       const report = await res.json() as ConnectionTestReport;
       expect(report.host).toBe('127.0.0.1');
       expect(report.steps[1]).toMatchObject({ name: `Port ${CLOSED_PORT} (data)`, result: 'failed' });
-      expect(poller.pollClock(machineId)).not.toBeNull();
+      // The polls start again: the machine connects as after a start
+      expect(poller.isConnecting(machineId)).toBe(true);
     });
 
     it('refuses a second test in 10 seconds', async () => {
@@ -102,9 +102,12 @@ describe('machine health routes', () => {
       poller.start();
       // The first poll ends: a closed port refuses at once
       await vi.waitFor(() => expect(connections.health(machineId).lastError).not.toBeNull());
-      await vi.waitFor(() => expect(poller.pollClock(machineId)?.inProgressSince).toBeNull());
-      const res = await request(`/api/machine/${machineId}/reconnect`, 'POST');
-      expect(res.status).toBe(200);
+      // A reconnect while that poll still ends gives 409, so ask again until the poll has ended
+      const res = await vi.waitFor(async () => {
+        const answer = await request(`/api/machine/${machineId}/reconnect`, 'POST');
+        expect(answer.status).toBe(200);
+        return answer;
+      });
       expect(await res.json()).toEqual({ message: RECONNECT_MESSAGES.started });
       expect(log.text()).toContain(`Reconnect asked machine=${machineId} user=admin result=started`);
     });

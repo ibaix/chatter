@@ -61,50 +61,6 @@ describe('PollScheduler health', () => {
     vi.useRealTimers();
   });
 
-  describe('pollClock', () => {
-    it('is null for a machine that is not polled', () => {
-      expect(scheduler.pollClock('machine_unknown')).toBeNull();
-    });
-
-    it('tells the start of the polling before the first poll ends, and the poll that runs', async () => {
-      machine.pollsWaitForTest = true;
-      scheduler.start(machine.asConnector());
-      await vi.advanceTimersByTimeAsync(0);
-      expect(scheduler.pollClock(machine.id)).toEqual({
-        lastEndedAt: START.toISOString(), overdueAfterMs: 60_000, inProgressSince: START.toISOString(),
-      });
-    });
-
-    it('tells the end of the last poll, good or bad', async () => {
-      machine.connected = false;
-      scheduler.start(machine.asConnector());
-      await vi.advanceTimersByTimeAsync(2000);
-      expect(scheduler.pollClock(machine.id)).toMatchObject({
-        lastEndedAt: new Date(START.getTime() + 2000).toISOString(), inProgressSince: null,
-      });
-    });
-
-    it('a stuck poll keeps the time of the last result, so the page can say "not polled for N min"', async () => {
-      // A long stuck limit, so the scheduler does not leave this poll behind during the test
-      scheduler = new PollScheduler({ afterPoll: vi.fn(), connectingEnded }, { stuckPollMs: 10 * 60_000 });
-      scheduler.start(machine.asConnector());
-      await vi.advanceTimersByTimeAsync(0);
-      machine.pollsWaitForTest = true;
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
-      const clock = scheduler.pollClock(machine.id)!;
-      expect(clock.lastEndedAt).toBe(new Date(START.getTime() + 2000 + 10_000).toISOString());
-      expect(Date.now() - Date.parse(clock.lastEndedAt)).toBeGreaterThan(clock.overdueAfterMs);
-      expect(clock.inProgressSince).toBe(new Date(START.getTime() + 2000).toISOString());
-    });
-
-    it('is overdue after 3 intervals, also when the machine fails and is polled less often', async () => {
-      machine.connected = false;
-      scheduler.start(machine.asConnector());
-      while (machine.polls < 10) await vi.advanceTimersToNextTimerAsync();
-      expect(scheduler.pollClock(machine.id)!.overdueAfterMs).toBe(3 * 60_000);
-    });
-  });
-
   describe('reconnect', () => {
     it('disconnects the machine and polls it now', async () => {
       scheduler.start(machine.asConnector());

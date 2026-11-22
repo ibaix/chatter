@@ -30,7 +30,6 @@ import {
   toFanucUpdate,
   toSiemensUpdate,
 } from './machineSettings.js';
-import type { PollClock } from '@local-chatter/shared';
 import type {
   AddMachineRequest,
   BaseMachineStatus,
@@ -429,15 +428,9 @@ export class HardwarePoller extends EventEmitter {
     }
   }
 
-  /** The status of the machine, whether Chatter still tries to reach it for the first time, and when its last poll ended */
+  /** The status of the machine, and whether Chatter still tries to reach it for the first time */
   private statusOf<Status extends BaseMachineStatus>(connector: { id: string; getStatus(): Status }): Status {
-    const pollClock = this.scheduler.pollClock(connector.id);
-    return { ...connector.getStatus(), connecting: this.scheduler.isConnecting(connector.id), ...(pollClock && { pollClock }) };
-  }
-
-  /** When the last poll of the machine ended, or null when it is not polled */
-  pollClock(id: string): PollClock | null {
-    return this.scheduler.pollClock(id);
+    return { ...connector.getStatus(), connecting: this.scheduler.isConnecting(connector.id) };
   }
 
   /** Disconnect the machine and poll it now. Null for an unknown machine. */
