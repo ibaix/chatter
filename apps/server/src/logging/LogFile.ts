@@ -37,18 +37,28 @@ export class LogFile {
       return;
     }
     if (this.size > 0 && this.size + bytes > this.maxBytes) this.rotate();
-    const marker = this.droppedLines > 0 ? `[${this.droppedLines} lines dropped: the card was too slow]\n` : '';
-    this.droppedLines = 0;
+    const marker = this.takeDroppedMarker();
     this.stream!.write(marker + line);
     this.size += Buffer.byteLength(marker) + bytes;
   }
 
-  /** Ends the file. The promise ends when each line is on the card. */
+  /** Ends the file, with the number of lines dropped since the last line. The promise ends when each line is on the card. */
   async close(): Promise<void> {
     const stream = this.stream;
     this.stream = null;
-    if (stream) this.end(stream);
+    if (stream) {
+      const marker = this.takeDroppedMarker();
+      if (marker) stream.write(marker);
+      this.end(stream);
+    }
     await Promise.all(this.endings);
+  }
+
+  /** The line that tells how many lines were dropped since the last written line, or '' when none were dropped */
+  private takeDroppedMarker(): string {
+    const marker = this.droppedLines > 0 ? `[${this.droppedLines} lines dropped: the card was too slow]\n` : '';
+    this.droppedLines = 0;
+    return marker;
   }
 
   private end(stream: WriteStream): void {

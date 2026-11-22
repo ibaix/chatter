@@ -45,6 +45,20 @@ describe('LogFile', () => {
     expect(file.filePaths).toEqual([`${filePath}.1`, filePath]);
   });
 
+  it('drops lines when the card is too slow, so at most 256 KB waits in memory, and tells how many it dropped', async () => {
+    const file = new LogFile(filePath);
+    const line = 'x'.repeat(999);
+    // 600 KB in one tick: the card cannot write any of it before the loop ends
+    for (let i = 0; i < 600; i++) file.write(line);
+    await file.close();
+
+    const text = readFileSync(filePath, 'utf8');
+    const dropped = Number(/^\[(\d+) lines dropped: the card was too slow\]$/m.exec(text)?.[1]);
+    expect(dropped).toBeGreaterThan(0);
+    expect(text.split('\n').filter(written => written === line)).toHaveLength(600 - dropped);
+    expect(Buffer.byteLength(text)).toBeLessThan(256 * 1024 + 2 * (line.length + 1));
+  });
+
   it('a file that cannot be written does not throw, and writes nothing more', async () => {
     vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     // A file where the folder must be, so the folder cannot be made
