@@ -1,10 +1,13 @@
 import net from 'net';
+import Database from 'better-sqlite3';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BROTHER_RECONNECT_MS, BrotherConnector, NO_REPLY_ERROR, REPLY_STATUS_KEY, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
 import type { BrotherMachineConfig, BrotherMachineStatus, DataItemTransform } from '../../types/index.js';
 import { TOOL_SYNC_TIMEOUT_MS } from './toolSync.js';
 import { captureLog, type CapturedLog } from '../../logging/testSupport.js';
 import { ConnectionLog } from '../../logging/ConnectionLog.js';
+import { HardwarePoller } from '../../polling/poller.js';
+import type { MachineRegistry } from '../../polling/MachineRegistry.js';
 
 /**
  * Replies of a Brother control to each command, matching the Python test fixtures
@@ -1239,33 +1242,49 @@ describe('Brother planned reconnect when the control does not close its side', (
   let server: net.Server | null = null;
   let connector: BrotherConnector | undefined;
   const machineSides: net.Socket[] = [];
+  let log: CapturedLog;
+
+  beforeEach(() => {
+    log = captureLog();
+  });
 
   afterEach(async () => {
+    log.restore();
     vi.useRealTimers();
     connector?.disconnect();
     machineSides.forEach(socket => socket.destroy());
     machineSides.length = 0;
-    await new Promise(resolve => (server ? server.close(resolve) : resolve(undefined)));
+    await new Promise(resolve => (server?.listening ? server.close(resolve) : resolve(undefined)));
     server = null;
   });
 
-  it('destroys the old connection after 2 s, and the poll ends connected on a new connection', async () => {
+  /**
+   * A fake Brother that gets the FIN of Chatter and keeps its own side open (allowHalfOpen), so the orderly close
+   * waits its full 2 s. Gives a connector after its first poll, 60 s later, so its next poll makes the planned reconnect.
+   */
+  async function brotherThatKeepsItsSideOpen(): Promise<BrotherConnector> {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(new Date('2026-11-21T08:00:00Z'));
-    // allowHalfOpen: the machine side gets the FIN of Chatter, and keeps its own side open
     server = net.createServer({ allowHalfOpen: true }, socket => {
       machineSides.push(socket);
       socket.on('error', () => {});
       answerLikeABrother(socket);
     });
     await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
-    connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: portOf(server), timeout: 1000 });
-    await connector.poll();
-    await connector.toolSyncEnded();
-
+    const brother = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: portOf(server), timeout: 1000 });
+    connector = brother;
+    await brother.poll();
+    await brother.toolSyncEnded();
     vi.setSystemTime(Date.now() + BROTHER_RECONNECT_MS);
+    return brother;
+  }
+
+  const isReconnecting = (brother: BrotherConnector) => Reflect.get(brother, 'reconnecting') as boolean;
+
+  it('destroys the old connection after 2 s, and the poll ends connected on a new connection', async () => {
+    const brother = await brotherThatKeepsItsSideOpen();
     let status: BrotherMachineStatus | undefined;
-    const poll = connector.poll().then(result => { status = result; });
+    const poll = brother.poll().then(result => { status = result; });
     await vi.advanceTimersByTimeAsync(1999);
     expect(status).toBeUndefined();
     expect(machineSides).toHaveLength(1);
@@ -1277,6 +1296,70 @@ describe('Brother planned reconnect when the control does not close its side', (
     expect(status?.connected).toBe(true);
     expect(status?.errors).toEqual([]);
     expect(status?.data.partCount).toBe(78);
+  });
+
+  it('shows the machine online in each status and writes no log line while it waits for the orderly close', async () => {
+    const brother = await brotherThatKeepsItsSideOpen();
+    const poller = new HardwarePoller(new Database(':memory:'));
+    (Reflect.get(poller, 'registry') as MachineRegistry).add(brother);
+    const connectionLog = new ConnectionLog();
+    connectionLog.record(brother);
+    const poll = brother.poll();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(brother.getStatus().connected).toBe(true);
+    // The poller sends this status to the screens after the poll of each machine, also of another machine
+    expect(poller.getStatus().find(machine => machine.id === 'b1')).toMatchObject({ connected: true });
+    connectionLog.record(brother);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await poll;
+    expect(brother.getStatus().connected).toBe(true);
+    expect(isReconnecting(brother)).toBe(false);
+    expect(log.text('warn')).not.toContain('offline');
+  });
+
+  it('shows the machine offline with the reason when the new connect fails', async () => {
+    const brother = await brotherThatKeepsItsSideOpen();
+    const connectionLog = new ConnectionLog();
+    connectionLog.record(brother);
+    const poll = brother.poll();
+    // The control is gone: it takes no new connection
+    server!.close();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    const status = await poll;
+
+    expect(status.connected).toBe(false);
+    expect(status.errors.join('; ')).toContain('Unable to connect');
+    expect(isReconnecting(brother)).toBe(false);
+    connectionLog.record(brother);
+    expect(log.text('warn')).toMatch(/Machine went offline.*Unable to connect/);
+  });
+
+  it('shows the machine offline at once when Chatter disconnects it during the reconnect', async () => {
+    const brother = await brotherThatKeepsItsSideOpen();
+    const poll = brother.poll();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    brother.disconnect();
+
+    expect(brother.getStatus().connected).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    await poll;
+  });
+
+  it('reads the tools after the reconnect when a user presses Sync during it', async () => {
+    const brother = await brotherThatKeepsItsSideOpen();
+    const poll = brother.poll();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const sync = brother.requestToolSync();
+    await vi.advanceTimersByTimeAsync(1000);
+    await poll;
+
+    expect(await sync).toEqual({ outcome: 'synced', toolSync: expect.objectContaining({ error: null, running: false }) });
+    expect(machineSides).toHaveLength(2);
   });
 });
 

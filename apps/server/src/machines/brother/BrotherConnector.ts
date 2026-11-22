@@ -248,6 +248,11 @@ export class BrotherConnector extends BaseMachineConnector {
   private runningPoll: Promise<void> | null = null;
   /** The tool read that runs now. A state poll does not use the connection while it runs. */
   private runningToolSync: Promise<ToolSyncResult> | null = null;
+  /**
+   * True during the planned reconnect, from the orderly close until the new connect ends. The status says connected
+   * then, because Chatter closed the connection on purpose. If the new connect fails, the machine shows offline.
+   */
+  private reconnecting = false;
 
   constructor(config: BrotherMachineConfig) {
     super(config);
@@ -348,6 +353,7 @@ export class BrotherConnector extends BaseMachineConnector {
       this.socket = null;
     }
     this.connected = false;
+    this.reconnecting = false;
   }
 
   /**
@@ -520,11 +526,14 @@ export class BrotherConnector extends BaseMachineConnector {
     return this.getStatus();
   }
 
-  /** A user pressed Sync: read the tools now, also while a program runs */
+  /**
+   * A user pressed Sync: read the tools now, also while a program runs. During the planned reconnect, the read
+   * waits for the poll that reconnects. If that connect fails, the read fails with the reason.
+   */
   async requestToolSync(): Promise<ToolSyncResult> {
     const refusal = this.toolSync.manualRefusal(Date.now());
     if (refusal) return refusal;
-    if (!this.connected) return { outcome: 'not-connected' };
+    if (!this.connected && !this.reconnecting) return { outcome: 'not-connected' };
     return this.startToolSync('manual');
   }
 
@@ -611,14 +620,17 @@ export class BrotherConnector extends BaseMachineConnector {
    * mustConnect() is true. It runs at the start of a poll, so no command waits for a reply during the planned reconnect.
    */
   private async connectForPoll(): Promise<boolean> {
-    const planned = this.plannedReconnectDue();
-    if (planned) await this.closeInOrder();
+    if (!this.plannedReconnectDue()) return this.ensureConnected();
 
-    if (!(await this.ensureConnected())) return false;
-    if (planned) {
-      this.timings.recordPlannedReconnect();
-      log.debug('Planned reconnect', { machine: this.id });
+    this.reconnecting = true;
+    try {
+      await this.closeInOrder();
+      if (!(await this.ensureConnected())) return false;
+    } finally {
+      this.reconnecting = false;
     }
+    this.timings.recordPlannedReconnect();
+    log.debug('Planned reconnect', { machine: this.id });
     return true;
   }
 
@@ -685,7 +697,8 @@ export class BrotherConnector extends BaseMachineConnector {
       ftpUser: this.ftpUser,
       hasFtpPassword: this.hasFtpPassword,
       type: 'brother',
-      connected: this.connected,
+      // The planned reconnect is not a disconnect, so the screens and the connection log do not show it
+      connected: this.connected || this.reconnecting,
       lastPollTime: this.lastPollTime,
       errors: this.errors,
       data: {
