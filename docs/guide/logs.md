@@ -46,7 +46,7 @@ A machine that is off for a weekend gives two lines, not one for each poll.
 Each poll of a machine must end in 10 seconds. A Brother answers each request in turn, so a busy Brother can come near this limit.
 
 - When a poll of a Brother uses more than 6 seconds, the log has a warning: `[poll-times] A poll used most of its time limit`. `slowest` names the slowest requests. You get this warning at most one time in 10 minutes for each machine.
-- When the time is too short for all requests, Chatter skips the last requests of that poll, and sends them first in the next poll. The machine stays online. The values of the skipped requests stay on the screen until the next read. With `LOG_LEVEL=debug`, the `Poll times` line of each poll shows the time of each request and the skipped requests.
+- With `LOG_LEVEL=debug`, the `Poll times` line of each poll shows the time of each request.
 - A poll of a Brother does not read the tool table. Chatter reads the tool table in a separate step, with a limit of 20 seconds (see [The tool table of a Brother](get-started.md#the-tool-table-of-a-brother)). During this step, the polls show the last values, and the machine stays online.
 - Every 60 seconds, Chatter closes the connection to a Brother and opens it again. This gives the control a new session. The machine does not show offline, and the log has no line for it.
 
