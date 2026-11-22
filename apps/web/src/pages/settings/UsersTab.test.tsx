@@ -163,6 +163,8 @@ describe('UsersTab', () => {
     await renderTab();
     const table = screen.getByRole('region', { name: 'What each role can do' });
 
+    expect(within(table).getByRole('row', { name: /See the names of the files/ })).toHaveTextContent('YesYesYes');
+    expect(within(table).getByRole('row', { name: /Download and read files/ })).toHaveTextContent('NoYesYes');
     expect(within(table).getByRole('row', { name: /Send and delete files/ })).toHaveTextContent('NoYesYes');
     expect(within(table).getByRole('row', { name: /Manage users/ })).toHaveTextContent('NoNoYes');
     expect(within(table).getByRole('row', { name: /Update Chatter/ })).toHaveTextContent('NoNoYes');

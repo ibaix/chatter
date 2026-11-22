@@ -407,6 +407,37 @@ describe('MachineDetailPage', () => {
       expect(screen.queryAllByRole('button', { name: 'Send this version again' })).toHaveLength(count);
     });
 
+    it.each([
+      ['an operator', 'operator' as Role, 1],
+      ['a viewer', 'viewer' as Role, 0],
+    ])('lets %s download and read a file on the machine only when the role can read files', async (_who, role, count) => {
+      vi.mocked(fetchFileTree).mockResolvedValue([{ name: 'O1000.NC', path: '/O1000.NC', type: 'file', size: 6 } as FTPTreeNode]);
+      renderPage({ role, address: '/machine/m1?tab=files' });
+      const row = (await screen.findByRole('cell', { name: 'O1000.NC' })).closest('tr') as HTMLElement;
+
+      // The name, the size and the date stay for each role
+      expect(within(row).getByText('O1000.NC')).toBeInTheDocument();
+      expect(within(row).queryAllByRole('link', { name: 'Download O1000.NC' })).toHaveLength(count);
+      expect(within(row).queryAllByRole('button', { name: 'O1000.NC' })).toHaveLength(count);
+    });
+
+    it.each([
+      ['an operator', 'operator' as Role, 1],
+      ['a viewer', 'viewer' as Role, 0],
+    ])('shows the text of a sent version to %s only when the role can read files', async (_who, role, count) => {
+      vi.mocked(fetchUploadFiles).mockResolvedValue(SENT_FILES);
+      renderPage({ role, address: '/machine/m1?tab=files' });
+      fireEvent.click(await within(viewSwitch()).findByRole('button', { name: 'Upload history 2' }));
+      const o2000Row = screen.getByRole('cell', { name: 'O2000.nc' }).closest('tr') as HTMLElement;
+      fireEvent.click(within(o2000Row).getByRole('button', { name: 'Versions' }));
+
+      // The dates and the paths of the versions stay for each role
+      const versions = await screen.findByRole('list', { name: 'Versions of O2000.nc' });
+      expect(within(versions).getAllByRole('button')).toHaveLength(1);
+      expect(screen.queryAllByLabelText('The text of the picked version')).toHaveLength(count);
+      expect(fetchUploadEvent).toHaveBeenCalledTimes(count);
+    });
+
     it('shows no Send files button to a viewer', async () => {
       renderPage({ role: 'viewer' });
       await openFilesTab();

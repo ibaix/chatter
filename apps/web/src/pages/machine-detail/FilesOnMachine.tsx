@@ -26,8 +26,10 @@ interface FilesOnMachineProps {
   now: number;
 }
 
-/** The files on the machine, by folder. Read, download and delete the files there. */
+/** The files on the machine, by folder. Read, download and delete the files there, when the role of the user may. */
 export function FilesOnMachine({ machineId, files, messages, now }: FilesOnMachineProps) {
+  // A viewer sees the names, sizes and dates, but not the text of a program
+  const canReadFiles = useCan('read-files');
   const canSendFiles = useCan('send-files');
   const { openFile, showFile, closeFile } = useFileViewer(files.currentPath);
   const { confirm } = Dialog.useDialog();
@@ -59,7 +61,7 @@ export function FilesOnMachine({ machineId, files, messages, now }: FilesOnMachi
           files={files}
           machineId={machineId}
           openPath={openFile?.path}
-          onOpen={showFile}
+          onOpen={canReadFiles ? showFile : undefined}
           onDelete={canSendFiles ? deleteFile : undefined}
           now={now}
         />
@@ -168,7 +170,8 @@ interface FileTableProps {
   machineId: string;
   /** The path of the file in the viewer */
   openPath?: string;
-  onOpen: (file: FTPTreeNode, button: HTMLElement) => void;
+  /** Not set when the role of the user cannot read files */
+  onOpen?: (file: FTPTreeNode, button: HTMLElement) => void;
   /** Not set when the role of the user cannot delete files */
   onDelete?: (path: string, name: string) => void;
   now: number;
@@ -196,20 +199,22 @@ function FileTable({ files, machineId, openPath, onOpen, onDelete, now }: FileTa
           {fileRows.map(file => (
             <tr key={file.path} className={FILE_ROW}>
               <td className={cn(CELL, 'py-1 font-mono')}>
-                <button
-                  type="button"
-                  title="Show the text of the file"
-                  aria-current={file.path === openPath ? 'true' : undefined}
-                  onClick={event => onOpen(file, event.currentTarget)}
-                  className="border-0 bg-transparent p-0 text-left font-mono text-zinc-50 underline-offset-2 hover:text-primary-text hover:underline"
-                >
-                  {file.name}
-                </button>
+                {onOpen ? (
+                  <button
+                    type="button"
+                    title="Show the text of the file"
+                    aria-current={file.path === openPath ? 'true' : undefined}
+                    onClick={event => onOpen(file, event.currentTarget)}
+                    className="border-0 bg-transparent p-0 text-left font-mono text-zinc-50 underline-offset-2 hover:text-primary-text hover:underline"
+                  >
+                    {file.name}
+                  </button>
+                ) : file.name}
               </td>
               <td className={cn(CELL, 'py-1 text-right font-mono text-zinc-200')}>{formatSize(file.size)}</td>
               <td className={cn(CELL, 'py-1 text-zinc-200')}>{formatChanged(file.modifiedAt, now)}</td>
               <td className={cn(CELL, 'py-1 text-right whitespace-nowrap')}>
-                <FileActions machineId={machineId} file={file} onDelete={onDelete} />
+                <FileActions machineId={machineId} file={file} canDownload={onOpen !== undefined} onDelete={onDelete} />
               </td>
             </tr>
           ))}
@@ -219,19 +224,28 @@ function FileTable({ files, machineId, openPath, onOpen, onDelete, now }: FileTa
   );
 }
 
-/** Download the file, and delete it when the role of the user may */
-function FileActions({ machineId, file, onDelete }: { machineId: string; file: FTPTreeNode; onDelete: FileTableProps['onDelete'] }) {
+interface FileActionsProps {
+  machineId: string;
+  file: FTPTreeNode;
+  canDownload: boolean;
+  onDelete: FileTableProps['onDelete'];
+}
+
+/** Download the file, and delete it, when the role of the user may */
+function FileActions({ machineId, file, canDownload, onDelete }: FileActionsProps) {
   return (
     <>
-      <a
-        href={fileDownloadUrl(machineId, file.path)}
-        download={file.name}
-        aria-label={`Download ${file.name}`}
-        title="Download"
-        className="inline-flex size-9 items-center justify-center rounded-md text-zinc-50 hover:bg-zinc-800"
-      >
-        <DownloadIcon />
-      </a>
+      {canDownload && (
+        <a
+          href={fileDownloadUrl(machineId, file.path)}
+          download={file.name}
+          aria-label={`Download ${file.name}`}
+          title="Download"
+          className="inline-flex size-9 items-center justify-center rounded-md text-zinc-50 hover:bg-zinc-800"
+        >
+          <DownloadIcon />
+        </a>
+      )}
       {onDelete && (
         <Button size="icon" variant="quiet" aria-label={`Delete ${file.name}`} title="Delete" onClick={() => onDelete(file.path, file.name)}>
           <TrashIcon />

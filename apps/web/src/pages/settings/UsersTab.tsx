@@ -35,8 +35,9 @@ const ROLE_BADGES: Record<Role, string> = {
 };
 
 /** The rows of "What each role can do". The first rows are the same for each role. */
-const EVERYONE_CAN = ['See machines and history', 'Download files'];
+const EVERYONE_CAN = ['See machines and history', 'See the names of the files'];
 const PERMISSION_LABELS: Record<Permission, string> = {
+  'read-files': 'Download and read files',
   'send-files': 'Send and delete files',
   'manage-machines': 'Add, change, or delete machines',
   'manage-chatter': 'Manage users, HTTPS, the proxy, and logins',
