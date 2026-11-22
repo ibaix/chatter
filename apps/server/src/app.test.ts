@@ -1178,6 +1178,7 @@ describe('API Routes', () => {
       const res = await call('DELETE', `/api/machine/${id}/files?path=${encodeURIComponent('O1000\r\nDELE O1234')}`);
 
       expect(res.status).toBe(400);
+      expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
       expect(deleteFile).not.toHaveBeenCalled();
     });
 
