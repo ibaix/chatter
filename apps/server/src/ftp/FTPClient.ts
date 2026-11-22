@@ -20,8 +20,10 @@ export const MAX_TREE_DEPTH = 5;
 export const MAX_TREE_ENTRIES = FILE_TREE_ENTRY_LIMIT;
 const ROOT_PATH = '/';
 
-/** The manual download gives up when no byte arrives in this time */
-const DOWNLOAD_NO_DATA_TIMEOUT_MS = 30_000;
+/** The raw RETR stops when the machine stops in the middle of a file */
+const DOWNLOAD_STALLED_MESSAGE = 'The machine stopped sending the file. Try again.';
+/** The raw RETR stops when the data connection closes, but the 226 reply does not come */
+const DOWNLOAD_NOT_CONFIRMED_MESSAGE = 'The machine did not confirm that the file is complete. Try again.';
 /** The raw LIST does not wait for the server to close the data connection, so it waits this long for the listing */
 const RAW_LIST_TRANSFER_WAIT_MS = 1_000;
 /**
@@ -65,6 +67,12 @@ interface TreeWalk {
 }
 
 type BatchFileOutcome = FTPUploadResult['success'][number] | FTPUploadResult['failed'][number];
+
+/** The place where the raw RETR writes the file, and the number of bytes that it wrote */
+interface DownloadSink {
+  destination: Writable;
+  bytesWritten: number;
+}
 
 interface PassiveAddress {
   host: string;
@@ -375,10 +383,14 @@ export class FTPClient {
     try {
       assertSafeFtpArgument(remotePath);
       await this.withConnection({ verbose: true }, async client => {
+        const sink: DownloadSink = { destination: writableStream, bytesWritten: 0 };
         try {
-          await this.downloadOverPassiveSocket(client, remotePath, writableStream);
-        } catch {
-          // Fall back to basic-ftp's standard download
+          await this.downloadOverPassiveSocket(client, remotePath, sink);
+        } catch (err) {
+          // The user already has part of the file. A second download would add to that part, so the download fails.
+          if (sink.bytesWritten > 0) throw err;
+          // Fall back to basic-ftp's standard download. A failed RETR closes the client, so log in again first.
+          if (client.closed) await this.login(client);
           await client.downloadTo(writableStream, remotePath);
         }
       });
@@ -451,17 +463,21 @@ export class FTPClient {
     useMachineHostForTransfers(client);
     client.ftp.verbose = verbose;
     try {
-      await client.access({
-        host: this.host,
-        port: this.port,
-        user: this.user,
-        password: this.password,
-        secure: false
-      });
+      await this.login(client);
       return await work(client);
     } finally {
       client.close();
     }
+  }
+
+  private async login(client: ftp.Client): Promise<void> {
+    await client.access({
+      host: this.host,
+      port: this.port,
+      user: this.user,
+      password: this.password,
+      secure: false
+    });
   }
 
   /** Upload one file of an uploadFiles batch. A failure is returned, not thrown, so the batch goes on. */
@@ -496,36 +512,82 @@ export class FTPClient {
   /**
    * Download with raw FTP commands over our own data socket: open the data
    * connection first, then send RETR. More compatible with limited FTP servers like Speedio.
+   * When the download fails after the RETR, the client closes: a late 226 or 426 must not go to the next command.
    */
-  private async downloadOverPassiveSocket(client: ftp.Client, filePath: string, destination: Writable): Promise<void> {
-    // The RETR below goes straight to the socket, so basic-ftp does not check it
+  private async downloadOverPassiveSocket(client: ftp.Client, filePath: string, sink: DownloadSink): Promise<void> {
+    // basic-ftp refuses only CR, LF and NUL in a command, so this check is stricter
     assertSafeFtpArgument(filePath);
     await trySetBinaryMode(client);
     const { host, port } = await requestPassiveAddress(client.ftp);
     const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
+    try {
+      await this.receiveFile(client, { filePath, dataSocket, sink });
+    } catch (err) {
+      dataSocket.destroy();
+      client.close();
+      throw err;
+    }
+  }
 
+  /**
+   * Send RETR and write the data to the sink. The download is complete only when the data connection closes
+   * and the machine sends its 226 (or another 2xx) reply. An error reply (for example 426) fails the download.
+   * The timer stops a download when no data and no reply comes in the FTP timeout. Each chunk starts it again.
+   */
+  private receiveFile(
+    client: ftp.Client,
+    { filePath, dataSocket, sink }: { filePath: string; dataSocket: net.Socket; sink: DownloadSink }
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Stops a download that gets no data. The first byte, an error or the close stops this timer.
-      const noDataTimer = setTimeout(() => {
-        dataSocket.destroy();
-        reject(new Error('Download timeout'));
-      }, DOWNLOAD_NO_DATA_TIMEOUT_MS);
+      let isDataDone = false;
+      let isReplyDone = false;
+      let isSettled = false;
+      let idleTimer: NodeJS.Timeout | undefined;
 
-      dataSocket.on('data', chunk => {
-        clearTimeout(noDataTimer);
-        destination.write(chunk);
+      const settle = (err?: Error) => {
+        if (isSettled) return;
+        isSettled = true;
+        clearTimeout(idleTimer);
+        if (err) reject(err);
+        else resolve();
+      };
+      const startIdleTimer = () => {
+        clearTimeout(idleTimer);
+        // A late chunk or close event after the end must not start a timer that nothing stops
+        if (isSettled) return;
+        idleTimer = setTimeout(() => {
+          settle(new Error(isDataDone ? DOWNLOAD_NOT_CONFIRMED_MESSAGE : DOWNLOAD_STALLED_MESSAGE));
+        }, this.timeoutMs);
+      };
+      const settleWhenComplete = () => {
+        if (isDataDone && isReplyDone) settle();
+      };
+
+      dataSocket.on('data', (chunk: Buffer) => {
+        if (isSettled) return;
+        startIdleTimer();
+        sink.bytesWritten += chunk.length;
+        sink.destination.write(chunk);
       });
       dataSocket.on('close', () => {
-        clearTimeout(noDataTimer);
-        resolve();
+        isDataDone = true;
+        startIdleTimer();
+        settleWhenComplete();
       });
-      dataSocket.on('error', err => {
-        clearTimeout(noDataTimer);
-        reject(err);
-      });
+      dataSocket.on('error', err => settle(err));
 
-      // Written straight to the control socket without waiting for the reply, so data can flow on the data socket
-      client.ftp.socket.write(`RETR ${filePath}\r\n`);
+      startIdleTimer();
+      client.ftp.handle(`RETR ${filePath}`, (reply, task) => {
+        if (reply instanceof Error) task.reject(reply);
+        else if (reply.code >= 200 && reply.code < 300) task.resolve(reply);
+        else if (reply.code >= 300) task.reject(new Error(`Unexpected reply to RETR: ${reply.message}`));
+        // A 1xx reply (for example 150) only tells that the transfer starts
+      }).then(() => {
+        isReplyDone = true;
+        settleWhenComplete();
+      }, (err: Error) => settle(err));
+      // The timer above watches the transfer. The control connection is quiet until the 226, so its own timeout stops.
+      client.ftp.socket.setTimeout(0);
     });
   }
 
