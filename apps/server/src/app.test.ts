@@ -1160,22 +1160,22 @@ describe('API Routes', () => {
       expect(downloadFile).not.toHaveBeenCalled();
     });
 
-    it('refuses a file list of a folder with a line break', async () => {
+    it.each(BAD_PATHS)('refuses a file list of the folder %j', async path => {
       const { id, connector } = await brotherConnector();
       const getFileTree = vi.spyOn(connector, 'getFileTree');
 
-      const res = await call('GET', `/api/machine/${id}/files?path=${encodeURIComponent('/PRG\r\nDELE O1234')}`);
+      const res = await call('GET', `/api/machine/${id}/files?path=${encodeURIComponent(`/PRG/${path}`)}`);
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
       expect(getFileTree).not.toHaveBeenCalled();
     });
 
-    it('refuses a delete with a line break', async () => {
+    it.each(BAD_PATHS)('refuses a delete of %j', async path => {
       const { id, connector } = await brotherConnector();
       const deleteFile = vi.spyOn(connector, 'deleteFile');
 
-      const res = await call('DELETE', `/api/machine/${id}/files?path=${encodeURIComponent('O1000\r\nDELE O1234')}`);
+      const res = await call('DELETE', `/api/machine/${id}/files?path=${encodeURIComponent(path)}`);
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
