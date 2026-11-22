@@ -55,6 +55,16 @@ export class ToolSyncTracker {
     if (error === null) this.lastSyncAt = now;
   }
 
+  /**
+   * Forget the last read, so the next idle poll reads the tools at once. A read that runs now and the Sync limit
+   * of 30 seconds stay.
+   */
+  forgetLastRead(): void {
+    this.lastSyncAt = null;
+    this.lastAttemptAt = null;
+    this.error = null;
+  }
+
   autoSyncDue(now: number): boolean {
     if (this.running) return false;
     if (this.lastAttemptAt !== null && now - this.lastAttemptAt < MANUAL_SYNC_EVERY_MS) return false;

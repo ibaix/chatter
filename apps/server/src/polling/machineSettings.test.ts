@@ -155,11 +155,22 @@ describe('Brother address update', () => {
 
     applyBrotherUpdate(connector, { host: '192.168.1.60' });
     knowsAtc.value = true;
-    await connector.poll();
-    await connector.requestToolSync();
+    await pollAndReadTools(connector);
 
     expect(connector.getStatus().data.controlType).toBe('C00');
     expect(atcCommandsSent().filter(command => command === 'ATCTL').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('reads the tools at the first idle poll after the address changes, not 10 minutes later', async () => {
+    const { connector, atcCommandsSent } = brotherThatAnswers({ value: true });
+    await pollAndReadTools(connector);
+
+    applyBrotherUpdate(connector, { host: '192.168.1.60' });
+    expect(connector.getStatus().data.toolSync?.lastSyncAt).toBeNull();
+    await pollAndReadTools(connector);
+
+    expect(atcCommandsSent()).toEqual(['ATCTL', 'ATCTL']);
+    expect(connector.getStatus().data).toMatchObject({ controlType: 'C00', hasPocketInfo: true });
   });
 
   it('keeps the control type when the update has the same host and port', async () => {

@@ -439,8 +439,8 @@ export class BrotherConnector extends BaseMachineConnector {
   }
 
   /**
-   * Forget what Chatter found about the control: the ATC command, the control type and the tool table.
-   * Use it when the address changes, because a different control can be at the new address.
+   * Forget what Chatter found about the control: the ATC command, the control type and the tool table. The next
+   * idle poll reads the tools again. Use it when the address changes, because a different control can be there.
    */
   forgetControl(): void {
     this.atcCommand = null;
@@ -450,6 +450,7 @@ export class BrotherConnector extends BaseMachineConnector {
     this.toolOffsets = new Map();
     this.toolTable = {};
     this.hasPocketInfo = false;
+    this.toolSync.forgetLastRead();
   }
 
   /** The tool in each pot, from the ATC reply */
