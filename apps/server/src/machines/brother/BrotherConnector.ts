@@ -665,7 +665,12 @@ export class BrotherConnector extends BaseMachineConnector {
     return !this.socket || !this.connected || this.plannedReconnectDue();
   }
 
-  /** Send a command of a tool read. Throws OldAddressError when the address changed while it waited for the reply. */
+  /**
+   * Send a command of a tool read. Throws OldAddressError when the address changed while it waited for the reply.
+   * An address change disconnects, so a reply that has not come fails anyway. This check is for the two other cases:
+   * the reply came before the address changed, but the read has not used it yet; or the poll that the read waited for
+   * connected to the new address, so the reply is of the new control, but the read started for the old one.
+   */
   private async sendForToolRead(command: string, generation: number): Promise<ParsedResponse> {
     const response = await this.send(command);
     if (generation !== this.controlGeneration) throw new OldAddressError();
