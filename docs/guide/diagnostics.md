@@ -25,12 +25,7 @@ Use these tools to find a problem with no SSH to the Pi. An Admin can use all of
 | Answer: connected, no reply | **Another program may be connected.** A Brother control serves only one connection. Stop the other program, for example a second Chatter. |
 
 4. Click **Reconnect**. Chatter disconnects the machine and polls it at once.
-   If a poll has not ended, Chatter says so and does not start a second poll. Then restart Chatter (see [Restart](#restart)).
-
-### Not polled for N min
-
-The **Machines** page and the machine page show **Not polled for N min** when Chatter has had no poll result of the machine for 3 polls (at least 1 minute).
-This happens when a poll does not end, for example after a slow reply of the control. Click **Reconnect**. If that does not help, restart Chatter.
+   If a poll has not ended, Chatter says so and does not start a second poll. 1 minute after the start of that poll, Chatter stops the wait for it and polls the machine again.
 
 ### Another Chatter on the network
 
