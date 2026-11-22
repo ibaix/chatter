@@ -1,17 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { parseUpdateStatus, UPDATE_STEPS } from './updates.js';
+import { parseUpdateStatus } from './updates.js';
 
 const BUSY = { state: 'installing', heartbeat: '2026-11-10T12:00:00Z', freeBytes: 1000 };
 const parse = (fields: Record<string, unknown>) => parseUpdateStatus(JSON.stringify({ ...BUSY, ...fields }));
-
-describe('UPDATE_STEPS', () => {
-  it('are the steps that the helper writes (STEPS in update-chatter.sh)', () => {
-    expect(UPDATE_STEPS).toEqual([
-      'copying', 'listing', 'signature', 'space', 'files', 'images',
-      'verifying', 'backing-up', 'loading', 'starting', 'health',
-    ]);
-  });
-});
 
 describe('parseUpdateStatus with a step', () => {
   it('keeps a known step, the image number, and the start time', () => {

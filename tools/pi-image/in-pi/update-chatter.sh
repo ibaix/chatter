@@ -117,6 +117,7 @@ busy_state=""
 busy_version=""
 
 # The steps in status.json (UPDATE_STEPS in packages/shared/src/updates.ts). Chatter shows a text for each.
+# tools/guardrails/updateSteps.test.ts makes sure that the two lists are the same.
 STEPS=(copying listing signature space files images verifying backing-up loading starting health)
 
 main() {

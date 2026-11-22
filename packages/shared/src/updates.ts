@@ -26,6 +26,7 @@ export function isBusy(state: UpdateState): boolean {
 
 /**
  * The step that a busy helper does now. The helper writes it in status.json (STEPS in update-chatter.sh).
+ * tools/guardrails/updateSteps.test.ts makes sure that the two lists are the same.
  * A check: copying, listing, signature, space, files, images.
  * An install: verifying, backing-up, loading (with "part of parts": the image), starting, health.
  * A helper from an older card image writes no step.
