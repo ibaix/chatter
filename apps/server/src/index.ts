@@ -5,7 +5,7 @@ import type { Server } from 'node:http';
 import { createApp, historyBackupFolder } from './app.js';
 import { HistoryBackup } from './history-backup/HistoryBackup.js';
 import { VictoriaHistory } from './history-backup/victoriaHistory.js';
-import { limitRequestTime, WEB_SERVER_OPTIONS } from './webServerOptions.js';
+import { startWebServer } from './webServerOptions.js';
 import { webAppRoutes } from './webApp.js';
 import { HardwarePoller } from './polling/poller.js';
 import { MetricsWriter } from './recording/MetricsWriter.js';
@@ -146,14 +146,13 @@ async function start(): Promise<void> {
       historyHealthUrls: { victoriaMetrics: `${VICTORIA_METRICS_URL}/health`, vmalert: `${VMALERT_URL}/health` },
     });
     if (WEB_DIR) app.route('/', webAppRoutes(WEB_DIR));
-    // serve() makes a plain HTTP/1 server, because no HTTP/2 option is given.
-    // WEB_SERVER_OPTIONS lets a slow upload of a large file take longer than the Node default of 5 minutes.
-    const server = serve({ fetch: app.fetch, port: PORT, serverOptions: WEB_SERVER_OPTIONS }, () => {
-      log.info('Server running', { url: `http://localhost:${PORT}`, webApp: WEB_DIR, liveEvents: '/api/events' });
-      poller.start();
-    }) as Server;
-    // Each other request gets a short time limit. Only a large upload gets the long one.
-    limitRequestTime(server);
+    // A large upload gets a long time limit. Each other request gets a short one.
+    const server = startWebServer(app, PORT, {
+      onListening: () => {
+        log.info('Server running', { url: `http://localhost:${PORT}`, webApp: WEB_DIR, liveEvents: '/api/events' });
+        poller.start();
+      },
+    });
     const receiver = alertReceiverApp(alerts, {
       isKnownMachine: machineId => poller.getMachine(machineId) !== null,
       afterSave: () => notifications.findAlertChanges(),
