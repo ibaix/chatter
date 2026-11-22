@@ -527,12 +527,16 @@ export class BrotherConnector extends BaseMachineConnector {
     return run;
   }
 
-  /** Read the tools after the state poll that runs now, in TOOL_SYNC_TIMEOUT_MS at most */
+  /**
+   * Read the tools after the state poll that runs now, in TOOL_SYNC_TIMEOUT_MS at most. The time limit includes the
+   * wait for that poll, so a poll that does not end cannot keep the tool read, and with it each later poll, waiting.
+   */
   private async syncTools(trigger: 'auto' | 'manual'): Promise<ToolSyncResult> {
-    await this.runningPoll?.catch(() => {});
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        timedOut = true;
         // Ends the command that waits, and the next poll connects again
         this.disconnect();
         reject(new Error(`The tool read did not end in ${TOOL_SYNC_TIMEOUT_MS / 1000} seconds`));
@@ -540,7 +544,12 @@ export class BrotherConnector extends BaseMachineConnector {
     });
     let error: string | null = null;
     try {
-      await Promise.race([this.readTools(), timeout]);
+      const read = (async () => {
+        await this.runningPoll?.catch(() => {});
+        // After the time limit, a later state poll can use the connection, so the read must not start
+        if (!timedOut) await this.readTools();
+      })();
+      await Promise.race([read, timeout]);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {

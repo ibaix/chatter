@@ -1003,6 +1003,45 @@ describe('Brother tool sync that does not end', () => {
     expect(await sync).toEqual({ outcome: 'failed', toolSync: expect.objectContaining({ error: expect.stringContaining('20 seconds') }) });
     expect(connector.connected).toBe(false);
   });
+
+  it('ends after 20 seconds also when it waits for a state poll that does not end, so the next poll runs', async () => {
+    vi.useFakeTimers();
+    const connector = connectorWithReplies(MOCK_RESPONSES);
+    vi.mocked(connector.sendCommand).mockImplementation(() => new Promise(() => {}));
+    void connector.poll();
+    const sync = connector.requestToolSync();
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(await sync).toEqual({ outcome: 'failed', toolSync: expect.objectContaining({ error: expect.stringContaining('20 seconds'), running: false }) });
+    expect(connector.connected).toBe(false);
+    vi.mocked(connector.sendCommand).mockClear();
+    vi.spyOn(connector, 'connect').mockImplementation(async () => { Object.assign(connector, { socket: { destroy: () => {} }, connected: true }); });
+    void connector.poll();
+    await vi.waitFor(() => expect(connector.sendCommand).toHaveBeenCalledWith('PANEL'));
+  });
+
+  it('does not start the tool read when the state poll ends after the 20 seconds', async () => {
+    vi.useFakeTimers();
+    const connector = connectorWithReplies(MOCK_RESPONSES);
+    const answer = vi.mocked(connector.sendCommand).getMockImplementation()!;
+    let releasePanel: () => void = () => {};
+    vi.mocked(connector.sendCommand).mockImplementation(async command => {
+      if (command === 'PANEL') await new Promise<void>(resolve => { releasePanel = resolve; });
+      return answer(command);
+    });
+    const poll = connector.poll();
+    const sync = connector.requestToolSync();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect((await sync).outcome).toBe('failed');
+
+    releasePanel();
+    await poll;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sentCommands(connector)).not.toContain('ATCTL');
+    expect(sentCommands(connector)).not.toContain('TOLNI1');
+  });
 });
 
 describe('Brother planned reconnect every 60 seconds, with a real TCP connection', () => {
