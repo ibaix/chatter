@@ -65,6 +65,16 @@ describe('LoginLimiter', () => {
     expect(limiter.isBlocked('2001:db8:1:3::1', 'admin')).toBe(false);
   });
 
+  it('counts an IPv4-mapped address as its IPv4 address, and keeps other IPv4 computers apart', () => {
+    const limiter = new LoginLimiter();
+    failTimes(limiter, '::ffff:192.168.1.66', 5);
+    failTimes(limiter, '192.168.1.66', 5);
+
+    expect(limiter.isBlocked('::ffff:c0a8:142', 'admin')).toBe(true);
+    expect(limiter.isBlocked('::ffff:192.168.1.20', 'admin')).toBe(false);
+    expect(limiter.lockedAddresses().map(locked => locked.address)).toEqual(['192.168.1.66']);
+  });
+
   it('blocks a user on all addresses after 30 tries from many addresses', () => {
     expect(MAX_USER_FAILURES).toBe(30);
     const limiter = new LoginLimiter();

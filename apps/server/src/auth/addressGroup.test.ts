@@ -22,6 +22,16 @@ describe('addressGroup', () => {
     expect(addressGroup('64:ff9b::192.0.2.33')).toBe('64:ff9b:0:0::/64');
   });
 
+  it('gives the plain IPv4 address for an IPv4-mapped IPv6 address, in the dotted and the hex form', () => {
+    expect(addressGroup('::ffff:192.0.2.1')).toBe('192.0.2.1');
+    expect(addressGroup('::FFFF:c000:201')).toBe('192.0.2.1');
+    expect(addressGroup('0:0:0:0:0:ffff:c000:0201')).toBe('192.0.2.1');
+  });
+
+  it('keeps two IPv4 computers apart when the server sees them as IPv4-mapped addresses', () => {
+    expect(addressGroup('::ffff:192.168.1.66')).not.toBe(addressGroup('::ffff:192.168.1.20'));
+  });
+
   it('gives the same group again for a group, so an admin can unlock the address that the list shows', () => {
     expect(addressGroup('2001:db8:1:2::/64')).toBe('2001:db8:1:2::/64');
   });
