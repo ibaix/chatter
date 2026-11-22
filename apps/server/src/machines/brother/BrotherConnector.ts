@@ -80,7 +80,8 @@ class OldAddressError extends Error {
 }
 
 /**
- * Connector for Brother CNC machines via telnet
+ * Connector for Brother CNC machines (CNC-C00 and D00 controls). It uses one raw TCP connection to the data port of
+ * the control (10000). Each request and each reply is an LOD frame between % signs (see brotherProtocol.ts).
  */
 export class BrotherConnector extends BaseMachineConnector {
   readonly type: MachineType = 'brother';
