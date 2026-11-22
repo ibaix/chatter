@@ -106,6 +106,7 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
             {shownTab === 'tools' && (
               <ToolTableTab
                 machineId={machine.id}
+                connected={machine.connected}
                 toolSync={tools.toolSync}
                 toolTable={tools.toolTable}
                 hasPocketInfo={tools.hasPocketInfo}
