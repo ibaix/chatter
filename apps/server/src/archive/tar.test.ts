@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -31,6 +31,24 @@ describe('tarBytes', () => {
     execFileSync('tar', ['-xf', tarFile, '-C', out]);
     expect(readFileSync(path.join(out, 'manifest.json'), 'utf8')).toBe('{"a":1}\n');
     expect(readFileSync(path.join(out, 'history/big.bin')).equals(content)).toBe(true);
+  });
+
+  it('fills a file that became shorter after its header with zeros, so the tar stays correct', async () => {
+    const log = path.join(folder, 'chatter.log');
+    writeFileSync(log, Buffer.alloc(3000, 'a'));
+    const parts: Uint8Array[] = [];
+    for await (const part of tarBytes([{ name: 'chatter.log', filePath: log }, { name: 'after.txt', text: 'after' }])) {
+      // The header is out: the file becomes shorter before its bytes are read
+      if (parts.length === 0) truncateSync(log, 1000);
+      parts.push(part);
+    }
+    const tarFile = path.join(folder, 'out.tar');
+    writeFileSync(tarFile, Buffer.concat(parts));
+    const out = path.join(folder, 'out');
+    mkdirSync(out);
+    execFileSync('tar', ['-xf', tarFile, '-C', out]);
+    expect(readFileSync(path.join(out, 'chatter.log')).equals(Buffer.concat([Buffer.alloc(1000, 'a'), Buffer.alloc(2000)]))).toBe(true);
+    expect(readFileSync(path.join(out, 'after.txt'), 'utf8')).toBe('after');
   });
 
   it('leaves out a file on the disk that is gone', async () => {
