@@ -272,6 +272,23 @@ describe('MTConnect redirects', () => {
     expect(result.errors).toEqual(['Connection failed: HTTP 400: Bad Request']);
   });
 
+  it('keeps the redirect error when the agent closes the connection before the end of the body', async () => {
+    // A real socket cannot fix the order of the close and the cancel. A body stream with an error
+    // gives the same state each time: the agent sent the 302 headers, and then the body broke.
+    const brokenBody = new ReadableStream({ start: controller => controller.error(new TypeError('terminated')) });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(brokenBody, { status: 302, headers: { Location: 'http://127.0.0.1:1/probe' } }),
+    );
+    const connector = newConnector({ host: '127.0.0.1', mtConnectPort: 5000 });
+
+    await connector.connect();
+
+    expect(connector.connected).toBe(false);
+    expect(connector.getStatus().errors).toEqual([
+      'Connection failed: The agent sent a redirect (HTTP 302). Chatter does not follow redirects.',
+    ]);
+  });
+
   it('does not find an agent on a port that sends a redirect, and does not follow it', async () => {
     const target = await localServer(response => response.end(PROBE));
     const agent = await localServer(response => {
