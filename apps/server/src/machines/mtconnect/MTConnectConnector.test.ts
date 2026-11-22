@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MTConnectConnector } from './MTConnectConnector.js';
 import type { MTConnectMachineConfig } from '../../types/index.js';
@@ -197,6 +199,45 @@ describe('MTConnect HTTP errors', () => {
     await connector.connect();
 
     expect(connector.getStatus().errors).toEqual(['Connection failed: Request timeout after 5000ms']);
+  });
+});
+
+/** A web server on 127.0.0.1 that answers each request with `answer`. Gives its port, its request count and a way to stop it. */
+async function localServer(answer: (response: import('node:http').ServerResponse) => void) {
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests++;
+    answer(response);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  return {
+    port: (server.address() as AddressInfo).port,
+    requests: () => requests,
+    close: () => new Promise(resolve => server.close(resolve)),
+  };
+}
+
+describe('MTConnect redirects', () => {
+  it('does not follow a redirect from the agent to another address, and says why it did not connect', async () => {
+    const target = await localServer(response => response.end(PROBE));
+    const agent = await localServer(response => {
+      response.writeHead(302, { Location: `http://127.0.0.1:${target.port}/probe` });
+      response.end();
+    });
+    const connector = newConnector({ host: '127.0.0.1', mtConnectPort: agent.port });
+
+    try {
+      await connector.connect();
+
+      expect(agent.requests()).toBe(1);
+      expect(target.requests()).toBe(0);
+      expect(connector.connected).toBe(false);
+      expect(connector.getStatus().errors).toEqual([
+        'Connection failed: The agent sent a redirect (HTTP 302). Chatter does not follow redirects.',
+      ]);
+    } finally {
+      await Promise.all([agent.close(), target.close()]);
+    }
   });
 });
 
