@@ -573,7 +573,8 @@ export class BrotherConnector extends BaseMachineConnector {
 
   /** Connect when needed, read the machine, and keep the values */
   private async pollMachine(): Promise<void> {
-    if (!(await this.connectForPoll())) return;
+    // With an open connection and no planned reconnect, the first command goes out at once, with no await before it
+    if (this.mustConnect() && !(await this.connectForPoll())) return;
 
     this.prevData = { ...this.data };
 
@@ -591,7 +592,7 @@ export class BrotherConnector extends BaseMachineConnector {
    * It runs at the start of a poll, so no command waits for a reply during the planned reconnect.
    */
   private async connectForPoll(): Promise<boolean> {
-    const planned = this.connected && this.connectedAt !== null && Date.now() - this.connectedAt >= BROTHER_RECONNECT_MS;
+    const planned = this.plannedReconnectDue();
     if (planned) await this.closeInOrder();
     if (this.socket && this.connected) return true;
 
@@ -601,6 +602,16 @@ export class BrotherConnector extends BaseMachineConnector {
       log.debug('Planned reconnect', { machine: this.id });
     }
     return true;
+  }
+
+  /** True when the connection is open and BROTHER_RECONNECT_MS old or more */
+  private plannedReconnectDue(): boolean {
+    return this.connected && this.connectedAt !== null && Date.now() - this.connectedAt >= BROTHER_RECONNECT_MS;
+  }
+
+  /** True when the poll must connect first: there is no connection, or the planned reconnect is due */
+  private mustConnect(): boolean {
+    return !this.socket || !this.connected || this.plannedReconnectDue();
   }
 
   /** Send a command, and record how long the machine took to answer */
