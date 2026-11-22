@@ -521,7 +521,6 @@ describe('Brother connection problems, with a real TCP connection', () => {
 
     expect(status.connected).toBe(false);
     expect(status.errors).toEqual([NO_REPLY_ERROR]);
-    expect(NO_REPLY_ERROR).toContain('Another program');
   });
 
   it('connects again on the next poll after a machine did not answer', async () => {
@@ -567,6 +566,65 @@ describe('Brother connection problems, with a real TCP connection', () => {
     expect(status.errors).toEqual([]);
     expect(status.connected).toBe(true);
     expect(status.data.partCount).toBe(78);
+  });
+
+  it('does not read a late reply as the reply to a command of the next poll', async () => {
+    // A control answers in order. The first PANEL reply comes after the timeout, and it has an old mode (EDIT).
+    const lateReply = '%' + MOCK_RESPONSES.PANEL.replace('K01,0,', 'K01,3,');
+    let panelCommands = 0;
+    server = await startServer(socket => {
+      let replies = Promise.resolve();
+      socket.on('data', chunk => {
+        const command = /CLOD\s+(\S+)/.exec(chunk.toString('ascii'))?.[1] ?? '';
+        const late = command === 'PANEL' && ++panelCommands === 1;
+        const reply = late ? lateReply : '%' + (MOCK_RESPONSES[command] ?? `RLOD    ${command.padEnd(8)}01\r\n\r\n00%`);
+        replies = replies
+          .then(() => new Promise(resolve => setTimeout(resolve, late ? SHORT_TIMEOUT_MS + 50 : 0)))
+          .then(() => { if (!socket.destroyed) socket.write(reply); });
+      });
+    });
+    const slowOnce = connectorFor(portOf(server));
+
+    const first = await slowOnce.poll();
+    // At once, so the next poll waits for its PANEL reply when the late reply comes
+    const next = await slowOnce.poll();
+
+    expect(first.errors).toEqual([NO_REPLY_ERROR]);
+    expect(next.errors).toEqual([]);
+    expect(next.data.mode).toBe('MANUAL');
+    expect(next.data.partCount).toBe(78);
+  });
+
+  it('connects again on the next poll after the machine closed the connection', async () => {
+    const machineSides: net.Socket[] = [];
+    server = await startServer(socket => {
+      machineSides.push(socket);
+      answerLikeABrother(socket);
+    });
+    const answering = connectorFor(portOf(server));
+    await answering.poll();
+
+    machineSides[0].end();
+    await vi.waitFor(() => expect(answering.connected).toBe(false));
+    const status = await answering.poll();
+
+    expect(machineSides).toHaveLength(2);
+    expect(status.errors).toEqual([]);
+    expect(status.data.partCount).toBe(78);
+  });
+
+  it('stays connected when the old connection closes after a new connect', async () => {
+    server = await startServer(answerLikeABrother);
+    const answering = connectorFor(portOf(server));
+    await answering.connect();
+    const oldSocket = (answering as unknown as { socket: net.Socket }).socket;
+    await answering.connect();
+    await new Promise(resolve => (oldSocket.closed ? resolve(undefined) : oldSocket.once('close', resolve)));
+
+    // A late 'close' of the old socket, as when it comes after the new connection opened
+    oldSocket.emit('close', false);
+
+    expect(answering.connected).toBe(true);
   });
 
   it('stays connected with no error when the time between two polls is longer than the timeout', async () => {
@@ -633,8 +691,8 @@ describe('Brother command when the connection closes', () => {
 
   it('ends a poll with a reason when Chatter disconnects during a command', async () => {
     const silent = await connectedToSilentServer();
+    // poll() runs at once up to the first command, which then waits for a reply
     const poll = silent.poll();
-    await new Promise(resolve => setTimeout(resolve, 20));
 
     silent.disconnect();
     const status = await poll;

@@ -60,11 +60,11 @@ describe('a Brother poll that runs out of time in the scheduler', () => {
     fake = await startFakeBrother();
     const port = (fake.server.address() as net.AddressInfo).port;
     connector = new BrotherConnector({ id: 'speedio', name: 'Speedio', host: '127.0.0.1', dataPort: port, timeout: COMMAND_TIMEOUT_MS });
-    const results: { connected: boolean; errors: string[] }[] = [];
+    const results: { connected: boolean; errors: string[]; partCount: unknown }[] = [];
     scheduler = new PollScheduler({
       afterPoll: (machine: BaseMachineConnector) => {
         const { connected, errors } = machine.getStatus();
-        results.push({ connected, errors: [...errors] });
+        results.push({ connected, errors: [...errors], partCount: machine.getDataSnapshot().partCount });
       },
       connectingEnded: () => {},
     }, LIMITS);
@@ -76,5 +76,6 @@ describe('a Brother poll that runs out of time in the scheduler', () => {
     expect(results[0].connected).toBe(false);
     expect(results[0].errors.join('; ')).toContain('did not answer all requests');
     expect(results.at(-1)?.errors).toEqual([]);
+    expect(results.at(-1)?.partCount).toBe(78);
   });
 });
