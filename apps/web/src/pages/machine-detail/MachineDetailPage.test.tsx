@@ -435,9 +435,33 @@ describe('MachineDetailPage', () => {
 
       // The dates and the paths of the versions stay for each role
       const versions = await screen.findByRole('list', { name: 'Versions of O2000.nc' });
-      expect(within(versions).getAllByRole('button')).toHaveLength(1);
+      expect(within(versions).getAllByRole('listitem')).toHaveLength(1);
+      expect(within(versions).getByText(/newest/)).toBeInTheDocument();
       expect(screen.queryAllByLabelText('The text of the picked version')).toHaveLength(count);
       expect(fetchUploadEvent).toHaveBeenCalledTimes(count);
+    });
+
+    it('shows the versions to a viewer as plain items, and says why there is no text', async () => {
+      vi.mocked(fetchUploadFiles).mockResolvedValue(SENT_FILES);
+      renderPage({ role: 'viewer', address: '/machine/m1?tab=files' });
+      fireEvent.click(await within(viewSwitch()).findByRole('button', { name: 'Upload history 2' }));
+      fireEvent.click(within(screen.getByRole('cell', { name: 'O2000.nc' }).closest('tr') as HTMLElement).getByRole('button', { name: 'Versions' }));
+
+      const versions = await screen.findByRole('list', { name: 'Versions of O2000.nc' });
+      expect(within(versions).queryAllByRole('button')).toHaveLength(0);
+      expect(versions.querySelector('[aria-pressed]')).toBeNull();
+      expect(screen.getByText('Your role cannot read the text of a program. Ask an admin.')).toBeInTheDocument();
+    });
+
+    it('shows the versions to an operator as buttons, with no line about the role', async () => {
+      vi.mocked(fetchUploadFiles).mockResolvedValue(SENT_FILES);
+      renderPage({ role: 'operator', address: '/machine/m1?tab=files' });
+      fireEvent.click(await within(viewSwitch()).findByRole('button', { name: 'Upload history 2' }));
+      fireEvent.click(within(screen.getByRole('cell', { name: 'O2000.nc' }).closest('tr') as HTMLElement).getByRole('button', { name: 'Versions' }));
+
+      const versions = await screen.findByRole('list', { name: 'Versions of O2000.nc' });
+      expect(within(versions).getByRole('button', { pressed: true })).toHaveTextContent(/newest/);
+      expect(screen.queryByText(/Your role cannot read the text/)).not.toBeInTheDocument();
     });
 
     it('shows the text of the picked version to an operator, with Send this version again', async () => {

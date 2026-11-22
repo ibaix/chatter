@@ -9,6 +9,7 @@ import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table
 import type { UploadEvent, UploadFile } from '../../types';
 import { formatDateTime } from '../../utils/formatters';
 import { errorMessageOf } from '../../utils/errorMessage';
+import { CANNOT_READ_FILES_TEXT } from './fileText';
 import type { UploadHistory } from './useUploadHistory';
 import type { UploadMessages } from './useUploadMessages';
 
@@ -193,6 +194,9 @@ function VersionsBox({ machineId, file, events, showText, onSendAgain }: Version
     <div className="mx-4 mb-4 flex flex-wrap overflow-hidden rounded-[0.625rem] border border-zinc-800">
       <ol aria-label={`Versions of ${file.file_name}`} className="m-0 flex flex-[1_1_16.25rem] list-none flex-col gap-0.5 border-r border-zinc-800 p-2">
         {events.map((event, index) => {
+          const label = <VersionLabel file={file} event={event} isNewest={index === 0} />;
+          // Without the text, there is nothing to pick: the versions are plain items
+          if (!showText) return <li key={event.id} className="flex flex-col gap-0.5 px-3 py-2.5 text-zinc-50">{label}</li>;
           const isShown = event.id === shownId;
           return (
             <li key={event.id}>
@@ -205,17 +209,13 @@ function VersionsBox({ machineId, file, events, showText, onSendAgain }: Version
                   isShown ? 'bg-zinc-800' : 'bg-transparent hover:bg-zinc-800/60',
                 )}
               >
-                <span className="font-semibold">{formatDateTime(event.uploaded_at)}</span>
-                <span className="text-xs text-zinc-300">
-                  {event.target_name && event.target_name !== file.file_name ? `As ${event.target_name} · ` : ''}
-                  {event.remote_path}
-                  {index === 0 ? ' · newest' : ''}
-                </span>
+                {label}
               </button>
             </li>
           );
         })}
       </ol>
+      {!showText && <p className="m-0 flex-[2_1_20rem] p-4 text-zinc-300">{CANNOT_READ_FILES_TEXT}</p>}
       {showText && (
         <div className="flex min-w-0 flex-[2_1_20rem] flex-col bg-zinc-950">
           <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-2">
@@ -231,6 +231,20 @@ function VersionsBox({ machineId, file, events, showText, onSendAgain }: Version
         </div>
       )}
     </div>
+  );
+}
+
+/** The date and the path of one version */
+function VersionLabel({ file, event, isNewest }: { file: UploadFile; event: UploadEvent; isNewest: boolean }) {
+  return (
+    <>
+      <span className="font-semibold">{formatDateTime(event.uploaded_at)}</span>
+      <span className="text-xs text-zinc-300">
+        {event.target_name && event.target_name !== file.file_name ? `As ${event.target_name} · ` : ''}
+        {event.remote_path}
+        {isNewest ? ' · newest' : ''}
+      </span>
+    </>
   );
 }
 
