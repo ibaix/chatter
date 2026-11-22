@@ -163,6 +163,16 @@ export function requireLogin(guard: LoginGuard) {
   });
 }
 
+/** Stops a request from a browser that is not logged in, before the route reads the body. Sets c.var.user. */
+function requireBrowserLogin(auth: Auth) {
+  return createMiddleware<LoggedInEnv>(async (c, next) => {
+    const session = currentSession(c, auth);
+    if (!session) return logInFirst(c);
+    c.set('user', session.user);
+    return next();
+  });
+}
+
 /** Stops the request when the role of the user cannot do this. Use it only after requireLogin. */
 export function requirePermission(permission: Permission) {
   return createMiddleware<LoggedInEnv>(async (c, next) => {
@@ -217,10 +227,8 @@ export function authRoutes(guard: LoginGuard) {
     })
 
     // Only a browser that is logged in can do this. A new password logs out every other browser.
-    .post('/auth/password', checkedJson(changePasswordSchema), async c => {
-      const session = currentSession(c, auth);
-      if (!session) return logInFirst(c);
-      const { user } = session;
+    .post('/auth/password', requireBrowserLogin(auth), checkedJson(changePasswordSchema), async c => {
+      const { user } = c.var;
       const passwordChange = c.req.valid('json');
       const origin = originOf(c, proxySettings);
       const checked = await withPasswordCheck(c, guard, origin, {

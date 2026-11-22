@@ -176,6 +176,44 @@ describe('auth routes', () => {
     expect(res.status).toBe(401);
   });
 
+  it('asks for a login before it reads the body of a password change', async () => {
+    await setUp();
+    const res = await app.request('/api/auth/password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: 'this is not JSON',
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  describe('body size', () => {
+    /** Larger than the 64 KB limit of a JSON body */
+    const largePassword = 'x'.repeat(1024 * 1024);
+
+    it('refuses a login body larger than 64 KB, and does not check the password', async () => {
+      await setUp();
+      const res = await post('/api/auth/login', { username: ADMIN.username, password: largePassword });
+
+      expect(res.status).toBe(413);
+      expect(loggedResults()).toEqual([]);
+    });
+
+    it('stops a body with no length when it grows larger than 64 KB', async () => {
+      const bytes = new TextEncoder().encode(JSON.stringify({ username: ADMIN.username, password: largePassword }));
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      });
+      const res = await app.request('/api/auth/setup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body, duplex: 'half',
+      } as RequestInit);
+
+      expect(res.status).toBe(413);
+      expect(await (await app.request('/api/auth/status')).json()).toMatchObject({ setupNeeded: true });
+    });
+  });
+
   it('writes each password try in the login log', async () => {
     const cookie = await setUp();
     await post('/api/auth/login', { username: 'sam', password: 'wrong-password' });
