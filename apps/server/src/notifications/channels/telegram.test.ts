@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defineChannelType } from './ChannelType.js';
 import { telegramChannel } from './telegram.js';
-import { fakeFetch, textOf, WARNING_MESSAGE as MESSAGE } from './testSupport.js';
+import { BUSY, fakeFetch, textOf, WARNING_MESSAGE as MESSAGE, TOO_MANY } from './testSupport.js';
 
 const TOKEN = '123456789:AAH-token_for_tests';
 const settings = { token: TOKEN, chatId: '-1001234567890', sound: 'normal' as const };
@@ -164,8 +164,45 @@ describe('telegramChannel', () => {
     });
   });
 
-  it.each([408, 429, 500, 502])('tries again later when Telegram answers %i (busy or a problem)', async status => {
-    expect(await resultFor(status)).toEqual({ ok: false, retry: true, error: `Telegram answered ${status}. Chatter tries again later.` });
+  it.each([[408, BUSY], [429, TOO_MANY], [500, BUSY], [502, BUSY]])('tries again later when Telegram answers %i (busy or a problem)', async (status, ending) => {
+    expect(await resultFor(status)).toEqual({ ok: false, retry: true, error: `Telegram answered ${status}${ending}` });
+  });
+
+  describe('the wait of a 429', () => {
+    function tooMany(retryAfterHeader: string | null, body: unknown) {
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (retryAfterHeader !== null) headers['retry-after'] = retryAfterHeader;
+      const answer = () => new Response(body === null ? null : JSON.stringify(body), { status: 429, headers });
+      return telegramChannel.send(settings, MESSAGE, fakeFetch(answer).context());
+    }
+
+    const flood = (seconds: number) => ({
+      ok: false, error_code: 429, description: `Too Many Requests: retry after ${seconds}`, parameters: { retry_after: seconds },
+    });
+
+    it('reads the wait that Telegram gives in the answer', async () => {
+      expect(await tooMany(null, flood(35))).toEqual({
+        ok: false, retry: true, retryAfterMs: 35_000,
+        error: 'Telegram answered 429: too many requests. The service asks Chatter to wait 35 seconds.',
+      });
+    });
+
+    it('keeps the wait of the Retry-After header when the answer has none', async () => {
+      expect(await tooMany('20', null)).toMatchObject({ retryAfterMs: 20_000, error: expect.stringContaining('wait 20 seconds.') });
+    });
+
+    it('uses the longer wait when the header and the answer both give one', async () => {
+      expect(await tooMany('10', flood(35))).toMatchObject({ retryAfterMs: 35_000 });
+      expect(await tooMany('60', flood(35))).toMatchObject({ retryAfterMs: 60_000 });
+    });
+
+    it('gives at most 24 hours', async () => {
+      expect(await tooMany(null, flood(999_999_999))).toMatchObject({ retryAfterMs: 24 * 60 * 60_000, error: expect.stringContaining('wait 24 hours.') });
+    });
+
+    it.each([0, -5, '35', null])('gives no wait for the wrong value %s', async retryAfter => {
+      expect(await tooMany(null, { ...flood(1), parameters: { retry_after: retryAfter } })).not.toHaveProperty('retryAfterMs');
+    });
   });
 
   it('stops at once when Telegram answers 409', async () => {

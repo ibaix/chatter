@@ -1,6 +1,7 @@
 import { createLogger } from '../logging/logger.js';
 import type { ChannelForSending } from './ChannelStore.js';
 import type { ChannelType, OutgoingMessage, SendContext, SendResult } from './channels/ChannelType.js';
+import { MAX_HOLD_MS } from './channels/http.js';
 import type { Outbox, OutboxEntry } from './Outbox.js';
 
 const log = createLogger('notifications');
@@ -21,6 +22,14 @@ export function retryWait(attempts: number): number {
 }
 
 /**
+ * The wait before the next try of the channel. The wait of the service (Retry-After) is used when it is longer than the
+ * wait of Chatter. A shorter one is not, so a service that always asks for 1 second does not get a request at each round.
+ */
+function holdAfter(result: { retryAfterMs?: number }, attempts: number): number {
+  return Math.min(Math.max(result.retryAfterMs ?? 0, retryWait(attempts)), MAX_HOLD_MS);
+}
+
+/**
  * One try, which always ends: after the time limit, the signal stops the request, and the result is a failure to try again.
  * The time limit is the one of the channel type, or else `timeoutMs`.
  * A channel type can forget the signal, so a race with the timer makes sure.
@@ -28,7 +37,7 @@ export function retryWait(attempts: number): number {
 export function sendWithTimeLimit(
   { type, values }: Pick<ChannelForSending, 'type' | 'values'>,
   message: OutgoingMessage,
-  { fetch, timeoutMs }: { fetch: SendContext['fetch']; timeoutMs: number },
+  { fetch, now, timeoutMs }: Pick<SendContext, 'fetch' | 'now'> & { timeoutMs: number },
 ): Promise<SendResult> {
   const controller = new AbortController();
   let timer: NodeJS.Timeout | undefined;
@@ -39,7 +48,7 @@ export function sendWithTimeLimit(
     }, type.timeoutMs ?? timeoutMs);
   });
   // The async function turns an error that send throws into a failed promise, so the timer always stops
-  const sent = (async () => type.send(values, message, { fetch, signal: controller.signal }))();
+  const sent = (async () => type.send(values, message, { fetch, now, signal: controller.signal }))();
   return Promise.race([sent, timeUp]).finally(() => clearTimeout(timer));
 }
 
@@ -104,7 +113,7 @@ export class OutboxSender {
       const target = this.channels.forSending(entry.channelId);
       if (!target) return this.fail(entry, null, 'The channel is not there, or this version of Chatter does not know its type.');
       if (!target.channel.enabled) return this.fail(entry, target, 'The channel is off, so Chatter did not send the message.');
-      const result = await sendWithTimeLimit(target, entry.message, { fetch: this.fetch, timeoutMs: this.timeoutMs });
+      const result = await sendWithTimeLimit(target, entry.message, { fetch: this.fetch, now: this.now, timeoutMs: this.timeoutMs });
       this.saveResult(entry, target, result);
     } catch (error) {
       this.recoverFrom(entry, error);
@@ -121,23 +130,26 @@ export class OutboxSender {
     }
   }
 
-  /** A retry that would come after the 24 hours is a failure now */
+  /**
+   * A failure to try again holds the whole channel until the next try. A retry that would come after the 24 hours
+   * is a failure now, but the channel stays held, so the next message does not go to a service that asked for a wait.
+   */
   private saveResult(entry: OutboxEntry, target: ChannelForSending | null, result: SendResult): void {
     const now = this.now();
-    const nextTryAt = now + retryWait(entry.attempts);
     if (result.ok) {
       this.outbox.markSent(entry.id, result.detail, now);
       log.info('Notification sent', { ...logFields(entry, target), detail: result.detail });
-    } else if (result.retry && nextTryAt < entry.createdAt + GIVE_UP_AFTER_MS) {
-      this.outbox.markRetry(entry.id, result.error, nextTryAt);
-      log.warn('Notification not sent. Chatter tries again', { ...logFields(entry, target), error: result.error, waitSeconds: (nextTryAt - now) / 1000 });
-    } else {
-      this.fail(entry, target, result.error);
+      return;
     }
+    if (!result.retry) return this.fail(entry, target, result.error);
+    const nextTryAt = now + holdAfter(result, entry.attempts);
+    if (nextTryAt >= entry.createdAt + GIVE_UP_AFTER_MS) return this.fail(entry, target, result.error, nextTryAt);
+    this.outbox.markRetry(entry.id, result.error, nextTryAt);
+    log.warn('Notification not sent. Chatter tries again', { ...logFields(entry, target), error: result.error, waitSeconds: (nextTryAt - now) / 1000 });
   }
 
-  private fail(entry: OutboxEntry, target: ChannelForSending | null, error: string): void {
-    this.outbox.markFailed(entry.id, error);
+  private fail(entry: OutboxEntry, target: ChannelForSending | null, error: string, holdUntil?: number): void {
+    this.outbox.markFailed(entry.id, error, holdUntil);
     log.warn('Notification not sent. Chatter does not try again', { ...logFields(entry, target), error });
   }
 }

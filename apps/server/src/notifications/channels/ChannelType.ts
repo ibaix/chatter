@@ -29,12 +29,18 @@ export interface SendContext {
   fetch: typeof globalThis.fetch;
   /** Stops the request after the time limit of the sender */
   signal: AbortSignal;
+  /** The clock of the sender, to read a Retry-After date. Without it, the clock of the computer. */
+  now?: () => number;
 }
 
-/** `error` is for the user, in plain words. `retry` is false when trying again cannot help, for example a wrong login. */
+/**
+ * `error` is for the user, in plain words. It does not say that Chatter tries again, because "Send test" sends one time only.
+ * `retry` is false when trying again cannot help, for example a wrong login.
+ * `retryAfterMs` is the wait that the service asked for (Retry-After), for a failure that Chatter tries again.
+ */
 export type SendResult =
   | { ok: true; detail: string }
-  | { ok: false; retry: boolean; error: string };
+  | { ok: false; retry: boolean; error: string; retryAfterMs?: number };
 
 export type SettingsCheck = { ok: true } | { ok: false; error: string };
 

@@ -44,6 +44,42 @@ export function moreAlertsText(count: number, options: TextOptions): string {
   return `And ${count} more ${alerts}. Open Chatter to see ${them}.${withLink(chatterLink(options.linkBaseUrl))}`;
 }
 
+/** The alerts of one rule on one machine, for example "In alarm on Haas VF-2". `name` is null for the alerts that have no name. */
+export interface AlertGroup {
+  name: string | null;
+  count: number;
+}
+
+/** A summary message names at most this many groups, so it stays short on a phone */
+const MAX_NAMED_GROUPS = 5;
+
+/**
+ * The message in place of the alerts that waited while the channel was blocked, the largest group first.
+ * The groups after the first 5, and the groups with no name, go together as "other alerts", at the end.
+ */
+export function backlogText(groups: readonly AlertGroup[], options: TextOptions): string {
+  const total = groups.reduce((sum, group) => sum + group.count, 0);
+  const named = groups.filter(group => group.name !== null)
+    .sort((a, b) => b.count - a.count || String(a.name).localeCompare(String(b.name)));
+  const shown = named.slice(0, MAX_NAMED_GROUPS).map(group => `${group.name} (${group.count})`);
+  const others = total - named.slice(0, MAX_NAMED_GROUPS).reduce((sum, group) => sum + group.count, 0);
+  if (others > 0) shown.push(`other alerts (${others})`);
+  const alerts = total === 1 ? 'alert' : 'alerts';
+  const them = total === 1 ? 'it' : 'them';
+  return `Chatter could not send ${total} ${alerts} while the channel was blocked: ${shown.join(', ')}. `
+    + `Open Chatter to see ${them}.${withLink(chatterLink(options.linkBaseUrl))}`;
+}
+
+/**
+ * The text of an event message that has `count` events, for example
+ * "WARNING - Haas VF-2: Program ended. Started 9:17 AM. This happened 20 times since 9:02 AM." The link stays at the end.
+ */
+export function repeatedEventText(text: string, link: string | null, count: number, since: number, options: TextOptions): string {
+  const linkPart = withLink(link);
+  const withoutLink = linkPart && text.endsWith(linkPart) ? text.slice(0, -linkPart.length) : text;
+  return `${withoutLink} This happened ${count} times since ${clockTime(since, options.timeZone)}.${linkPart}`;
+}
+
 /** The message of "Send test". It has the link, so the user can try the link too. */
 export function testMessageText(options: TextOptions): string {
   return `Test from Chatter. Messages to this channel work.${withLink(chatterLink(options.linkBaseUrl))}`;
