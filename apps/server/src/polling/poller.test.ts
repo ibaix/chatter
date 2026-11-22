@@ -3,6 +3,7 @@ import type { Database } from 'better-sqlite3';
 import { HardwarePoller } from './poller.js';
 import { Focas } from '../machines/fanuc/focas.js';
 import { BrotherConnector } from '../machines/brother/BrotherConnector.js';
+import { parseResponse } from '../machines/brother/brotherProtocol.js';
 import type { BrotherMachineConfig, FanucMachineConfig } from '../types/index.js';
 
 interface MockStatement {
@@ -315,7 +316,7 @@ describe('HardwarePoller', () => {
       const connector = poller.getConnector(machine.id) as BrotherConnector;
       // Connected, and each command gets an empty good reply
       Object.assign(connector, { socket: { destroy: () => {} }, connected: true });
-      vi.spyOn(connector, 'sendCommand').mockImplementation(async command => connector.parseResponse(`RLOD    ${command.padEnd(8)}00\r\n\r\n00%`));
+      vi.spyOn(connector, 'sendCommand').mockImplementation(async command => parseResponse(`RLOD    ${command.padEnd(8)}00\r\n\r\n00%`));
       const updates = vi.fn();
       poller.on('update', updates);
 

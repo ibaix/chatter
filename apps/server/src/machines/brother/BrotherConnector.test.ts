@@ -1,26 +1,15 @@
 import net from 'net';
 import Database from 'better-sqlite3';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { BROTHER_RECONNECT_MS, BrotherConnector, NO_REPLY_ERROR, REPLY_STATUS_KEY, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
-import type { BrotherMachineConfig, BrotherMachineStatus, DataItemTransform } from '../../types/index.js';
+import { BROTHER_RECONNECT_MS, BrotherConnector, NO_REPLY_ERROR } from './BrotherConnector.js';
+import { parseResponse } from './brotherProtocol.js';
+import { MOCK_RESPONSES } from './testSupport.js';
+import type { BrotherMachineConfig, BrotherMachineStatus } from '../../types/index.js';
 import { TOOL_SYNC_TIMEOUT_MS } from './toolSync.js';
 import { captureLog, type CapturedLog } from '../../logging/testSupport.js';
 import { ConnectionLog } from '../../logging/ConnectionLog.js';
 import { HardwarePoller } from '../../polling/poller.js';
 import type { MachineRegistry } from '../../polling/MachineRegistry.js';
-
-/**
- * Replies of a Brother control to each command, matching the Python test fixtures
- */
-const MOCK_RESPONSES: Record<string, string> = {
-  'PANEL': 'RLOD    PANEL   00\r\nD01,0,0,0\r\nK01,0,5,0,0,0,0,0,0,0,1,0\r\nS01,4,100,100,1,0,1,1\r\n\r\n10%',
-  'MEM': "RLOD    MEM     00\r\nA01,'/       ',1001,0,0,0,0,0\r\n\r\n00%",
-  'WKCNTR': 'RLOD    WKCNTR  00\r\nA01,  1,    78,   200,     0\r\nA02,  0,     0,     0,     0\r\n\r\n08%',
-  'PDSP': "RLOD    PDSP    00\r\nX01,    0.000 ,     0,0,10,10,10,0,0,0,0,4,100,100, 0,0, 0\r\n\r\n03%",
-  'ALARM': "RLOD    ALARM   00\r\nE01,0975320032,          ,          \r\n\r\n10%",
-  'ATCTL': 'RLOD    ATCTL   00\r\nM02,  1,0,0\r\nM03,  2,0,0\r\n\r\n00%',
-  'TOLNI1': "RLOD    TOLNI1  00\r\nT01, 1.5000, 0.0000, 0.2500, 0.0000, 0, 0, 0, 0, 'ENDMILL '\r\n\r\n00%"
-};
 
 function newConnector(config: Partial<BrotherMachineConfig> = {}): BrotherConnector {
   return new BrotherConnector({ name: 'Test', host: '192.168.1.100', ...config });
@@ -36,7 +25,7 @@ function connectorWithReplies(
   Object.assign(connector, { socket: { destroy: () => {} }, connected: true });
   vi.spyOn(connector, 'sendCommand').mockImplementation(async command => {
     if (!replies[command]) throw new Error(`No reply for ${command}`);
-    return connector.parseResponse(replies[command]);
+    return parseResponse(replies[command]);
   });
   return connector;
 }
@@ -152,190 +141,6 @@ describe('BrotherConnector', () => {
       expect(connector.macros[0].location).toBe(500);
       expect(connector.macros[0].name).toBe('New Macro');
     });
-  });
-});
-
-describe('brotherCommand', () => {
-  it('should build a properly formatted CLOD command', () => {
-    const cmd = brotherCommand('PANEL');
-
-    expect(cmd.startsWith('%')).toBe(true);
-    expect(cmd).toContain('CLOD');
-    expect(cmd).toContain('PANEL');
-    expect(cmd).toMatch(/\d{2}%\r\n$/);
-  });
-
-  it('should pad command names to 8 characters', () => {
-    expect(brotherCommand('MEM')).toContain('MEM     ');
-  });
-
-  it('should calculate consistent checksum', () => {
-    expect(brotherCommand('PANEL')).toBe(brotherCommand('PANEL'));
-    expect(brotherCommand('ALARM')).toBe(brotherCommand('ALARM'));
-  });
-});
-
-describe('parseResponse', () => {
-  const connector = newConnector();
-
-  it('should parse PANEL response correctly', () => {
-    const response = connector.parseResponse(MOCK_RESPONSES['PANEL']);
-    expect(response['K01']).toBeDefined();
-    expect(response['K01'][0]).toBe('0');
-  });
-
-  it('should parse MEM response correctly', () => {
-    const response = connector.parseResponse(MOCK_RESPONSES['MEM']);
-    expect(response['A01']).toBeDefined();
-    expect(response['A01'][1]).toBe('1001');
-  });
-
-  it('should parse WKCNTR response correctly', () => {
-    const response = connector.parseResponse(MOCK_RESPONSES['WKCNTR']);
-    expect(response['A01']).toBeDefined();
-    expect(response['A01'][1]).toBe('78');
-    expect(response['A01'][2]).toBe('200');
-  });
-
-  it('should parse ALARM response correctly', () => {
-    const response = connector.parseResponse(MOCK_RESPONSES['ALARM']);
-    expect(response['E01']).toBeDefined();
-    expect(response['E01'][0]).toBe('0975320032');
-  });
-
-  it('should parse PDSP response correctly', () => {
-    const response = connector.parseResponse(MOCK_RESPONSES['PDSP']);
-    expect(response['X01']).toBeDefined();
-    expect(response['X01'][3]).toBe('10');
-  });
-
-  it('should handle empty lines gracefully', () => {
-    const response = connector.parseResponse('A01,1,2,3\r\n\r\nB01,4,5,6');
-    expect(response['A01']).toEqual(['1', '2', '3']);
-    expect(response['B01']).toEqual(['4', '5', '6']);
-  });
-
-  it('should parse comma-separated values', () => {
-    const response = connector.parseResponse('A01,value1,value2,value3\r\n');
-    expect(response['A01']).toEqual(['value1', 'value2', 'value3']);
-  });
-
-  it('should skip lines without comma', () => {
-    const response = connector.parseResponse('HEADER\r\nA01,value\r\n');
-    expect(response['HEADER']).toBeUndefined();
-    expect(response['A01']).toEqual(['value']);
-  });
-
-  it('should trim whitespace from values', () => {
-    const response = connector.parseResponse('A01,  spaced  , value \r\n');
-    expect(response['A01']).toEqual(['spaced', 'value']);
-  });
-});
-
-describe('parseValue', () => {
-  it('should parse string values', () => {
-    expect(parseValue('hello', 'string')).toBe('hello');
-  });
-
-  it('should parse int values', () => {
-    expect(parseValue('42', 'int')).toBe(42);
-    expect(parseValue('3.7', 'int')).toBe(3);
-  });
-
-  it('should parse float values', () => {
-    expect(parseValue('3.14', 'float')).toBe(3.14);
-  });
-
-  it('should parse bool values', () => {
-    expect(parseValue('true', 'bool', (v) => Boolean(v))).toBe(true);
-  });
-
-  it('should strip quotes from strings', () => {
-    expect(parseValue("'quoted'", 'string')).toBe('quoted');
-  });
-
-  it('should handle empty values with defaults', () => {
-    expect(parseValue('', 'int')).toBe(0);
-    expect(parseValue('', 'float')).toBe(0);
-    expect(parseValue('', 'bool')).toBe(false);
-    expect(parseValue('', 'string')).toBe('');
-  });
-
-  it('should apply transform function', () => {
-    const double: DataItemTransform = (v) => parseInt(String(v)) * 2;
-    expect(parseValue('5', 'int', double)).toBe(10);
-  });
-});
-
-describe('TRANSFORMS.mode', () => {
-  it.each([
-    ['0', 'MANUAL'],
-    ['1', 'MDI'],
-    ['2', 'MEMORY'],
-    ['3', 'EDIT'],
-  ])('should transform %s to %s', (panelValue, mode) => {
-    expect(TRANSFORMS.mode(panelValue)).toBe(mode);
-  });
-
-  it('should return raw int for unknown values', () => {
-    expect(TRANSFORMS.mode('4')).toBe(4);
-    expect(TRANSFORMS.mode('99')).toBe(99);
-  });
-});
-
-describe('TRANSFORMS.alarm', () => {
-  it('should return false for CM (Communication) alarm - ignored', () => {
-    expect(TRANSFORMS.alarm('0975320032')).toBe(false);
-  });
-
-  it('should return false for OM (No alarm) - ignored', () => {
-    expect(TRANSFORMS.alarm('90')).toBe(false);
-    expect(TRANSFORMS.alarm('90000000')).toBe(false);
-  });
-
-  it('should return true for real alarms', () => {
-    expect(TRANSFORMS.alarm('01123456')).toBe(true);  // EX
-    expect(TRANSFORMS.alarm('02123456')).toBe(true);  // EC
-    expect(TRANSFORMS.alarm('03123456')).toBe(true);  // SV
-    expect(TRANSFORMS.alarm('04123456')).toBe(true);  // NC
-    expect(TRANSFORMS.alarm('05123456')).toBe(true);  // IO
-    expect(TRANSFORMS.alarm('06123456')).toBe(true);  // SP
-    expect(TRANSFORMS.alarm('10123456')).toBe(true);  // ES
-  });
-});
-
-describe('TRANSFORMS.alarmCode', () => {
-  it.each([
-    ['01', 'EX'], ['02', 'EC'], ['03', 'SV'], ['04', 'NC'], ['05', 'IO'], ['06', 'SP'],
-    ['07', 'SM'], ['08', 'SL'], ['09', 'CM'], ['10', 'ES'], ['11', 'FC'],
-  ])('maps prefix %s to %s', (prefix, letters) => {
-    expect(TRANSFORMS.alarmCode(`${prefix}123456`)).toBe(`${letters}123456`);
-  });
-
-  it('should transform CM alarm code correctly', () => {
-    expect(TRANSFORMS.alarmCode('0975320032')).toBe('CM75320032');
-  });
-
-  it('should return empty string for OM (No alarm)', () => {
-    expect(TRANSFORMS.alarmCode('90')).toBe('');
-    expect(TRANSFORMS.alarmCode('90000000')).toBe('');
-  });
-
-  it('should return raw value for unknown codes', () => {
-    expect(TRANSFORMS.alarmCode('99unknown')).toBe('99unknown');
-  });
-});
-
-describe('TRANSFORMS.execution, from the MEM operation status', () => {
-  it('gives the MTConnect execution word for each status', () => {
-    expect(TRANSFORMS.execution('0')).toBe('READY');
-    expect(TRANSFORMS.execution('1')).toBe('ACTIVE');
-    expect(TRANSFORMS.execution('2')).toBe('FEED_HOLD');
-    expect(TRANSFORMS.execution('3')).toBe('INTERRUPTED');
-  });
-
-  it('gives an empty value for a status that it does not know', () => {
-    expect(TRANSFORMS.execution('7')).toBe('');
   });
 });
 
@@ -808,7 +613,7 @@ function machineThatTakes(msPerCommand: number) {
     if (held.command === command) await new Promise<void>(resolve => { held.release = resolve; });
     vi.setSystemTime(Date.now() + msPerCommand);
     if (!replies[command]) throw new Error(`No reply for ${command}`);
-    return connector.parseResponse(replies[command]);
+    return parseResponse(replies[command]);
   });
   const poll = async () => {
     sent.length = 0;
@@ -1585,14 +1390,6 @@ function useFakeClock() {
 
 describe('Brother control type, found once by the reply status', () => {
   useFakeClock();
-
-  it('gives the status of the reply', () => {
-    const connector = newConnector();
-
-    expect(connector.parseResponse(UNKNOWN_ATCTLD)[REPLY_STATUS_KEY]).toEqual(['08']);
-    expect(connector.parseResponse(MOCK_RESPONSES.PANEL)[REPLY_STATUS_KEY]).toEqual(['00']);
-    expect(connector.parseResponse(MOCK_RESPONSES.TOLNI1)[REPLY_STATUS_KEY]).toEqual(['00']);
-  });
 
   it('never sends ATCTLD to a C00 control, across reconnects and tool syncs', async () => {
     const connector = connectorWithReplies({ ...MOCK_RESPONSES, ATCTLD: UNKNOWN_ATCTLD });

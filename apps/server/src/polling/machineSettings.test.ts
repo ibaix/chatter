@@ -6,6 +6,7 @@ vi.mock('basic-ftp', () => ({
 }));
 
 import { BrotherConnector } from '../machines/brother/BrotherConnector.js';
+import { parseResponse } from '../machines/brother/brotherProtocol.js';
 import { FanucConnector } from '../machines/fanuc/FanucConnector.js';
 import { HaasConnector } from '../machines/haas/HaasConnector.js';
 import { MTConnectConnector } from '../machines/mtconnect/MTConnectConnector.js';
@@ -136,13 +137,13 @@ describe('Brother address update', () => {
       if (command === held.command) {
         return new Promise((resolve, reject) => {
           held.waiting = reject;
-          held.answer = reply => resolve(connector.parseResponse(reply));
+          held.answer = reply => resolve(parseResponse(reply));
         });
       }
-      if (command === 'ATCTL' && knowsAtc.value) return connector.parseResponse(ATC_REPLY);
-      if (command.startsWith('ATCTL')) return connector.parseResponse(UNKNOWN(command));
+      if (command === 'ATCTL' && knowsAtc.value) return parseResponse(ATC_REPLY);
+      if (command.startsWith('ATCTL')) return parseResponse(UNKNOWN(command));
       // A01 of MEM: the run state 0 (READY), so the machine is idle and a poll starts a tool read
-      return connector.parseResponse(`RLOD    ${command.padEnd(8)}00\r\nA01,'/',1001,0\r\n\r\n00%`);
+      return parseResponse(`RLOD    ${command.padEnd(8)}00\r\nA01,'/',1001,0\r\n\r\n00%`);
     });
     const atcCommandsSent = () => sent.mock.calls.map(([command]) => command).filter(command => command.startsWith('ATCTL'));
     return { connector, atcCommandsSent, held };
