@@ -53,7 +53,7 @@ function readAll(socket: net.Socket): Promise<string> {
 
 /** Reply to the commands of FTPClient and basic-ftp. RETR, LIST and STOR use the next data connection. */
 function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSocket, onUpload, commands }: {
-  pasvReply: string;
+  pasvReply: () => string;
   epsvReply: string;
   nextDataSocket: () => Promise<net.Socket>;
   onUpload: (text: string) => void;
@@ -71,7 +71,7 @@ function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSock
       commands.push(command);
       if (command === 'USER') socket.write('331 Password\r\n');
       else if (command === 'PASS') socket.write('230 Logged in\r\n');
-      else if (command === 'PASV') socket.write(`${pasvReply}\r\n`);
+      else if (command === 'PASV') socket.write(`${pasvReply()}\r\n`);
       else if (command === 'EPSV') socket.write(`${epsvReply}\r\n`);
       else if (command === 'PWD') socket.write('257 "/"\r\n');
       else if (command === 'CWD') socket.write('250 OK\r\n');
@@ -98,11 +98,13 @@ interface FakeMachineOptions {
   bareAddress?: boolean;
   /** The text of the PASV reply, made from the port of the data listener. It replaces the usual reply. */
   pasvReplyFor?: (dataPort: number) => string;
+  /** The machine refuses the first PASV, so the first data transfer fails */
+  refuseFirstPasv?: boolean;
 }
 
 /** A decoy listens at the host of the PASV reply only when that host is on this computer */
 async function startFakeMachine({
-  controlHost = CONTROL_HOST, pasvReplyHost = PASV_REPLY_HOST, supportsEpsv = false, bareAddress = false, pasvReplyFor
+  controlHost = CONTROL_HOST, pasvReplyHost = PASV_REPLY_HOST, supportsEpsv = false, bareAddress = false, pasvReplyFor, refuseFirstPasv = false
 }: FakeMachineOptions = {}): Promise<FakeMachine> {
   const dataSockets: net.Socket[] = [];
   const dataWaiters: Array<(socket: net.Socket) => void> = [];
@@ -133,11 +135,17 @@ async function startFakeMachine({
     else dataWaiters.push(resolve);
   });
 
+  let pasvCount = 0;
+  const nextPasvReply = () => {
+    pasvCount += 1;
+    return refuseFirstPasv && pasvCount === 1 ? '425 Cannot open data connection' : pasvReply;
+  };
+
   const controlSockets = new Set<net.Socket>();
   const controlServer = net.createServer(socket => {
     controlSockets.add(socket);
     answerCommands(socket, {
-      pasvReply, epsvReply, nextDataSocket, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands
+      pasvReply: nextPasvReply, epsvReply, nextDataSocket, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands
     });
   });
   const controlPort = await listen(controlServer, 0, controlHost);
@@ -289,6 +297,25 @@ describe('basic-ftp data connection with a PASV reply that names another host (a
     expect(files.map(file => file.name)).toEqual(['O1000', 'O2000']);
     expect(machine.dataConnections).toBe(1);
     expect(connectHosts()).not.toContain(NAT_PASV_REPLY_HOST);
+  });
+
+  // The raw RETR fails at its PASV. Then the download of basic-ftp must also use only the machine host.
+  it('downloads through basic-ftp over a data connection to the machine host when the raw RETR fails', async () => {
+    await machine.close();
+    machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, refuseFirstPasv: true });
+    ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort });
+    const destination = new PassThrough();
+    const text = collectText(destination);
+
+    await ftpClient.downloadFile('O1000', destination);
+
+    expect(text()).toBe(PROGRAM_TEXT);
+    // The refused PASV of the raw RETR, then EPSV and PASV of basic-ftp
+    expect(machine.commands.filter(command => command === 'PASV')).toHaveLength(2);
+    expect(machine.commands).toContain('EPSV');
+    expect(machine.dataConnections).toBe(1);
+    expect(machine.decoyConnections).toBe(0);
+    expect(new Set(connectHosts())).toEqual(new Set([NAT_CONTROL_HOST]));
   });
 
   it('opens no data connection when the address of the control connection is not known', async () => {
