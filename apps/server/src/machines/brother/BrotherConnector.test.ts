@@ -1222,6 +1222,30 @@ describe('Brother planned reconnect every 60 seconds, with a real TCP connection
     expect(events).toEqual(expect.arrayContaining(['connect 2']));
   });
 
+  it('ends a Sync that waits for the state poll with the reason when the user removes the machine, and clears its 20 s timer', async () => {
+    await startRecordingBrother();
+    await pollAndSync();
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    holdReply = command => command === 'PDSP' ? new Promise<void>(() => {}) : null;
+    commands.length = 0;
+    const poll = connector.poll();
+    await vi.waitFor(() => expect(commands).toContain('PDSP'));
+    const sync = connector.requestToolSync();
+
+    connector.dispose();
+
+    const result = await sync;
+    expect(result).toEqual({
+      outcome: 'failed',
+      toolSync: expect.objectContaining({ error: expect.stringContaining('The connection closed before the machine answered'), running: false }),
+    });
+    const timerCall = setTimeoutSpy.mock.calls.findIndex(([, ms]) => ms === TOOL_SYNC_TIMEOUT_MS);
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[timerCall].value);
+    expect(commands).not.toContain('ATCTL');
+    await poll;
+  });
+
   it('does not reconnect while a tool read runs', async () => {
     await startRecordingBrother();
     await pollAndSync();
@@ -1356,6 +1380,20 @@ describe('Brother planned reconnect when the control does not close its side', (
     expect(isReconnecting(brother)).toBe(false);
     connectionLog.record(brother);
     expect(log.text('warn')).toMatch(/Machine went offline.*Unable to connect/);
+  });
+
+  it('ends a Sync during a reconnect that fails with the reason of the connect', async () => {
+    const brother = await brotherThatKeepsItsSideOpen();
+    const poll = brother.poll();
+    server!.close();
+    const sync = brother.requestToolSync();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await poll;
+
+    expect(await sync).toEqual({
+      outcome: 'failed', toolSync: expect.objectContaining({ error: expect.stringContaining('Unable to connect'), running: false }),
+    });
   });
 
   it('shows the machine offline at once when Chatter disconnects it during the reconnect', async () => {

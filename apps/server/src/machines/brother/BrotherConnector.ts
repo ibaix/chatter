@@ -573,7 +573,11 @@ export class BrotherConnector extends BaseMachineConnector {
       const read = (async () => {
         await this.runningPoll?.catch(() => {});
         // After the time limit, a later state poll can use the connection, so the read must not start
-        if (!timedOut) await this.readTools(generation);
+        if (timedOut) return;
+        // The poll before the read lost the connection (for example the machine was removed, or a reconnect
+        // failed). The read fails with the reason of that poll.
+        if (!this.connected) throw new Error(this.errors.at(-1) ?? 'Not connected');
+        await this.readTools(generation);
       })();
       await Promise.race([read, timeout]);
     } catch (err) {
