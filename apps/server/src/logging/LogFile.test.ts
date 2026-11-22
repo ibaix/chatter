@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -57,6 +57,21 @@ describe('LogFile', () => {
     expect(dropped).toBeGreaterThan(0);
     expect(text.split('\n').filter(written => written === line)).toHaveLength(600 - dropped);
     expect(Buffer.byteLength(text)).toBeLessThan(256 * 1024 + 2 * (line.length + 1));
+  });
+
+  it('a rotate that fails does not throw, and writes nothing more', async () => {
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    // A folder with a file in it where the old file must go, so the rename fails
+    mkdirSync(`${filePath}.1`, { recursive: true });
+    writeFileSync(path.join(`${filePath}.1`, 'keep'), '');
+    const file = new LogFile(filePath, 9);
+    file.write('aaaa');
+    // The file is full, so this line needs a rotate
+    expect(() => file.write('bbbb')).not.toThrow();
+    expect(() => file.write('cccc')).not.toThrow();
+    await file.close();
+    expect(readFileSync(filePath, 'utf8')).toBe('aaaa\n');
+    expect(process.stderr.write).toHaveBeenCalledTimes(1);
   });
 
   it('a file that cannot be written does not throw, and writes nothing more', async () => {

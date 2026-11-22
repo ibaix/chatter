@@ -36,9 +36,11 @@ export class LogFile {
       this.droppedLines++;
       return;
     }
-    if (this.size > 0 && this.size + bytes > this.maxBytes) this.rotate();
+    const target = this.size > 0 && this.size + bytes > this.maxBytes ? this.rotate() : stream;
+    // A rotate that failed stopped the file
+    if (!target) return;
     const marker = this.takeDroppedMarker();
-    this.stream!.write(marker + line);
+    target.write(marker + line);
     this.size += Buffer.byteLength(marker) + bytes;
   }
 
@@ -84,8 +86,11 @@ export class LogFile {
     }
   }
 
-  /** The open file keeps its lines under the old name. Node writes them before it closes the file. */
-  private rotate(): void {
+  /**
+   * The open file keeps its lines under the old name. Node writes them before it closes the file.
+   * Gives the new file, or null when the rotate failed and the file stopped.
+   */
+  private rotate(): WriteStream | null {
     const old = this.stream;
     this.stream = null;
     try {
@@ -93,11 +98,11 @@ export class LogFile {
     } catch (error) {
       if (old) this.end(old);
       this.stop(error);
-      return;
+      return null;
     }
     if (old) this.end(old);
     this.size = 0;
-    this.openStream();
+    return this.openStream();
   }
 
   private stop(error: unknown): void {
