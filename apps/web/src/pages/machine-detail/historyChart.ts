@@ -174,8 +174,12 @@ export interface TimeLabel {
   text: string;
 }
 
-function clockText(time: number): string {
-  return new Date(time).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+/** A range shorter than this shows the seconds in its times, so two times in it do not look the same */
+const SECONDS_BELOW_MS = 10 * MINUTE;
+
+/** The parts of a time of day to show for a range of `rangeMs` */
+function clockParts(rangeMs: number): Intl.DateTimeFormatOptions {
+  return rangeMs < SECONDS_BELOW_MS ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' };
 }
 
 function dayText(time: number): string {
@@ -184,7 +188,7 @@ function dayText(time: number): string {
 
 /** Five labels under the chart, from the start of the range to its end. A live chart ends with "Now". */
 export function timeLabels(rangeMs: number, end: number, live = true): TimeLabel[] {
-  const format = rangeMs > DAY ? dayText : clockText;
+  const format = rangeMs > DAY ? dayText : (time: number) => new Date(time).toLocaleTimeString(undefined, clockParts(rangeMs));
   return [4, 3, 2, 1, 0].map(quarter => {
     const time = end - (rangeMs * quarter) / 4;
     return { time, text: quarter === 0 && live ? 'Now' : format(time) };
@@ -200,14 +204,14 @@ export function pannedEnd(end: number | null, deltaMs: number, now: number): num
   return next >= now ? null : next;
 }
 
-function dateTimeText(time: number): string {
-  return new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+function dateTimeText(time: number, rangeMs: number): string {
+  return new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', ...clockParts(rangeMs) });
 }
 
 /** The time that a chart shows, after its description: "in the last hour", or "from Nov 19, 2:00 PM to Nov 19, 3:00 PM" */
 export function viewText(range: ChartRange, end: number | null): string {
   if (end === null) return `in the last ${range.words}`;
-  return `from ${dateTimeText(end - range.ms)} to ${dateTimeText(end)}`;
+  return `from ${dateTimeText(end - range.ms, range.ms)} to ${dateTimeText(end, range.ms)}`;
 }
 
 /** The text in place of the chart while the history loads, when it fails, or when it is empty */

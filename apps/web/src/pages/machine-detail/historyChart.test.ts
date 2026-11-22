@@ -165,6 +165,21 @@ describe('timeLabels', () => {
     const labels = timeLabels(3_600_000, end, false);
     expect(labels[4].text).toBe(new Date(end).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }));
   });
+
+  it('shows the seconds for a range shorter than 10 minutes, so each label tells a different time', () => {
+    const end = Date.parse('2026-11-06T12:00:00.000Z');
+    const labels = timeLabels(60_000, end, false);
+
+    expect(new Set(labels.map(label => label.text)).size).toBe(5);
+    expect(labels[0].text).toBe(new Date(end - 60_000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  });
+
+  it('shows no seconds for the 10-minute range', () => {
+    const end = Date.parse('2026-11-06T12:00:00.000Z');
+    const labels = timeLabels(CHART_RANGES[0].ms, end, false);
+
+    expect(labels[0].text).toBe(new Date(end - CHART_RANGES[0].ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }));
+  });
 });
 
 describe('pannedEnd', () => {
@@ -194,6 +209,22 @@ describe('viewText', () => {
     const end = Date.parse('2026-11-19T15:00:00.000Z');
     const format = (time: number) => new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     expect(viewText(CHART_RANGES[1], end)).toBe(`from ${format(end - 3_600_000)} to ${format(end)}`);
+  });
+
+  it('tells two different times for a zoom of 30 seconds', () => {
+    const end = Date.parse('2026-11-19T15:00:00.000Z');
+    const { range } = zoomView(end - 30_000, end, end + 3_600_000);
+
+    const [, from, to] = /^from (.*) to (.*)$/.exec(viewText(range, end)) ?? [];
+
+    expect(from).not.toBe(to);
+    expect(to).toBe(new Date(end).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  });
+
+  it('tells no seconds for the 10-minute range', () => {
+    const end = Date.parse('2026-11-19T15:00:00.000Z');
+    const format = (time: number) => new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    expect(viewText(CHART_RANGES[0], end)).toBe(`from ${format(end - CHART_RANGES[0].ms)} to ${format(end)}`);
   });
 });
 
