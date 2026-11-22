@@ -136,16 +136,32 @@ describe('docs links', () => {
   });
 });
 
+interface WorkflowStep {
+  uses?: string;
+  run?: string;
+  with?: Record<string, unknown>;
+}
+interface WorkflowJob {
+  if?: string;
+  needs?: string | string[];
+  environment?: string | { name: string };
+  permissions?: Record<string, string>;
+  secrets?: unknown;
+  steps?: WorkflowStep[];
+}
+interface Workflow {
+  permissions?: unknown;
+  jobs: Record<string, WorkflowJob>;
+}
+const workflowFiles = readdirSync(join(ROOT, '.github/workflows')).filter(file => /\.ya?ml$/.test(file));
+const workflowText = (file: string) => read(join('.github/workflows', file));
+const workflow = (file: string) => parse(workflowText(file)) as Workflow;
+const allJobs = () =>
+  workflowFiles.flatMap(file => Object.entries(workflow(file).jobs).map(([name, job]) => ({ id: `${file}: ${name}`, job })));
+
 describe('workflow permissions', () => {
   // The token of a workflow can change the repo, the releases and the images on ghcr.io.
   // Each workflow reads only by default. A job that must write gets the permission in its own block.
-  interface Workflow {
-    permissions?: unknown;
-    jobs: Record<string, { if?: string }>;
-  }
-  const workflowFiles = readdirSync(join(ROOT, '.github/workflows')).filter(file => /\.ya?ml$/.test(file));
-  const workflow = (file: string) => parse(read(join('.github/workflows', file))) as Workflow;
-
   it('finds the workflows', () => {
     expect(workflowFiles).toContain('ci.yml');
   });
@@ -187,6 +203,76 @@ describe('workflow permissions', () => {
     ['', false],
   ])('reads %j as one group: %s', (text, expected) => {
     expect(isOneGroup(text)).toBe(expected);
+  });
+});
+
+describe('pinned actions', () => {
+  // A tag such as v4 can move to other code. A full commit cannot. A changed action could change the files that
+  // the release signs. The comment gives the version, so Dependabot can update the commit and the comment.
+  // A local action or workflow (./) is in this repo, so it needs no commit.
+  const usesLine = /^\s*(?:-\s+)?uses:\s*(\S+)(.*)$/;
+  const pinned = /^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/;
+  const versionComment = /^\s+# v\d+(\.\d+)*$/;
+
+  it.each(workflowFiles)('pins each action in %s by a full commit, with the version in a comment', file => {
+    const notPinned = workflowText(file)
+      .split('\n')
+      .map(line => usesLine.exec(line))
+      .filter(match => match !== null)
+      .filter(([, action, rest]) => !action.startsWith('./') && !(pinned.test(action) && versionComment.test(rest)))
+      .map(([line]) => line.trim());
+    expect(notPinned).toEqual([]);
+  });
+});
+
+describe('release signing', () => {
+  // The update signing key signs each update file. Each Pi card installs a signed update as root.
+  // Only the sign job in docker.yml gets the key. It runs no action except the checkout, and it signs only a tag
+  // on main, after the publish job.
+  const SIGN_JOB = 'docker.yml: sign';
+  const { publish, sign } = workflow('docker.yml').jobs;
+  const environmentOf = (job: WorkflowJob) => (typeof job.environment === 'object' ? job.environment.name : job.environment);
+  const needsOf = (job: WorkflowJob) => [job.needs ?? []].flat();
+  const stepIndex = (job: WorkflowJob, test: (step: WorkflowStep) => boolean) => (job.steps ?? []).findIndex(test);
+  const onMainCheck = (step: WorkflowStep) => step.run?.includes('git merge-base --is-ancestor "$GITHUB_SHA" origin/main') ?? false;
+
+  it('gives the signing key only to the sign job', () => {
+    expect(allJobs().filter(({ job }) => JSON.stringify(job).includes('UPDATE_SIGNING_KEY')).map(({ id }) => id)).toEqual([SIGN_JOB]);
+    const mentions = workflowFiles.flatMap(file => workflowText(file).match(/secrets\.UPDATE_SIGNING_KEY/g) ?? []);
+    expect(mentions).toHaveLength(1);
+  });
+
+  it('gives the release environment, which holds the key, only to the sign job', () => {
+    expect(allJobs().filter(({ job }) => environmentOf(job) === 'release').map(({ id }) => id)).toEqual([SIGN_JOB]);
+  });
+
+  it('gives no job all the secrets', () => {
+    expect(allJobs().filter(({ job }) => job.secrets === 'inherit').map(({ id }) => id)).toEqual([]);
+  });
+
+  it('runs no action in the sign job except the checkout, as the first step', () => {
+    const actions = (sign.steps ?? []).flatMap((step, index) => (step.uses ? [`${index}: ${step.uses.split('@')[0]}`] : []));
+    expect(actions).toEqual(['0: actions/checkout']);
+  });
+
+  it('signs only after the publish job', () => {
+    expect(needsOf(sign)).toContain('publish');
+  });
+
+  it('gives the sign job only the permissions that it needs', () => {
+    expect(sign.permissions).toEqual({ contents: 'write', packages: 'read' });
+  });
+
+  it.each([
+    ['publish', publish, (step: WorkflowStep) => step.uses?.startsWith('docker/build-push-action@') ?? false],
+    ['sign', sign, (step: WorkflowStep) => step.run?.includes('make-update-file.sh') ?? false],
+  ] as const)('checks in the %s job that the tag is on main, before it publishes or signs', (_name, job, isGuarded) => {
+    const check = stepIndex(job, onMainCheck);
+    const guarded = stepIndex(job, isGuarded);
+    expect(check).toBeGreaterThanOrEqual(0);
+    expect(guarded).toBeGreaterThan(check);
+    // merge-base needs the history of main
+    expect(job.steps?.find(step => step.uses?.startsWith('actions/checkout@'))?.with?.['fetch-depth']).toBe(0);
   });
 });
 
