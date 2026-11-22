@@ -1,8 +1,9 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Auth } from '../auth/Auth.js';
 import type { UserAccounts } from '../auth/userAccounts.js';
 import { LoginLog } from '../auth/loginLog.js';
 import { loggedInAuth, TEST_LOGIN } from '../auth/testSupport.js';
+import { captureLog, type CapturedLog } from '../logging/testSupport.js';
 import { errorOf, testApp, type TestApp } from './testSupport.js';
 
 const ATTACKER = '192.168.1.66';
@@ -102,6 +103,43 @@ describe('login settings routes', () => {
     expect(res.status).toBe(200);
     expect(((await res.json()) as LoginsReport).lockedUsers).toEqual([]);
     expect((await logIn('sam', 'wrong-password', '192.168.3.1')).status).toBe(401);
+  });
+
+  describe('log', () => {
+    let log: CapturedLog;
+
+    beforeEach(() => {
+      log = captureLog();
+    });
+
+    afterEach(() => {
+      log.restore();
+    });
+
+    it('writes who unlocked a computer, from which address', async () => {
+      await asAdmin('/api/settings/logins/unlock', { address: ATTACKER });
+
+      const text = log.text('info');
+      expect(text).toContain('Login lock removed');
+      expect(text).toContain(`by=${TEST_LOGIN.username}`);
+      expect(text).toContain(`from=${ADMIN_COMPUTER}`);
+      expect(text).toContain(`address=${ATTACKER}`);
+    });
+
+    it('writes who unlocked a user, from which address', async () => {
+      await asAdmin('/api/settings/logins/unlock', { username: 'Sam' });
+
+      const text = log.text('info');
+      expect(text).toContain('Login lock removed');
+      expect(text).toContain(`by=${TEST_LOGIN.username}`);
+      expect(text).toContain(`from=${ADMIN_COMPUTER}`);
+      expect(text).toContain('username=Sam');
+    });
+
+    it('writes nothing for an unlock that the check refuses', async () => {
+      await asAdmin('/api/settings/logins/unlock', {});
+      expect(log.text()).not.toContain('Login lock removed');
+    });
   });
 
   it('refuses an unlock with no address', async () => {
