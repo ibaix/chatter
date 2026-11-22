@@ -10,6 +10,8 @@ interface ToolTableTabProps {
   machineId: string;
   /** True while Chatter is connected to the machine */
   connected: boolean;
+  /** The end of the last good poll */
+  lastPollTime: string | null;
   /** The reads of the tool table. Only a machine that reads its tool table apart from the state polls (Brother) has it. */
   toolSync?: ToolSyncState;
   toolTable: ToolTable;
@@ -30,19 +32,28 @@ function newerState(fromStatus: ToolSyncState, fromSync: ToolSyncState | null): 
   return (fromStatus.lastAttemptAt ?? '') > (fromSync.lastAttemptAt ?? '') || fromStatus.running ? fromStatus : fromSync;
 }
 
+/** The connection to the machine, from the status of the server */
+interface MachineLink {
+  connected: boolean;
+  /** The end of the last good poll */
+  lastPollTime: string | null;
+}
+
 /** The error of a Sync that the server refused before it read the tools */
 interface RefusalError {
   text: string;
   refusal: Exclude<SyncProblem, { outcome: 'failed' }>;
   /** The last read of the server when the Sync started */
   serverAttemptAt: string | null;
+  /** The last good poll when the Sync started */
+  pollTimeAt: string | null;
   /** True after the screen showed the cause of the refusal: the machine offline, or a read that runs */
   causeSeen: boolean;
 }
 
 /** True while the cause of a refusal shows on the screen */
-function causeShows(refusal: RefusalError['refusal'], connected: boolean, toolSync: ToolSyncState): boolean {
-  if (refusal.outcome === 'not-connected') return !connected;
+function causeShows(refusal: RefusalError['refusal'], link: MachineLink, toolSync: ToolSyncState): boolean {
+  if (refusal.outcome === 'not-connected') return !link.connected;
   if (refusal.outcome === 'busy') return toolSync.running;
   return false;
 }
@@ -56,25 +67,34 @@ function newerReadCame(toolSync: ToolSyncState, serverAttemptAt: string | null):
 }
 
 /**
+ * True when a good poll ended after the Sync started, and the machine is connected. A control can close the
+ * connection between two polls, and the next poll connects again. Then the screen never shows the machine offline.
+ */
+function newerGoodPollCame(link: MachineLink, pollTimeAt: string | null): boolean {
+  return link.connected && link.lastPollTime !== null && (pollTimeAt === null || link.lastPollTime > pollTimeAt);
+}
+
+/**
  * True while the error of a refused Sync still applies. A newer read of the server removes each such error.
- * "Not connected" goes when the machine is connected again, and "busy" when the read that ran ends.
- * "Too soon" goes after its seconds (see the timer in useRefusalError). Another error, for example
+ * "Not connected" goes when the machine is connected again, or after a newer good poll. "Busy" goes when the read
+ * that ran ends. "Too soon" goes after its seconds (see the timer in useRefusalError). Another error, for example
  * "address changed", stays until the newer read or the next Sync.
  */
-function stillApplies(error: RefusalError, connected: boolean, toolSync: ToolSyncState): boolean {
+function stillApplies(error: RefusalError, link: MachineLink, toolSync: ToolSyncState): boolean {
   if (newerReadCame(toolSync, error.serverAttemptAt)) return false;
+  if (error.refusal.outcome === 'not-connected' && newerGoodPollCame(link, error.pollTimeAt)) return false;
   if (error.refusal.outcome === 'not-connected' || error.refusal.outcome === 'busy') {
-    return !error.causeSeen || causeShows(error.refusal, connected, toolSync);
+    return !error.causeSeen || causeShows(error.refusal, link, toolSync);
   }
   return true;
 }
 
 /** The error of the last refused Sync, and its text while it still applies */
-function useRefusalError(connected: boolean, toolSync: ToolSyncState) {
+function useRefusalError(link: MachineLink, toolSync: ToolSyncState) {
   const [error, setError] = useState<RefusalError | null>(null);
 
   // The cause of a refusal can show on the screen after the reply of the server
-  if (error && !error.causeSeen && causeShows(error.refusal, connected, toolSync)) setError({ ...error, causeSeen: true });
+  if (error && !error.causeSeen && causeShows(error.refusal, link, toolSync)) setError({ ...error, causeSeen: true });
 
   // The server accepts a Sync again after the seconds that it gave
   const retryAfterSeconds = error?.refusal.outcome === 'too-soon' ? error.refusal.retryAfterSeconds : null;
@@ -84,14 +104,14 @@ function useRefusalError(connected: boolean, toolSync: ToolSyncState) {
     return () => clearTimeout(timer);
   }, [error, retryAfterSeconds]);
 
-  const text = error && stillApplies(error, connected, toolSync) ? error.text : null;
+  const text = error && stillApplies(error, link, toolSync) ? error.text : null;
   return { text, setError };
 }
 
 /** When Chatter read the tool table, and the Sync button that reads it now */
-function ToolSyncBar({ machineId, connected, toolSync }: { machineId: string; connected: boolean; toolSync: ToolSyncState }) {
+function ToolSyncBar({ machineId, link, toolSync }: { machineId: string; link: MachineLink; toolSync: ToolSyncState }) {
   const [syncing, setSyncing] = useState(false);
-  const { text: refusalText, setError } = useRefusalError(connected, toolSync);
+  const { text: refusalText, setError } = useRefusalError(link, toolSync);
   /** The state in the reply of the last Sync. A failed read has its error in it. */
   const [fromSync, setFromSync] = useState<ToolSyncState | null>(null);
   const state = newerState(toolSync, fromSync);
@@ -105,7 +125,7 @@ function ToolSyncBar({ machineId, connected, toolSync }: { machineId: string; co
     } catch (err) {
       // A read that failed has its error in its state, as an automatic read does, so the screen shows one text for it
       if (err instanceof ToolSyncError && err.problem.outcome === 'failed') setFromSync(err.problem.toolSync);
-      else setError(refusalErrorOf(err, toolSync, connected));
+      else setError(refusalErrorOf(err, toolSync, link));
     } finally {
       setSyncing(false);
     }
@@ -122,24 +142,25 @@ function ToolSyncBar({ machineId, connected, toolSync }: { machineId: string; co
   );
 }
 
-/** The error of a refused Sync. The time of the last read and `connected` are the ones when the Sync started. */
-function refusalErrorOf(err: unknown, toolSync: ToolSyncState, connected: boolean): RefusalError {
+/** The error of a refused Sync. The time of the last read and `link` are the ones when the Sync started. */
+function refusalErrorOf(err: unknown, toolSync: ToolSyncState, link: MachineLink): RefusalError {
   const refusal = err instanceof ToolSyncError && err.problem.outcome !== 'failed' ? err.problem : { outcome: 'other' as const };
   return {
     text: errorMessageOf(err, SYNC_FAILURE_TEXT),
     refusal,
     serverAttemptAt: toolSync.lastAttemptAt,
-    causeSeen: causeShows(refusal, connected, toolSync),
+    pollTimeAt: link.lastPollTime,
+    causeSeen: causeShows(refusal, link, toolSync),
   };
 }
 
 /** One row for each tool, with its lengths and wear. The tool in the spindle is marked. */
-export function ToolTableTab({ machineId, connected, toolSync, toolTable, hasPocketInfo, spindleTool }: ToolTableTabProps) {
+export function ToolTableTab({ machineId, connected, lastPollTime, toolSync, toolTable, hasPocketInfo, spindleTool }: ToolTableTabProps) {
   const toolsByPocket = Object.entries(toolTable) as [string, ToolInfo][];
 
   return (
     <>
-      {toolSync && <ToolSyncBar machineId={machineId} connected={connected} toolSync={toolSync} />}
+      {toolSync && <ToolSyncBar machineId={machineId} link={{ connected, lastPollTime }} toolSync={toolSync} />}
       <div className="flex flex-wrap justify-between gap-3 px-4 py-3 text-zinc-200">
         <span>The lengths and diameters are in the machine's units. The tool in the spindle is marked.</span>
         {!hasPocketInfo && <span>This machine does not send the pocket of each tool.</span>}

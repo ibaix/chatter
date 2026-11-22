@@ -107,6 +107,7 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
               <ToolTableTab
                 machineId={machine.id}
                 connected={machine.connected}
+                lastPollTime={machine.lastPollTime}
                 toolSync={tools.toolSync}
                 toolTable={tools.toolTable}
                 hasPocketInfo={tools.hasPocketInfo}

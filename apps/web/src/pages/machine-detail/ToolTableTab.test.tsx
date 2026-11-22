@@ -18,13 +18,22 @@ const TOOLS = { 1: { toolNum: 5, length: 3.402, name: 'ENDMILL' } };
 /** The text for SYNCED_AT in the time zone UTC and the format of en-US (see beforeEach) */
 const SYNCED_TEXT = 'Synced 08:05 AM';
 
+/** The end of the last good poll in the status */
+const POLLED_AT = '2026-11-21T08:06:00.000Z';
+
 function renderTab(toolSync: ToolSyncState | undefined, toolTable: ToolTable = TOOLS, connected = true) {
-  return render(<ToolTableTab machineId="m1" connected={connected} toolTable={toolTable} hasPocketInfo spindleTool={undefined} toolSync={toolSync} />);
+  return render(
+    <ToolTableTab
+      machineId="m1" connected={connected} lastPollTime={POLLED_AT} toolTable={toolTable} hasPocketInfo spindleTool={undefined} toolSync={toolSync}
+    />,
+  );
 }
 
 /** The tab again, with a new status of the server */
-const tabWith = (toolSync: ToolSyncState, connected = true) =>
-  <ToolTableTab machineId="m1" connected={connected} toolTable={TOOLS} hasPocketInfo spindleTool={undefined} toolSync={toolSync} />;
+const tabWith = (toolSync: ToolSyncState, connected = true, lastPollTime: string | null = POLLED_AT) =>
+  <ToolTableTab
+    machineId="m1" connected={connected} lastPollTime={lastPollTime} toolTable={TOOLS} hasPocketInfo spindleTool={undefined} toolSync={toolSync}
+  />;
 
 /** The next Sync fails with this text and reason */
 const refuseSync = (text: string, problem: SyncProblem) => syncTools.mockRejectedValue(new ToolSyncError(text, problem));
@@ -119,7 +128,7 @@ describe('ToolTableTab sync', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sync' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not read the tool table');
 
-    rerender(<ToolTableTab machineId="m1" connected toolTable={TOOLS} hasPocketInfo spindleTool={undefined} toolSync={syncedAt('2026-11-21T08:20:00.000Z')} />);
+    rerender(tabWith(syncedAt('2026-11-21T08:20:00.000Z')));
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByText('Synced 08:20 AM')).toBeInTheDocument();
@@ -131,7 +140,7 @@ describe('ToolTableTab sync', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sync' }));
     expect(await screen.findByText('Synced 08:10 AM')).toBeInTheDocument();
 
-    rerender(<ToolTableTab machineId="m1" connected toolTable={TOOLS} hasPocketInfo spindleTool={undefined} toolSync={syncedAt('2026-11-21T08:30:00.000Z', 'No reply')} />);
+    rerender(tabWith(syncedAt('2026-11-21T08:30:00.000Z', 'No reply')));
 
     expect(screen.getByRole('alert')).toHaveTextContent('No reply');
     expect(screen.getByText(SYNCED_TEXT)).toBeInTheDocument();
@@ -143,7 +152,7 @@ describe('ToolTableTab sync', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sync' }));
     expect(await screen.findByText('Synced 08:10 AM')).toBeInTheDocument();
 
-    rerender(<ToolTableTab machineId="m1" connected toolTable={TOOLS} hasPocketInfo spindleTool={undefined} toolSync={syncedAt(SYNCED_AT, 'No reply')} />);
+    rerender(tabWith(syncedAt(SYNCED_AT, 'No reply')));
 
     expect(screen.getByText('Synced 08:10 AM')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -216,6 +225,19 @@ describe('ToolTableTab sync', () => {
       expect(screen.getByRole('alert')).toHaveTextContent('The machine is not connected.');
 
       rerender(tabWith(SYNCED, true));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('"not connected" goes when a newer good poll comes, also when the screen never showed the machine offline', async () => {
+      refuseSync('The machine is not connected.', { outcome: 'not-connected' });
+      const { rerender } = renderTab(SYNCED, TOOLS, true);
+      await pressSync();
+
+      // The control closed the connection between two polls, and the next poll connected again
+      rerender(tabWith(SYNCED, true, POLLED_AT));
+      expect(screen.getByRole('alert')).toHaveTextContent('The machine is not connected.');
+      rerender(tabWith(SYNCED, true, '2026-11-21T08:06:02.000Z'));
+
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
