@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
 import { api } from './api/client';
 import { AppShell } from './components/layout/AppShell';
 import { useMachineEvents } from './hooks/useMachineEvents';

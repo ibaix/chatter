@@ -2,7 +2,7 @@ import type { AlertRule, Role } from '@local-chatter/shared';
 import { Dialog } from '@toolpath/ui';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { act } from 'react';
-import { MemoryRouter, Route, Routes, useLocation, useNavigate, type NavigateFunction } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate, type NavigateFunction } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchMachineAlerts, type MachineAlert } from '../../api/alerts';
 import { fetchAlertRules } from '../../api/alertRules';

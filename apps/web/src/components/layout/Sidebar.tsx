@@ -1,6 +1,6 @@
 import { cn } from '@toolpath/ui';
 import { useState, type ReactNode } from 'react';
-import { Link, matchPath, useLocation } from 'react-router-dom';
+import { Link, matchPath, useLocation } from 'react-router';
 import { groupByMaker } from '../../machines/machineGroups';
 import { machineStateOf } from '../../machines/machineStatus';
 import type { Machine } from '../../types';
