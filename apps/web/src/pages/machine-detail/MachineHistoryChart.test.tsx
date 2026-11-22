@@ -678,7 +678,7 @@ describe('MachineHistoryChart', () => {
       const clear = screen.getByRole('button', { name: 'Clear the zoom' });
       expect(accept).toHaveAttribute('title', 'Use as full range');
       // The user gets to the accept button first with the Tab key
-      expect(accept.compareDocumentPosition(clear) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(accept.compareDocumentPosition(clear)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     });
 
     it('makes the accept and the clear buttons 20 px, with a gap between them', async () => {
@@ -859,6 +859,24 @@ describe('MachineHistoryChart', () => {
 
       expect(await screen.findByRole('img', { name: /^Overview of the last 10 minutes/ })).toBeInTheDocument();
       expect(screen.getByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Clear the zoom' })).toBeInTheDocument();
+    });
+
+    it('gives back the zoom, its box and its buttons after Clear the zoom', async () => {
+      const overview = await overviewOfStateView();
+      // The zoom is the middle 5 minutes of the strip: its box goes from BOX_WIDTH / 4 to 3 * BOX_WIDTH / 4
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`);
+      fireEvent.click(screen.getByRole('button', { name: 'Clear the zoom' }));
+      await screen.findByText('What the machine did in the last 10 minutes.');
+
+      fireEvent.click(undoButton());
+
+      expect(await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
+      const box = screen.getByRole('img', { name: /^Overview of the last 10 minutes/ }).querySelector('rect.stroke-zinc-50');
+      expect(box).toHaveAttribute('x', String(BOX_WIDTH / 4));
+      expect(box).toHaveAttribute('width', String(BOX_WIDTH / 2));
+      expect(screen.getByRole('button', { name: 'Use as full range' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Clear the zoom' })).toBeInTheDocument();
     });
 

@@ -122,6 +122,46 @@ describe('useChartView', () => {
       expect(result.current.canUndo).toBe(false);
     });
 
+    it('makes a new entry for the first move after a zoom: one undo goes back to the zoom, not before it', () => {
+      const { result } = renderChartView();
+      act(() => result.current.zoomTo(NOW - 9 * MINUTE, NOW - 7 * MINUTE));
+      const zoomedView = result.current.view;
+      act(() => result.current.moveBy(-MINUTE));
+      act(() => result.current.moveBy(-MINUTE));
+      expect(result.current.view.end).toBe(NOW - 9 * MINUTE);
+
+      act(() => result.current.undo());
+
+      expect(result.current.view).toEqual(zoomedView);
+      expect(result.current.zoomed).toBe(true);
+      expect(result.current.canUndo).toBe(true);
+    });
+
+    it('makes an entry for Now, so an undo goes back to the time before Now', () => {
+      const { result } = renderChartView();
+      act(() => result.current.moveBy(-5 * MINUTE));
+      act(() => result.current.showNow());
+      expect(result.current.view.end).toBeNull();
+
+      act(() => result.current.undo());
+
+      expect(result.current.view.end).toBe(NOW - 5 * MINUTE);
+    });
+
+    it('makes an entry for Clear the zoom, so an undo gives back the zoom', () => {
+      const { result } = renderChartView();
+      act(() => result.current.zoomTo(NOW - 9 * MINUTE, NOW - 7 * MINUTE));
+      const zoomedView = result.current.view;
+      act(() => result.current.clearZoom());
+      expect(result.current.zoomed).toBe(false);
+
+      act(() => result.current.undo());
+
+      expect(result.current.zoomed).toBe(true);
+      expect(result.current.view.range).toBe(zoomedView.range);
+      expect(result.current.view.end).toBe(NOW - 7 * MINUTE);
+    });
+
     it('makes a new entry for a move after an undo, and clears the redo', () => {
       const { result } = renderChartView();
       act(() => result.current.moveBy(-MINUTE));
