@@ -1,4 +1,4 @@
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import { StateBadge } from '../../components/MachineStateMark';
 import { AlarmIcon } from '../../components/ui/icons';
 import { machineAddress, machineTypeLabel, makerOf, type MachineState } from '../../machines/machineStatus';

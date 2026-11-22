@@ -1,6 +1,6 @@
 import { roleCan, type Permission } from '@local-chatter/shared';
 import { useEffect, useState, type ReactNode } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { fetchChatterVersion } from '../../api/updates';
 import { useCurrentUser } from '../../components/CurrentUser';
 import { tabPanelProps } from '../../components/ui/tabPanel';

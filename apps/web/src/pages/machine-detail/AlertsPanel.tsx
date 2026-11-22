@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import type { MachineAlert } from '../../api/alerts';
 import { Panel } from '../../components/ui/Panel';
 import { ShowMoreFooter } from '../../components/ui/ShowMoreFooter';

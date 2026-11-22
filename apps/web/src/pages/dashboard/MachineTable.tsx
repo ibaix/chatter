@@ -1,5 +1,5 @@
 import { cn } from '@toolpath/ui';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { ProgressBar, StateLabel } from '../../components/MachineStateMark';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
 import { alarmLine, alarmOf, offlineReasonOf } from '../../machines/alarm';

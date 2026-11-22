@@ -1,5 +1,5 @@
 import { Dialog } from '@toolpath/ui';
-import { Outlet } from 'react-router-dom';
+import { Outlet } from 'react-router';
 import type { Machine } from '../../types';
 import { Notice } from '../ui/Notice';
 import { Sidebar } from './Sidebar';
