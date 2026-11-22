@@ -86,12 +86,15 @@ const DATA_ITEMS: DataItem[] = [
   ['spindleSpeed', 'PDSP',   'X01', 1, 'int'],
 ];
 
+/** The command for the alarm list. Its E01 line has one slot for each alarm or message. */
+const ALARM_COMMAND = 'ALARM';
+
 /**
  * The alarm and its code, from all the slots of the E01 alarm list. A slot can hold a communication message (CM)
  * or "no alarm" (OM). A Speedio puts a CM entry in the list when it gets a command that it does not know, so a
  * real alarm can be in a later slot. The alarm code is the code of the first real alarm.
  */
-export function alarmOfList(slots: string[]): { alarm: boolean; alarmCode: string } {
+function alarmOfList(slots: string[]): { alarm: boolean; alarmCode: string } {
   const firstAlarm = slots.map(slot => withoutQuotes(slot)).find(slot => slot !== '' && TRANSFORMS.alarm(slot) === true);
   return firstAlarm === undefined
     ? { alarm: false, alarmCode: '' }
@@ -176,7 +179,7 @@ const MAX_TOOL_NUMBER = 99;
 const TOOL_DATA_COLUMN = { length: 0, lengthWear: 1, diameter: 2, diameterWear: 3, name: 8 } as const;
 
 /** The mode, the program and run state, and the alarm. Each poll sends these first, and never skips them. */
-const CORE_COMMANDS = ['PANEL', 'MEM', 'ALARM'];
+const CORE_COMMANDS = ['PANEL', 'MEM', ALARM_COMMAND];
 
 /**
  * A poll sends an optional command only when it fits in the poll limit less this margin: 20 %, which is 2 s
@@ -230,10 +233,10 @@ export class BrotherConnector extends BaseMachineConnector {
   private controlType: ControlType | null = null;
   private atcCommand: AtcCommand | null = null;
   /**
-   * True after the first tool read found the ATC command, or found that the control knows neither. It stays for the
-   * life of the connector, also after a reconnect, so Chatter never sends a command that the control does not know.
+   * The ATC commands that the control does not know (a reply status other than 00). This stays for the life of the
+   * connector, also after a reconnect, so Chatter never sends a command that the control does not know again.
    */
-  private atcDetectionDone = false;
+  private unknownAtcCommands = new Set<AtcCommand>();
   private toolDataCommand: string;
   private macroCommand: string;
   private dataItems: DataItem[];
@@ -409,28 +412,44 @@ export class BrotherConnector extends BaseMachineConnector {
     return result;
   }
 
+  /** True when Chatter found the ATC command, or found that the control knows neither command */
+  private get atcDetectionDone(): boolean {
+    return this.atcCommand !== null || ATC_COMMANDS.every(({ command }) => this.unknownAtcCommands.has(command));
+  }
+
   /**
-   * Find which ATC command this control supports, and give its reply, which is the first tool table.
-   * With neither, the tool table has no pots, and the reply is null.
+   * Find which ATC command this control knows, and give its reply, which is the first tool table. With neither,
+   * the tool table has no pots, and the reply is null. Only the reply status decides. An error from a send (no
+   * reply, or a closed connection) tells nothing about the control: the tool read fails, and the next one asks
+   * again. Chatter does not ask a command again when the control did not know it: an unknown command adds a CM
+   * entry to its alarm list.
    */
   private async detectControlType(): Promise<ParsedResponse | null> {
     for (const { command, controlType } of ATC_COMMANDS) {
-      try {
-        const response = await this.send(command);
-        if (isKnownAtcReply(response)) {
-          this.atcCommand = command;
-          this.controlType = controlType;
-          this.atcDetectionDone = true;
-          return response;
-        }
-      } catch (err) {
-        // A control that does not know this command; try the next one. With no reply or no connection, stop.
-        if (err instanceof NoReplyError || !this.connected) throw err;
+      if (this.unknownAtcCommands.has(command)) continue;
+      const response = await this.send(command);
+      if (isKnownAtcReply(response)) {
+        this.atcCommand = command;
+        this.controlType = controlType;
+        return response;
       }
+      this.unknownAtcCommands.add(command);
     }
-    // The control knows neither command. Ask neither again: an unknown command adds a CM entry to its alarm list.
-    this.atcDetectionDone = true;
     return null;
+  }
+
+  /**
+   * Forget what Chatter found about the control: the ATC command, the control type and the tool table.
+   * Use it when the address changes, because a different control can be at the new address.
+   */
+  forgetControl(): void {
+    this.atcCommand = null;
+    this.controlType = null;
+    this.unknownAtcCommands.clear();
+    this.potTools = {};
+    this.toolOffsets = new Map();
+    this.toolTable = {};
+    this.hasPocketInfo = false;
   }
 
   /** The tool in each pot, from the ATC reply */
@@ -649,7 +668,7 @@ export class BrotherConnector extends BaseMachineConnector {
         this.data[label] = parseValue(raw, type, transform);
       }
     }
-    const alarmSlots = responses.ALARM?.E01;
+    const alarmSlots = responses[ALARM_COMMAND]?.E01;
     if (alarmSlots) Object.assign(this.data, alarmOfList(alarmSlots));
   }
 
