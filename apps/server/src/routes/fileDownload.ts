@@ -14,11 +14,15 @@ import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
  */
 export async function downloadAsStream(connector: BaseMachineConnector, filePath: string): Promise<ReadableStream<Uint8Array>> {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
-  // When the reader stops early, the download runs to its end and the rest is dropped
+  // When the reader stops early, the download on the machine stops too. A chunk that is on its way is dropped.
   let readerStopped = false;
+  const stopDownload = new AbortController();
   const stream = new ReadableStream<Uint8Array>({
     start(streamController) { controller = streamController; },
-    cancel() { readerStopped = true; },
+    cancel() {
+      readerStopped = true;
+      stopDownload.abort();
+    },
   });
 
   let markStarted = () => {};
@@ -31,7 +35,7 @@ export async function downloadAsStream(connector: BaseMachineConnector, filePath
     },
   });
 
-  const download = connector.downloadFile(filePath, output);
+  const download = connector.downloadFile(filePath, output, stopDownload.signal);
   try {
     await Promise.race([started, download]);
   } catch (error) {

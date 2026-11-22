@@ -145,6 +145,12 @@ function joinRemotePath(dirPath: string, name: string): string {
   return dirPath === ROOT_PATH ? `/${name}` : `${dirPath}/${name}`;
 }
 
+/** Run `stop` when the signal aborts, also when it aborted before this call */
+function onAbort(signal: AbortSignal | undefined, stop: () => void): void {
+  if (signal?.aborted) stop();
+  else signal?.addEventListener('abort', stop, { once: true });
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error';
 }
@@ -326,14 +332,17 @@ export class FTPClient {
     }
   }
 
-  async downloadFile(filePath: string, writableStream: Writable): Promise<void> {
+  /** `signal` stops the download and closes the connections to the machine, for example when the user cancels it */
+  async downloadFile(filePath: string, writableStream: Writable, signal?: AbortSignal): Promise<void> {
     const remotePath = toRelativeRemotePath(filePath);
     try {
       assertSafeFtpArgument(remotePath);
-      await this.withConnection({ verbose: true }, async client => {
+      signal?.throwIfAborted();
+      await this.withConnection({ verbose: true, signal }, async client => {
         try {
-          await this.downloadOverPassiveSocket(client, remotePath, writableStream);
-        } catch {
+          await this.downloadOverPassiveSocket(client, remotePath, writableStream, signal);
+        } catch (err) {
+          if (signal?.aborted) throw err;
           // Fall back to basic-ftp's standard download
           await client.downloadTo(writableStream, remotePath);
         }
@@ -398,14 +407,16 @@ export class FTPClient {
     }
   }
 
-  /** Open a connection, run `work` on it, and always close it */
+  /** Open a connection, run `work` on it, and always close it. `signal` closes it early, and then `work` fails. */
   private async withConnection<T>(
-    { verbose }: { verbose: boolean },
+    { verbose, signal }: { verbose: boolean; signal?: AbortSignal },
     work: (client: ftp.Client) => Promise<T>
   ): Promise<T> {
     const client = new ftp.Client(this.timeoutMs);
     useMachineHostForTransfers(client);
     client.ftp.verbose = verbose;
+    const close = () => client.close();
+    onAbort(signal, close);
     try {
       await client.access({
         host: this.host,
@@ -416,6 +427,7 @@ export class FTPClient {
       });
       return await work(client);
     } finally {
+      signal?.removeEventListener('abort', close);
       client.close();
     }
   }
@@ -453,7 +465,9 @@ export class FTPClient {
    * Download with raw FTP commands over our own data socket: open the data
    * connection first, then send RETR. More compatible with limited FTP servers like Speedio.
    */
-  private async downloadOverPassiveSocket(client: ftp.Client, filePath: string, destination: Writable): Promise<void> {
+  private async downloadOverPassiveSocket(
+    client: ftp.Client, filePath: string, destination: Writable, signal?: AbortSignal
+  ): Promise<void> {
     // The RETR below goes straight to the socket, so basic-ftp does not check it
     assertSafeFtpArgument(filePath);
     await trySetBinaryMode(client);
@@ -473,6 +487,11 @@ export class FTPClient {
       dataSocket.connect(port, host, () => {
         // Written straight to the control socket without waiting for the reply, so data can flow on the data socket
         client.ftp.socket.write(`RETR ${filePath}\r\n`);
+      });
+      // basic-ftp does not know this data connection, so the close of the client does not close it
+      onAbort(signal, () => {
+        dataSocket.destroy();
+        reject(signal?.reason);
       });
 
       setTimeout(() => {
