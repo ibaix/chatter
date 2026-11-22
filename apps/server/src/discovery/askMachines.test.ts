@@ -14,6 +14,30 @@ async function webServer(body: string, status = 200) {
 }
 
 /**
+ * A web server that answers each request with a 302 to a second server, which gives `body`.
+ * Gives the port of the first server, the request count of the second, and a way to stop both.
+ */
+async function redirectToServer(body: string) {
+  let targetRequests = 0;
+  const target = createServer((_request, response) => {
+    targetRequests++;
+    response.end(body);
+  });
+  await new Promise<void>(resolve => target.listen(0, '127.0.0.1', resolve));
+  const targetPort = (target.address() as AddressInfo).port;
+  const server = createServer((request, response) => {
+    response.writeHead(302, { Location: `http://127.0.0.1:${targetPort}${request.url ?? '/'}` });
+    response.end();
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  return {
+    port: (server.address() as AddressInfo).port,
+    targetRequests: () => targetRequests,
+    close: () => Promise.all([server, target].map(each => new Promise(resolve => each.close(resolve)))),
+  };
+}
+
+/**
  * A web server that sends `start` and then a body with no end, as fast as the client reads it.
  * With a Content-Length in `headers`, it sends only `start`, and then waits with the connection open.
  * It tells when the client stopped the connection.
@@ -112,6 +136,16 @@ describe('askMTConnect', () => {
     }
   });
 
+  it('does not follow a redirect to another address', async () => {
+    const server = await redirectToServer(probe(okuma));
+    try {
+      expect(await askMTConnect('127.0.0.1', server.port)).toBeNull();
+      expect(server.targetRequests()).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('stops reading an endless reply after 1 MB, and does not wait for its end', async () => {
     const server = await endlessServer('<?xml version="1.0"?><MTConnectDevices><!--');
     try {
@@ -170,6 +204,16 @@ describe('askChatter', () => {
       } finally {
         await server.close();
       }
+    }
+  });
+
+  it('does not follow a redirect to another address', async () => {
+    const server = await redirectToServer('{"status":"ok","version":"1.2.0"}');
+    try {
+      expect(await askChatter('127.0.0.1', server.port)).toBeNull();
+      expect(server.targetRequests()).toBe(0);
+    } finally {
+      await server.close();
     }
   });
 
