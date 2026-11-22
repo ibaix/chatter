@@ -33,7 +33,22 @@ interface FakeMachine {
   uploadedText: string;
   /** The first word of each command that the machine got */
   commands: string[];
+  /** Control connections (logins) that the machine got */
+  controlConnections: number;
   close(): Promise<void>;
+}
+
+/** One RETR on the fake machine, after its 150 reply */
+interface FileTransfer {
+  control: net.Socket;
+  data: net.Socket;
+  /** 1 for the first RETR of the machine, 2 for the next, and so on */
+  retrNumber: number;
+}
+
+/** The usual RETR: send the whole file, close the data connection, then send 226 */
+function sendWholeFile({ control, data }: FileTransfer, programText: string): void {
+  data.end(programText, () => control.write('226 Transfer complete\r\n'));
 }
 
 function listen(server: net.Server, port: number, host: string): Promise<number> {
@@ -94,9 +109,9 @@ function readAll(socket: net.Socket): Promise<string> {
 }
 
 /** Reply to the commands of FTPClient and basic-ftp. RETR, LIST and STOR use the next data connection. */
-function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSocket, onUpload, commands, programText }: {
+function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSocket, onUpload, commands, sendFile }: {
   pasvReply: () => string;
-  programText: string;
+  sendFile: (transfer: Omit<FileTransfer, 'retrNumber'>) => void;
   epsvReply: string;
   nextDataSocket: () => Promise<net.Socket>;
   onUpload: (text: string) => void;
@@ -118,10 +133,12 @@ function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSock
       else if (command === 'EPSV') socket.write(`${epsvReply}\r\n`);
       else if (command === 'PWD') socket.write('257 "/"\r\n');
       else if (command === 'CWD') socket.write('250 OK\r\n');
-      else if (command === 'RETR' || command === 'LIST') {
+      else if (command === 'RETR') {
         socket.write('150 Opening data connection\r\n');
-        const dataSocket = await nextDataSocket();
-        dataSocket.end(command === 'RETR' ? programText : LISTING, () => socket.write('226 Transfer complete\r\n'));
+        sendFile({ control: socket, data: await nextDataSocket() });
+      } else if (command === 'LIST') {
+        socket.write('150 Opening data connection\r\n');
+        sendWholeFile({ control: socket, data: await nextDataSocket(), retrNumber: 0 }, LISTING);
       } else if (command === 'STOR') {
         socket.write('150 Ready for data\r\n');
         onUpload(await readAll(await nextDataSocket()));
@@ -145,6 +162,8 @@ interface FakeMachineOptions {
   refuseFirstPasv?: boolean;
   /** The text of each file that RETR sends */
   programText?: string;
+  /** What the machine does for a RETR after its 150 reply. The default is sendWholeFile with programText. */
+  sendFile?: (transfer: FileTransfer) => void;
 }
 
 const MACHINE_DEFAULTS = {
@@ -155,14 +174,17 @@ const MACHINE_DEFAULTS = {
 /** A decoy listens at the host of the PASV reply only when that host is on this computer */
 async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeMachine> {
   const {
-    controlHost, pasvReplyHost, supportsEpsv, bareAddress, pasvReplyFor, refuseFirstPasv, programText
+    controlHost, pasvReplyHost, supportsEpsv, bareAddress, pasvReplyFor, refuseFirstPasv, programText,
+    sendFile = (transfer: FileTransfer) => sendWholeFile(transfer, programText)
   } = { ...MACHINE_DEFAULTS, ...options };
   const dataSockets: net.Socket[] = [];
   const dataWaiters: Array<(socket: net.Socket) => void> = [];
-  const machine = { dataConnections: 0, decoyConnections: 0, uploadedText: '', commands: [] as string[] };
+  const machine = { dataConnections: 0, decoyConnections: 0, controlConnections: 0, retrCount: 0, uploadedText: '', commands: [] as string[] };
 
+  const openDataSockets = new Set<net.Socket>();
   const dataServer = net.createServer(socket => {
     machine.dataConnections += 1;
+    openDataSockets.add(socket);
     socket.on('error', () => undefined);
     const waiter = dataWaiters.shift();
     if (waiter) waiter(socket);
@@ -195,8 +217,13 @@ async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeM
   const controlSockets = new Set<net.Socket>();
   const controlServer = net.createServer(socket => {
     controlSockets.add(socket);
+    machine.controlConnections += 1;
     answerCommands(socket, {
-      pasvReply: nextPasvReply, programText, epsvReply, nextDataSocket, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands
+      pasvReply: nextPasvReply, epsvReply, nextDataSocket, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands,
+      sendFile: transfer => {
+        machine.retrCount += 1;
+        sendFile({ ...transfer, retrNumber: machine.retrCount });
+      }
     });
   });
   const controlPort = await listen(controlServer, 0, controlHost);
@@ -207,9 +234,11 @@ async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeM
     get dataConnections() { return machine.dataConnections; },
     get decoyConnections() { return machine.decoyConnections; },
     get uploadedText() { return machine.uploadedText; },
+    get controlConnections() { return machine.controlConnections; },
     commands: machine.commands,
     async close() {
       controlSockets.forEach(socket => socket.destroy());
+      openDataSockets.forEach(socket => socket.destroy());
       const decoyClosed = decoyServer.listening ? closeServer(decoyServer) : Promise.resolve();
       await Promise.all([closeServer(controlServer), closeServer(dataServer), decoyClosed]);
     },
@@ -627,6 +656,119 @@ describe('FTPClient raw RETR timer', () => {
 
     expect(text()).toBe(programText);
     expect(machine.commands).toContain('RETR');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+/**
+ * Resolve when the condition is true. It does not use vi.waitFor, because with fake timers vi.waitFor moves the
+ * clock at each check. setImmediate and Date are not fake in these tests.
+ */
+async function until(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('The condition did not become true in 2 s');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
+// A machine (or a rogue device) can send part of a file and then stop, with the data connection open. The raw RETR
+// writes each byte to the user at once, so a cut file must fail, and it must never come back as a success.
+describe('FTPClient raw RETR that stops in the middle of a file', () => {
+  const timeoutMs = 200;
+  const firstPart = PROGRAM_TEXT.slice(0, 8);
+  const secondPart = PROGRAM_TEXT.slice(8);
+  let machine: FakeMachine | undefined;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    await machine?.close();
+    machine = undefined;
+  });
+
+  async function downloadFrom(sendFile: (transfer: FileTransfer) => void) {
+    machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, sendFile });
+    const ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs });
+    const destination = new PassThrough();
+    const text = collectText(destination);
+    const download = ftpClient.downloadFile('O1000', destination);
+    // Keep the result, so a rejection before the test reads it is not unhandled
+    const outcome = download.then(() => 'success', (err: Error) => err.message);
+    return { text, outcome };
+  }
+
+  it('fails, and does not retry, when the machine sends part of the file and then goes silent', async () => {
+    const { text, outcome } = await downloadFrom(({ data }) => data.write(firstPart));
+    await until(() => text() === firstPart);
+
+    vi.advanceTimersByTime(timeoutMs);
+
+    expect(await outcome).toBe('FTP download error: The machine stopped sending the file. Try again.');
+    expect(text()).toBe(firstPart);
+    expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('downloads a file that comes slowly, when each pause is shorter than the timeout', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => { transfer = started; });
+    await until(() => transfer !== undefined);
+
+    let sent = '';
+    for (const letter of PROGRAM_TEXT) {
+      vi.advanceTimersByTime(timeoutMs / 2);
+      transfer?.data.write(letter);
+      sent += letter;
+      await until(() => text() === sent);
+    }
+    if (transfer) sendWholeFile(transfer, '');
+
+    expect(await outcome).toBe('success');
+    expect(text()).toBe(PROGRAM_TEXT);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // With no byte sent to the user, the fallback can start again on a new control connection, where no late reply
+  // of the first RETR can arrive.
+  it('downloads through the fallback on a new connection when the machine sends no byte and goes silent', async () => {
+    const { text, outcome } = await downloadFrom(transfer => {
+      if (transfer.retrNumber > 1) sendWholeFile(transfer, PROGRAM_TEXT);
+    });
+    await until(() => machine?.commands.includes('RETR') === true);
+
+    vi.advanceTimersByTime(timeoutMs);
+
+    expect(await outcome).toBe('success');
+    expect(text()).toBe(PROGRAM_TEXT);
+    expect(machine?.controlConnections).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('fails when the data connection closes but the machine sends no 226', async () => {
+    const { text, outcome } = await downloadFrom(({ data }) => data.end(firstPart));
+    await until(() => text() === firstPart);
+
+    vi.advanceTimersByTime(timeoutMs);
+
+    expect(await outcome).toBe('FTP download error: The machine did not confirm that the file is complete. Try again.');
+    expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    { code: 426, reply: '426 Connection closed; transfer aborted' },
+    { code: 451, reply: '451 Local error in processing' },
+  ])('fails when the data connection closes and the machine sends $code', async ({ reply }) => {
+    const { text, outcome } = await downloadFrom(({ control, data }) => data.end(firstPart, () => control.write(`${reply}\r\n`)));
+
+    expect(await outcome).toBe(`FTP download error: ${reply}`);
+    expect(text()).toBe(firstPart);
+    expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 });
