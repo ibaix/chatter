@@ -475,7 +475,11 @@ describe('MachineDetailPage', () => {
 
       await waitFor(() => expect(screen.getByLabelText('The text of the picked version')).toHaveTextContent('G00 X0'));
       expect(fetchUploadEvent).toHaveBeenCalledWith('m1', 21);
-      expect(screen.getByRole('button', { name: 'Send this version again' })).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send this version again' }));
+
+      // The operator confirms before Chatter sends it
+      expect(await screen.findByText('Send O2000.nc again?')).toBeInTheDocument();
     });
 
     it('opens the text of a file on the machine for an operator, with a download link', async () => {
