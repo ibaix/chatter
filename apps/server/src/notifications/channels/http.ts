@@ -23,22 +23,53 @@ export interface Answer {
   retryAfterMs?: number;
 }
 
+/** One form request of a channel type, for a service that takes a form and not JSON, for example Twilio */
+export interface FormPost {
+  url: string;
+  /** content-type is always application/x-www-form-urlencoded */
+  headers?: Record<string, string>;
+  form: URLSearchParams;
+  /** As in JsonPost */
+  readJson?: boolean;
+}
+
 /**
  * POSTs the body as JSON and gives the answer to `resultOf`. Never throws for a network failure.
  * `target` names the service in the network failure text, for example "Discord" or "the address".
  * The text of a network failure never has the web address in it, because the address can have a token in it.
  */
-export async function postJson(
+export function postJson(
   context: SendContext, target: string, request: JsonPost, resultOf: (answer: Answer) => SendResult,
 ): Promise<SendResult> {
+  const { body, ...rest } = request;
+  return post(context, target, { ...rest, contentType: 'application/json', body: JSON.stringify(body) }, resultOf);
+}
+
+/** As postJson, but it POSTs a form */
+export function postForm(
+  context: SendContext, target: string, request: FormPost, resultOf: (answer: Answer) => SendResult,
+): Promise<SendResult> {
+  const { form, ...rest } = request;
+  return post(context, target, { ...rest, contentType: 'application/x-www-form-urlencoded', body: form.toString() }, resultOf);
+}
+
+interface Post {
+  url: string;
+  headers?: Record<string, string>;
+  contentType: string;
+  body: string;
+  readJson?: boolean;
+}
+
+async function post(context: SendContext, target: string, request: Post, resultOf: (answer: Answer) => SendResult): Promise<SendResult> {
   const { fetch, signal } = context;
   let response: Response;
   try {
     // A redirect would change the POST to a GET, so Chatter does not follow it
     response = await fetch(request.url, {
       method: 'POST',
-      headers: { ...request.headers, 'content-type': 'application/json' },
-      body: JSON.stringify(request.body),
+      headers: { ...request.headers, 'content-type': request.contentType },
+      body: request.body,
       redirect: 'manual',
       signal,
     });
@@ -114,7 +145,7 @@ function plural(count: number, unit: string): string {
 const MAX_ERROR_BYTES = 64 * 1024;
 
 /** The JSON object of an error answer, or undefined when it is not a JSON object, is too large, or stops before its end */
-export async function jsonOf(response: Response): Promise<JsonObject | undefined> {
+async function jsonOf(response: Response): Promise<JsonObject | undefined> {
   const text = await textUpTo(response, MAX_ERROR_BYTES);
   if (text === undefined) return undefined;
   try {
@@ -179,7 +210,7 @@ export function statusResult(status: number, texts: StatusTexts): SendResult {
 }
 
 /** 408, 429 and 5xx: the service is busy or has a problem, so a new try later can send the message */
-export function isBusy(status: number): boolean {
+function isBusy(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
