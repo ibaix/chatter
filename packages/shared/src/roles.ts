@@ -11,16 +11,17 @@ export type Role = typeof ROLES[number];
 /**
  * read-files: download a program file, and read its text (on the machine or in the upload history).
  * send-files: send files to a machine, and delete files on it.
+ * sync-tools: tell Chatter to read the tool table of a machine now (the Sync button). Chatter also reads it by itself.
  * manage-machines: add, change, and delete machines, and scan the network for them.
  * manage-chatter: add users and change their roles, and change the HTTPS, proxy, and login settings.
  * manage-updates: update Chatter to a new version (Settings > Updates). Chatter stops during the install.
  */
-export const PERMISSIONS = ['read-files', 'send-files', 'manage-machines', 'manage-chatter', 'manage-updates'] as const;
+export const PERMISSIONS = ['read-files', 'send-files', 'sync-tools', 'manage-machines', 'manage-chatter', 'manage-updates'] as const;
 export type Permission = typeof PERMISSIONS[number];
 
 const PERMISSIONS_OF: Record<Role, readonly Permission[]> = {
   viewer: [],
-  operator: ['read-files', 'send-files'],
+  operator: ['read-files', 'send-files', 'sync-tools'],
   admin: PERMISSIONS,
 };
 

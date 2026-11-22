@@ -6,7 +6,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate, type NavigateFun
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchMachineAlerts, type MachineAlert } from '../../api/alerts';
 import { fetchAlertRules } from '../../api/alertRules';
-import { fetchFileTree, fetchUploadEvent, fetchUploadEvents, fetchUploadFiles, uploadMachineFiles } from '../../api/machineFiles';
+import { fetchFileBytes, fetchFileTree, fetchUploadEvent, fetchUploadEvents, fetchUploadFiles, uploadMachineFiles } from '../../api/machineFiles';
 import { fetchValueHistory } from '../../api/history';
 import { fetchMachineReport } from '../../api/reports';
 import { fetchStateTimeline } from '../../api/stateTimeline';
@@ -25,6 +25,7 @@ vi.mock('../../api/reports', () => ({ fetchMachineReport: vi.fn() }));
 vi.mock('../../api/machineFiles', async importOriginal => ({
   ...(await importOriginal<typeof import('../../api/machineFiles')>()),
   fetchFileTree: vi.fn(),
+  fetchFileBytes: vi.fn(),
   fetchUploadFiles: vi.fn(),
   fetchUploadEvents: vi.fn(),
   fetchUploadEvent: vi.fn(),
@@ -119,6 +120,7 @@ describe('MachineDetailPage', () => {
     vi.mocked(fetchAlertRules).mockReset().mockResolvedValue([]);
     vi.mocked(fetchMachineReport).mockReset().mockReturnValue(new Promise(() => {}));
     vi.mocked(fetchFileTree).mockReset().mockResolvedValue([]);
+    vi.mocked(fetchFileBytes).mockReset().mockReturnValue(new Promise(() => {}));
     vi.mocked(fetchUploadFiles).mockReset().mockResolvedValue([]);
     vi.mocked(fetchUploadEvents).mockReset().mockResolvedValue([
       { id: 21, uploaded_at: '2026-11-19T10:00:00.000Z', remote_path: '/', target_name: null },
@@ -433,9 +435,79 @@ describe('MachineDetailPage', () => {
 
       // The dates and the paths of the versions stay for each role
       const versions = await screen.findByRole('list', { name: 'Versions of O2000.nc' });
-      expect(within(versions).getAllByRole('button')).toHaveLength(1);
+      expect(within(versions).getAllByRole('listitem')).toHaveLength(1);
+      expect(within(versions).getByText(/newest/)).toBeInTheDocument();
       expect(screen.queryAllByLabelText('The text of the picked version')).toHaveLength(count);
       expect(fetchUploadEvent).toHaveBeenCalledTimes(count);
+    });
+
+    it('shows the versions to a viewer as plain items, and says why there is no text', async () => {
+      vi.mocked(fetchUploadFiles).mockResolvedValue(SENT_FILES);
+      renderPage({ role: 'viewer', address: '/machine/m1?tab=files' });
+      fireEvent.click(await within(viewSwitch()).findByRole('button', { name: 'Upload history 2' }));
+      fireEvent.click(within(screen.getByRole('cell', { name: 'O2000.nc' }).closest('tr') as HTMLElement).getByRole('button', { name: 'Versions' }));
+
+      const versions = await screen.findByRole('list', { name: 'Versions of O2000.nc' });
+      expect(within(versions).queryAllByRole('button')).toHaveLength(0);
+      expect(versions.querySelector('[aria-pressed]')).toBeNull();
+      expect(screen.getByText('Your role cannot read the text of a program. Ask an admin.')).toBeInTheDocument();
+    });
+
+    it('shows the versions to an operator as buttons, with no line about the role', async () => {
+      vi.mocked(fetchUploadFiles).mockResolvedValue(SENT_FILES);
+      renderPage({ role: 'operator', address: '/machine/m1?tab=files' });
+      fireEvent.click(await within(viewSwitch()).findByRole('button', { name: 'Upload history 2' }));
+      fireEvent.click(within(screen.getByRole('cell', { name: 'O2000.nc' }).closest('tr') as HTMLElement).getByRole('button', { name: 'Versions' }));
+
+      const versions = await screen.findByRole('list', { name: 'Versions of O2000.nc' });
+      expect(within(versions).getByRole('button', { pressed: true })).toHaveTextContent(/newest/);
+      expect(screen.queryByText(/Your role cannot read the text/)).not.toBeInTheDocument();
+    });
+
+    it('shows the text of the picked version to an operator, with Send this version again', async () => {
+      vi.mocked(fetchUploadFiles).mockResolvedValue(SENT_FILES);
+      vi.mocked(fetchUploadEvent).mockResolvedValue({
+        id: 21, uploaded_at: '2026-11-19T10:00:00.000Z', remote_path: '/', target_name: null, file_name: 'O2000.nc', file_content: 'G00 X0',
+      });
+      renderPage({ role: 'operator', address: '/machine/m1?tab=files' });
+      fireEvent.click(await within(viewSwitch()).findByRole('button', { name: 'Upload history 2' }));
+      fireEvent.click(within(screen.getByRole('cell', { name: 'O2000.nc' }).closest('tr') as HTMLElement).getByRole('button', { name: 'Versions' }));
+
+      await waitFor(() => expect(screen.getByLabelText('The text of the picked version')).toHaveTextContent('G00 X0'));
+      expect(fetchUploadEvent).toHaveBeenCalledWith('m1', 21);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send this version again' }));
+
+      // The operator confirms before Chatter sends it
+      expect(await screen.findByText('Send O2000.nc again?')).toBeInTheDocument();
+    });
+
+    it('opens the text of a file on the machine for an operator, with a download link', async () => {
+      vi.mocked(fetchFileTree).mockResolvedValue([{ name: 'O1000.NC', path: '/O1000.NC', type: 'file', size: 6 } as FTPTreeNode]);
+      vi.mocked(fetchFileBytes).mockResolvedValue(new TextEncoder().encode('G00 X0'));
+      renderPage({ role: 'operator', address: '/machine/m1?tab=files' });
+      const row = (await screen.findByRole('cell', { name: 'O1000.NC' })).closest('tr') as HTMLElement;
+      expect(within(row).getByRole('link', { name: 'Download O1000.NC' })).toHaveAttribute('href', expect.stringContaining('/machine/m1/files/download'));
+
+      fireEvent.click(within(row).getByRole('button', { name: 'O1000.NC' }));
+
+      expect(await screen.findByRole('region', { name: 'Text of O1000.NC' })).toHaveTextContent('G00 X0');
+      expect(fetchFileBytes).toHaveBeenCalledWith('m1', '/O1000.NC', expect.any(Number), expect.any(AbortSignal));
+    });
+
+    it.each([
+      ['a viewer', 'viewer' as Role, 1],
+      ['an operator', 'operator' as Role, 0],
+    ])('says once above the files on the machine why %s has no download', async (_who, role, count) => {
+      vi.mocked(fetchFileTree).mockResolvedValue([
+        { name: 'O1000.NC', path: '/O1000.NC', type: 'file', size: 6 } as FTPTreeNode,
+        { name: 'O2000.NC', path: '/O2000.NC', type: 'file', size: 6 } as FTPTreeNode,
+      ]);
+      renderPage({ role, address: '/machine/m1?tab=files' });
+      const table = (await screen.findByRole('cell', { name: 'O1000.NC' })).closest('table') as HTMLElement;
+
+      expect(screen.queryAllByText('Your role cannot read the text of a program. Ask an admin.')).toHaveLength(count);
+      expect(within(table).queryByText(/Your role cannot read/)).not.toBeInTheDocument();
     });
 
     it('shows no Send files button to a viewer', async () => {

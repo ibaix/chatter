@@ -1,4 +1,8 @@
 import Database from 'better-sqlite3';
+import type { Server } from 'node:http';
+import { connect, type AddressInfo } from 'node:net';
+import { once } from 'node:events';
+import { serve } from '@hono/node-server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app.js';
 import { HardwarePoller } from '../polling/poller.js';
@@ -174,6 +178,102 @@ describe('auth routes', () => {
     await setUp();
     const res = await post('/api/auth/password', { currentPassword: ADMIN.password, newPassword: 'second-password' });
     expect(res.status).toBe(401);
+  });
+
+  it('asks for a login before it reads the body of a password change', async () => {
+    await setUp();
+    const res = await app.request('/api/auth/password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: 'this is not JSON',
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  describe('body size', () => {
+    /** Larger than the 64 KB limit of a JSON body */
+    const largePassword = 'x'.repeat(1024 * 1024);
+
+    it('refuses a login body larger than 64 KB, and does not check the password', async () => {
+      await setUp();
+      const res = await post('/api/auth/login', { username: ADMIN.username, password: largePassword });
+
+      expect(res.status).toBe(413);
+      expect(loggedResults()).toEqual([]);
+    });
+
+    it('refuses a valid login with a body larger than 64 KB: no login, no log line and no cookie', async () => {
+      await setUp();
+      const res = await post('/api/auth/login', { ...ADMIN, pad: 'x'.repeat(64 * 1024) });
+
+      expect(res.status).toBe(413);
+      expect(res.headers.get('Set-Cookie')).toBeNull();
+      expect(loggedResults()).toEqual([]);
+    });
+
+    it('logs in with a valid body of about 60 KB', async () => {
+      await setUp();
+      const res = await post('/api/auth/login', { ...ADMIN, pad: 'x'.repeat(60 * 1024) });
+
+      expect(res.status).toBe(200);
+      expect(loggedResults()).toEqual(['admin: logged-in']);
+    });
+
+    it('refuses a login with a large Content-Length before the body comes', async () => {
+      await setUp();
+      const server = serve({ fetch: app.fetch, port: 0 }) as Server;
+      try {
+        await once(server, 'listening');
+        const socket = connect((server.address() as AddressInfo).port, '127.0.0.1');
+        await once(socket, 'connect');
+        socket.write('POST /api/auth/login HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n'
+          + `Content-Length: ${10 * 1024 * 1024}\r\n\r\n{"username":"admin"`);
+        const [firstBytes] = await once(socket, 'data') as [Buffer];
+        socket.destroy();
+
+        expect(firstBytes.toString()).toMatch(/^HTTP\/1\.1 413 /);
+        expect(loggedResults()).toEqual([]);
+      } finally {
+        server.closeAllConnections();
+        server.close();
+      }
+    });
+
+    it('stops a valid login with no length when its body grows larger than 64 KB', async () => {
+      await setUp();
+      const encoder = new TextEncoder();
+      const chunks = [`{"username":"${ADMIN.username}","password":"${ADMIN.password}","pad":"`,
+        ...Array.from({ length: 16 }, () => 'x'.repeat(8 * 1024)), '"}'];
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          const chunk = chunks.shift();
+          if (chunk === undefined) controller.close();
+          else controller.enqueue(encoder.encode(chunk));
+        },
+      });
+      const res = await app.request('/api/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body, duplex: 'half',
+      } as RequestInit);
+
+      expect(res.status).toBe(413);
+      expect(res.headers.get('Set-Cookie')).toBeNull();
+      expect(loggedResults()).toEqual([]);
+    });
+
+    it('stops a body with no length when it grows larger than 64 KB', async () => {
+      const bytes = new TextEncoder().encode(JSON.stringify({ username: ADMIN.username, password: largePassword }));
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      });
+      const res = await app.request('/api/auth/setup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body, duplex: 'half',
+      } as RequestInit);
+
+      expect(res.status).toBe(413);
+      expect(await (await app.request('/api/auth/status')).json()).toMatchObject({ setupNeeded: true });
+    });
   });
 
   it('writes each password try in the login log', async () => {

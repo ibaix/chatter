@@ -6,6 +6,12 @@ import { checkedJson } from './checks.js';
 import { notFound } from './responses.js';
 import { alertRulesSchema, copyAlertRulesSchema, testAlertQuerySchema } from './schemas.js';
 
+/**
+ * The list of a machine can have 50 rules, each with a query of 1000 letters. That is more than the normal JSON limit.
+ * A letter can take more than one byte, so the limit has room for this.
+ */
+const RULES_BODY_LIMIT_BYTES = 512 * 1024;
+
 /** Read, change and copy the alert rules of a machine. Only a role with manage-machines can change them. */
 export function alertRuleRoutes(poller: HardwarePoller, alertRules: AlertRuleService) {
   const canManageMachines = requirePermission('manage-machines');
@@ -18,7 +24,7 @@ export function alertRuleRoutes(poller: HardwarePoller, alertRules: AlertRuleSer
       return c.json({ rules: alertRules.rulesOf(machineId) });
     })
 
-    .put('/machine/:id/alert-rules', canManageMachines, checkedJson(alertRulesSchema), async c => {
+    .put('/machine/:id/alert-rules', canManageMachines, checkedJson(alertRulesSchema, RULES_BODY_LIMIT_BYTES), async c => {
       const machineId = c.req.param('id');
       if (!isKnownMachine(machineId)) return notFound(c);
       const result = await alertRules.saveRules(machineId, c.req.valid('json').rules);

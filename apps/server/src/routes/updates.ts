@@ -5,6 +5,7 @@ import { checkedJson } from './checks.js';
 import { rawFileUpload } from './rawFileUpload.js';
 import { updateSettingsSchema } from './schemas.js';
 import { LIMIT_MESSAGE, UpdateRefusedError, type UpdateService, type UpdatesReport } from '../updates/UpdateService.js';
+import { allowLongUpload } from '../webServerOptions.js';
 
 const [requireRawFile, requireLengthFirst, updateFileSizeLimit] = rawFileUpload('the update file', UPDATE_FILE_LIMIT_BYTES, LIMIT_MESSAGE);
 
@@ -28,7 +29,7 @@ export function updateRoutes(updates: UpdateService) {
   return new Hono<LoggedInEnv>()
     .get('/updates/status', canManageUpdates, async c => c.json(await updates.report()))
 
-    .post('/updates/file', canManageUpdates, requireRawFile, requireLengthFirst, updateFileSizeLimit, async c => {
+    .post('/updates/file', canManageUpdates, allowLongUpload, requireRawFile, requireLengthFirst, updateFileSizeLimit, async c => {
       const body = c.req.raw.body;
       if (!body) return c.json({ error: 'No update file was sent' }, 400);
       const size = Number(c.req.header('Content-Length'));

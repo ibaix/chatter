@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { checkedJson } from '../routes/checks.js';
 import type { Alert, AlertStore } from './AlertStore.js';
@@ -41,8 +40,7 @@ export interface ReceiverOptions {
 export function alertReceiverApp(store: AlertStore, { isKnownMachine, afterSave = () => {}, now = Date.now }: ReceiverOptions) {
   return new Hono().post(
     '/api/v2/alerts',
-    bodyLimit({ maxSize: MAX_BODY_BYTES, onError: c => c.json({ error: 'The body is too large' }, 413) }),
-    checkedJson(sentAlerts),
+    checkedJson(sentAlerts, MAX_BODY_BYTES),
     c => {
       const receivedAt = now();
       const isAboutKnownMachineOrNone = (alert: Alert) => alert.machineId === undefined || isKnownMachine(alert.machineId);

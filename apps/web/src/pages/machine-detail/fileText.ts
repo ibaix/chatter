@@ -1,3 +1,6 @@
+/** Shown to a role without read-files, where the text or the download of a program would be */
+export const CANNOT_READ_FILES_TEXT = 'Your role cannot read the text of a program. Ask an admin.';
+
 /** The biggest file the viewer shows. A bigger file can freeze the page, so the user downloads it instead. */
 export const MAX_VIEW_BYTES = 1_000_000;
 
