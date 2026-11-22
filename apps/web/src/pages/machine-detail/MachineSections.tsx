@@ -25,6 +25,18 @@ function toolTableOf(machine: Machine): { toolTable: ToolTable | undefined; hasP
   return { toolTable: undefined, hasPocketInfo: false };
 }
 
+/** The Tool table tab with its count, or null when the machine has no such tab, and what the tab shows */
+function toolTabOf(machine: Machine) {
+  const { toolTable, hasPocketInfo } = toolTableOf(machine);
+  const toolCount = machine.connected && toolTable ? Object.keys(toolTable).length : 0;
+  // A Brother reads its tool table apart from the state polls, so its tab is there before the first read, with Sync
+  const toolSync = machine.type === 'brother' ? machine.data.toolSync : undefined;
+  const tab: TabItem<SectionId> | null = toolCount > 0 || toolSync !== undefined
+    ? { id: 'tools', label: 'Tool table', ...(toolCount > 0 ? { count: toolCount } : {}) }
+    : null;
+  return { tab, toolSync, toolTable: toolTable ?? {}, hasPocketInfo };
+}
+
 interface MachineSectionsProps {
   machine: Machine;
   /** All machines. The alert rules can be copied to the others. */
@@ -46,17 +58,13 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
   const alertRules = useAlertRules(machine.id);
   // The range of the report stays when the user opens another tab and comes back
   const reportRange = useState(FIRST_REPORT_RANGE);
-  const { toolTable, hasPocketInfo } = toolTableOf(machine);
-  const toolCount = machine.connected && toolTable ? Object.keys(toolTable).length : 0;
-  // A Brother reads its tool table apart from the state polls, so its tab is there before the first read, with Sync
-  const toolSync = machine.type === 'brother' ? machine.data.toolSync : undefined;
-  const hasToolTab = toolCount > 0 || toolSync !== undefined;
+  const tools = toolTabOf(machine);
 
   const tabs: TabItem<SectionId>[] = [
     { id: 'dashboard', label: <>Dashboard<FiringCount count={firingCount} /></> },
     { id: 'report', label: 'Report' },
     { id: 'files', label: 'Files' },
-    ...(hasToolTab ? [{ id: 'tools' as const, label: 'Tool table', ...(toolCount > 0 ? { count: toolCount } : {}) }] : []),
+    ...(tools.tab ? [tools.tab] : []),
     { id: 'settings', label: 'Settings' },
   ];
   // An unknown tab, or a tab that is not there (the tool table goes away when the machine stops sending it), opens the dashboard
@@ -98,9 +106,9 @@ export function MachineSections({ machine, machines, now, onUpdate, onRemove, da
             {shownTab === 'tools' && (
               <ToolTableTab
                 machineId={machine.id}
-                toolSync={toolSync}
-                toolTable={toolTable ?? {}}
-                hasPocketInfo={hasPocketInfo}
+                toolSync={tools.toolSync}
+                toolTable={tools.toolTable}
+                hasPocketInfo={tools.hasPocketInfo}
                 spindleTool={machine.data.toolNumber}
               />
             )}
