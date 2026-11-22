@@ -1,13 +1,13 @@
 import net from 'net';
 import { Readable, Writable } from 'stream';
 import * as ftp from 'basic-ftp';
-// Not in the index of basic-ftp. It opens the data socket exactly as basic-ftp's own PASV and EPSV do.
-import { connectForPassiveTransfer } from 'basic-ftp/dist/transfer.js';
 import { ftpErrorMessage } from './ftpErrorMessage.js';
 import type { FTPConfig, FTPFileInfo, FTPTreeNode, FTPUploadFile, FTPUploadResult } from '../types/index.js';
 
 const DEFAULT_FTP_PORT = 21;
 const DEFAULT_FTP_USER = 'anonymous';
+/** The time that the FTP client waits for the machine. This is also the default of basic-ftp. */
+const DEFAULT_FTP_TIMEOUT_MS = 30_000;
 const DEFAULT_TREE_DEPTH = 2;
 const ROOT_PATH = '/';
 
@@ -206,10 +206,43 @@ function controlConnectionHost(ftpContext: ftp.FTPContext): string {
   return host.replace(/^::ffff:/i, '');
 }
 
+/**
+ * Open the data connection of a basic-ftp transfer, as basic-ftp does for its own PASV and EPSV.
+ * The connection attempt stops after the FTP timeout. When the connection opens, basic-ftp takes it,
+ * and from then on basic-ftp handles its errors and its timeout.
+ */
+function connectDataSocket(ftpContext: ftp.FTPContext, { host, port }: { host: string; port: number }): Promise<void> {
+  // Chatter always connects with "secure: false". This code opens a plain socket, so it must not run over TLS.
+  if (ftpContext.hasTLS) {
+    return Promise.reject(new Error('Chatter does not support FTP over TLS for the PASV data connection'));
+  }
+  return new Promise((resolve, reject) => {
+    const socket = new net.Socket();
+    const onError = (err: Error) => {
+      err.message = `The passive data connection did not open: ${err.message}`;
+      reject(err);
+    };
+    const onTimeout = () => {
+      socket.destroy();
+      reject(new Error(`Timeout: the passive data connection to ${host}:${port} did not open`));
+    };
+    socket.setTimeout(ftpContext.timeout);
+    socket.on('error', onError);
+    socket.on('timeout', onTimeout);
+    socket.connect({ port, host, family: ftpContext.ipFamily }, () => {
+      socket.removeListener('error', onError);
+      socket.removeListener('timeout', onTimeout);
+      // The setter stops the connect timeout and adds the error handlers of basic-ftp
+      ftpContext.dataSocket = socket;
+      resolve();
+    });
+  });
+}
+
 /** The PASV transfer strategy of basic-ftp, with the data connection to the machine host */
 async function enterPassiveModeOnControlHost(ftpContext: ftp.FTPContext): Promise<ftp.FTPResponse> {
   const { host, port, reply } = await requestPassiveAddress(ftpContext);
-  await connectForPassiveTransfer(host, port, ftpContext);
+  await connectDataSocket(ftpContext, { host, port });
   return reply;
 }
 
@@ -245,12 +278,16 @@ export class FTPClient {
   private port: number;
   private user: string;
   private password: string;
+  private readonly timeoutMs: number;
 
-  constructor({ host, port = DEFAULT_FTP_PORT, user = DEFAULT_FTP_USER, password = '' }: FTPConfig) {
+  constructor({
+    host, port = DEFAULT_FTP_PORT, user = DEFAULT_FTP_USER, password = '', timeoutMs = DEFAULT_FTP_TIMEOUT_MS
+  }: FTPConfig) {
     this.host = host;
     this.port = port;
     this.user = user;
     this.password = password;
+    this.timeoutMs = timeoutMs;
   }
 
   /** Change connection settings (for example after a machine config change) */
@@ -366,7 +403,7 @@ export class FTPClient {
     { verbose }: { verbose: boolean },
     work: (client: ftp.Client) => Promise<T>
   ): Promise<T> {
-    const client = new ftp.Client();
+    const client = new ftp.Client(this.timeoutMs);
     useMachineHostForTransfers(client);
     client.ftp.verbose = verbose;
     try {
