@@ -141,10 +141,21 @@ describe('workflow permissions', () => {
   // Each workflow reads only by default. A job that must write gets the permission in its own block.
   interface Workflow {
     permissions?: unknown;
-    jobs: Record<string, { if?: string }>;
+    jobs: Record<string, { if?: string; permissions?: unknown }>;
   }
   const workflowFiles = readdirSync(join(ROOT, '.github/workflows')).filter(file => /\.ya?ml$/.test(file));
   const workflow = (file: string) => parse(read(join('.github/workflows', file))) as Workflow;
+
+  // The scopes that a permissions block can write: "write-all" or each scope with a level other than read or none
+  function writeScopes(permissions: unknown): string[] {
+    if (permissions === undefined || permissions === 'read-all') return [];
+    if (typeof permissions === 'string') return [permissions];
+    if (permissions === null || typeof permissions !== 'object') return [String(permissions)];
+    return Object.entries(permissions as Record<string, string>)
+      .filter(([, level]) => level !== 'read' && level !== 'none')
+      .map(([scope]) => scope)
+      .sort();
+  }
 
   it('finds the workflows', () => {
     expect(workflowFiles).toContain('ci.yml');
@@ -157,14 +168,50 @@ describe('workflow permissions', () => {
     expect(notRead).toEqual([]);
   });
 
+  // Only these jobs can write, each with exactly these scopes. A new job that writes must be added here in review.
+  const writers: Record<string, Record<string, string[]>> = {
+    'card.yml': { card: ['contents'] },
+    'docker.yml': { publish: ['packages'], release: ['contents'], card: ['contents'] },
+    'docs.yml': { deploy: ['id-token', 'pages'] },
+    'ghcr-cleanup.yml': { cleanup: ['packages'] },
+    'release-tags.yml': { tags: ['packages'] },
+  };
+  const allJobs = workflowFiles.flatMap(file => Object.keys(workflow(file).jobs).map(job => [file, job] as const));
+
+  it('finds each allow-listed job in the workflows', () => {
+    const missing = Object.entries(writers).flatMap(([file, jobs]) =>
+      Object.keys(jobs).filter(job => !existsSync(join(ROOT, '.github/workflows', file)) || !workflow(file).jobs[job]).map(job => `${file}/${job}`),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it.each(allJobs)('gives %s (job %s) only the write permissions of the allow-list', (file, job) => {
+    expect(writeScopes(workflow(file).jobs[job].permissions)).toEqual(writers[file]?.[job] ?? []);
+  });
+
+  it.each([
+    [undefined, []],
+    [{}, []],
+    ['read-all', []],
+    [{ contents: 'read', packages: 'none' }, []],
+    ['write-all', ['write-all']],
+    [{ pages: 'write', 'id-token': 'write', contents: 'read' }, ['id-token', 'pages']],
+  ])('reads the write scopes of %j as %j', (permissions, expected) => {
+    expect(writeScopes(permissions)).toEqual(expected);
+  });
+
   // A run by hand from a branch would use the workflow file of that branch, with a token that can change a release
   // or the images. A job with more conditions has the gate first, as "(gate) && (other conditions)".
+  // These workflows can start by hand (workflow_dispatch), so each job of them that writes has the gate.
   const mainOrTag = "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')";
-  it.each([
-    ['card.yml', 'card'],
-    ['ghcr-cleanup.yml', 'cleanup'],
-    ['release-tags.yml', 'tags'],
-  ])('runs %s (job %s) only from main or a release tag', (file, job) => {
+  const gatedFiles = ['card.yml', 'ghcr-cleanup.yml', 'release-tags.yml'];
+  const gatedJobs = gatedFiles.flatMap(file => Object.keys(writers[file] ?? {}).map(job => [file, job] as const));
+
+  it('finds the writing jobs that need the gate', () => {
+    expect(gatedJobs.map(([file]) => file)).toEqual(gatedFiles);
+  });
+
+  it.each(gatedJobs)('runs %s (job %s) only from main or a release tag', (file, job) => {
     const condition = workflow(file).jobs[job]?.if?.replace(/\s+/g, ' ') ?? '';
     const rest = condition.startsWith(`(${mainOrTag}) && `) ? condition.slice(mainOrTag.length + 6) : '';
     expect(condition === mainOrTag || isOneGroup(rest), condition).toBe(true);
