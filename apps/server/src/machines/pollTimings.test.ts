@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { slowestCommands } from '@local-chatter/shared';
 import { captureLog, type CapturedLog } from '../logging/testSupport.js';
 import { PollTimingRecorder, TIMING_SAMPLES, WARN_EVERY_MS } from './pollTimings.js';
 
@@ -55,6 +56,18 @@ describe('PollTimingRecorder', () => {
     for (let i = 0; i < TIMING_SAMPLES; i++) await poll(recorder, clock, { PANEL: 10 });
 
     expect(recorder.snapshot()!.commands.PANEL).toEqual({ lastMs: 10, avgMs: 10, maxMs: 10, samples: TIMING_SAMPLES });
+  });
+
+  it('keeps a command after the end of the poll out of the last poll, and out of its slowest commands', async () => {
+    await poll(recorder, clock, { PANEL: 100, MEM: 200 });
+
+    // A tool read, between two state polls
+    await recorder.time('ATCTL', async () => { clock.advance(900); });
+
+    const timings = recorder.snapshot()!;
+    expect(timings.lastPoll.commands).toEqual({ PANEL: 100, MEM: 200 });
+    expect(slowestCommands(timings, 3).map(({ command }) => command)).toEqual(['MEM', 'PANEL']);
+    expect(timings.commands.ATCTL.lastMs).toBe(900);
   });
 
   it('records the time of a command that fails', async () => {

@@ -86,7 +86,8 @@ export class PollTimingRecorder {
     const totalMs = this.now() - this.pollStart;
     this.polls.add(totalMs);
     this.limitMs = limitMs;
-    this.lastPoll = { at: new Date(this.now()).toISOString(), totalMs, ...this.current };
+    // A copy: a tool read after the poll also records its commands, and they are not part of this poll
+    this.lastPoll = { at: new Date(this.now()).toISOString(), totalMs, commands: { ...this.current.commands } };
     const timings = this.snapshot()!;
 
     log.debug('Poll times', {

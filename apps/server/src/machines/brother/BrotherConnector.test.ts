@@ -430,6 +430,17 @@ describe('Brother poll times in the status', () => {
     expect(status.pollTimings?.poll.samples).toBe(1);
   });
 
+  it('does not show the commands of a tool read in the times of the last poll', async () => {
+    const connector = connectorWithReplies(MOCK_RESPONSES);
+
+    await connector.poll();
+    await connector.toolSyncEnded();
+
+    const timings = connector.getStatus().pollTimings!;
+    expect(Object.keys(timings.lastPoll.commands).sort()).toEqual(['ALARM', 'MEM', 'PANEL', 'PDSP', 'WKCNTR']);
+    expect(timings.commands.ATCTL.samples).toBe(1);
+  });
+
   it('records a poll that fails, so a slow machine shows its times', async () => {
     const { MEM: _mem, ...replies } = MOCK_RESPONSES;
     const connector = connectorWithReplies(replies);
