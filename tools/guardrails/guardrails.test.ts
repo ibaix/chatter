@@ -157,10 +157,36 @@ describe('workflow permissions', () => {
     expect(notRead).toEqual([]);
   });
 
-  // A run by hand from a branch would use the build scripts of that branch, with a token that can change a release
-  it('runs the Pi card job only from main or a release tag', () => {
-    const { card } = workflow('card.yml').jobs;
-    expect(card.if?.replace(/\s+/g, ' ')).toBe("github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')");
+  // A run by hand from a branch would use the workflow file of that branch, with a token that can change a release
+  // or the images. A job with more conditions has the gate first, as "(gate) && (other conditions)".
+  const mainOrTag = "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')";
+  it.each([
+    ['card.yml', 'card'],
+    ['ghcr-cleanup.yml', 'cleanup'],
+    ['release-tags.yml', 'tags'],
+  ])('runs %s (job %s) only from main or a release tag', (file, job) => {
+    const condition = workflow(file).jobs[job]?.if?.replace(/\s+/g, ' ') ?? '';
+    const rest = condition.startsWith(`(${mainOrTag}) && `) ? condition.slice(mainOrTag.length + 6) : '';
+    expect(condition === mainOrTag || isOneGroup(rest), condition).toBe(true);
+  });
+
+  // True for "(a || b)", false for "(a) || (b)": an || after the group would skip the gate.
+  function isOneGroup(text: string) {
+    let depth = 0;
+    for (const [index, char] of [...text].entries()) {
+      depth += char === '(' ? 1 : char === ')' ? -1 : 0;
+      if (depth === 0) return index === text.length - 1 && char === ')';
+    }
+    return false;
+  }
+
+  it.each([
+    ['(a || b)', true],
+    ['(a) || (b)', false],
+    ['a', false],
+    ['', false],
+  ])('reads %j as one group: %s', (text, expected) => {
+    expect(isOneGroup(text)).toBe(expected);
   });
 });
 
