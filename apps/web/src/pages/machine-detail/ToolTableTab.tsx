@@ -1,6 +1,7 @@
 import { cn } from '@toolpath/ui';
 import { useEffect, useState } from 'react';
 import { SYNC_FAILURE_TEXT, ToolSyncError, syncTools, type SyncProblem } from '../../api/toolSync';
+import { useCan } from '../../components/CurrentUser';
 import { Button } from '../../components/ui/Button';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
 import type { ToolInfo, ToolSyncState, ToolTable } from '../../types';
@@ -132,10 +133,12 @@ function ToolSyncBar({ machineId, link, toolSync }: { machineId: string; link: M
   };
 
   const shownError = refusalText ?? state.error;
+  // A Viewer only looks: the server refuses its Sync. It still sees when Chatter read the tools.
+  const canSync = useCan('sync-tools');
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-zinc-800 px-4 py-3 text-zinc-200">
       <span>{running ? 'Syncing…' : state.lastSyncAt ? `Synced ${timeOf(state.lastSyncAt)}` : 'Not synced yet'}</span>
-      <Button size="sm" onClick={() => void sync()} disabled={running}>Sync</Button>
+      {canSync && <Button size="sm" onClick={() => void sync()} disabled={running}>Sync</Button>}
       <span className="text-xs">Chatter reads the tool table when the machine runs no program and the last read is more than 10 minutes old.</span>
       {shownError && !running && <span role="alert" className="w-full text-alarm-soft">{shownError}</span>}
     </div>

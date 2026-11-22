@@ -19,9 +19,11 @@ Browsers that are logged in, and programs whose login worked before, keep workin
 
 ## Roles
 
-Each user that is logged in can see the machines, their history, and the alerts, and can download files.
+Each user that is logged in can see the machines, their history, and the alerts, and the names of the files.
 Some endpoints also need a role. A role that cannot do the action gets `403`:
+- Downloading a file, and reading the text of a sent file, needs **Operator** or **Admin**.
 - Sending and deleting files needs **Operator** or **Admin**.
+- A read of the tool table now (`POST /api/machine/:id/tools/sync`) needs **Operator** or **Admin**.
 - Adding, changing, or removing machines, the network scan, the MTConnect port scan, `/api/focas/*`, `/api/settings/*`, and `/api/updates/*` need **Admin**.
 
 ## Errors

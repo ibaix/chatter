@@ -9,6 +9,7 @@ import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table
 import type { UploadEvent, UploadFile } from '../../types';
 import { formatDateTime } from '../../utils/formatters';
 import { errorMessageOf } from '../../utils/errorMessage';
+import { CANNOT_READ_FILES_TEXT } from './fileText';
 import type { UploadHistory } from './useUploadHistory';
 import type { UploadMessages } from './useUploadMessages';
 
@@ -27,6 +28,8 @@ export function UploadHistoryList({ machineId, machineName, history, messages, o
   const { confirm } = Dialog.useDialog();
   // The server lets only a role that can send files send one again
   const canSendFiles = useCan('send-files');
+  // A viewer sees the names and dates of the versions, but not their text
+  const canReadFiles = useCan('read-files');
   const matchingFiles = filesMatching(history.historyFiles, searchText);
 
   const sendAgain = async (eventId: number) => {
@@ -83,7 +86,14 @@ export function UploadHistoryList({ machineId, machineName, history, messages, o
         />
       )}
       {selectedFile && (
-        <VersionsBox key={selectedFile.id} machineId={machineId} file={selectedFile} events={history.selectedEvents} onSendAgain={canSendFiles ? sendAgain : undefined} />
+        <VersionsBox
+          key={selectedFile.id}
+          machineId={machineId}
+          file={selectedFile}
+          events={history.selectedEvents}
+          showText={canReadFiles}
+          onSendAgain={canSendFiles ? sendAgain : undefined}
+        />
       )}
     </>
   );
@@ -165,16 +175,18 @@ interface VersionsBoxProps {
   machineId: string;
   file: UploadFile;
   events: UploadEvent[] | undefined;
+  /** False when the user may not read the text of a file. Then the box shows only the dates and paths. */
+  showText: boolean;
   /** Not there when the user may not send files */
   onSendAgain?: (eventId: number) => void;
 }
 
 /** The versions of one file, newest first, and the text of the picked version. Give it a new key for each file. */
-function VersionsBox({ machineId, file, events, onSendAgain }: VersionsBoxProps) {
+function VersionsBox({ machineId, file, events, showText, onSendAgain }: VersionsBoxProps) {
   const [pickedId, setPickedId] = useState<number | null>(null);
   // Until the user picks a version, the newest one is shown
   const shownId = pickedId ?? events?.[0]?.id ?? null;
-  const shownVersion = useUploadEventDetail(machineId, shownId);
+  const shownVersion = useUploadEventDetail(machineId, showText ? shownId : null);
 
   if (!events) return <p className="m-0 px-4 pb-4 text-zinc-300">Loading the versions…</p>;
 
@@ -182,6 +194,9 @@ function VersionsBox({ machineId, file, events, onSendAgain }: VersionsBoxProps)
     <div className="mx-4 mb-4 flex flex-wrap overflow-hidden rounded-[0.625rem] border border-zinc-800">
       <ol aria-label={`Versions of ${file.file_name}`} className="m-0 flex flex-[1_1_16.25rem] list-none flex-col gap-0.5 border-r border-zinc-800 p-2">
         {events.map((event, index) => {
+          const label = <VersionLabel file={file} event={event} isNewest={index === 0} />;
+          // Without the text, there is nothing to pick: the versions are plain items
+          if (!showText) return <li key={event.id} className="flex flex-col gap-0.5 px-3 py-2.5 text-zinc-50">{label}</li>;
           const isShown = event.id === shownId;
           return (
             <li key={event.id}>
@@ -194,30 +209,42 @@ function VersionsBox({ machineId, file, events, onSendAgain }: VersionsBoxProps)
                   isShown ? 'bg-zinc-800' : 'bg-transparent hover:bg-zinc-800/60',
                 )}
               >
-                <span className="font-semibold">{formatDateTime(event.uploaded_at)}</span>
-                <span className="text-xs text-zinc-300">
-                  {event.target_name && event.target_name !== file.file_name ? `As ${event.target_name} · ` : ''}
-                  {event.remote_path}
-                  {index === 0 ? ' · newest' : ''}
-                </span>
+                {label}
               </button>
             </li>
           );
         })}
       </ol>
-      <div className="flex min-w-0 flex-[2_1_20rem] flex-col bg-zinc-950">
-        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-2">
-          <span className="text-xs text-zinc-300">The text of this version</span>
-          {shownId !== null && onSendAgain && <Button size="sm" onClick={() => onSendAgain(shownId)}>Send this version again</Button>}
+      {!showText && <p className="m-0 flex-[2_1_20rem] p-4 text-zinc-300">{CANNOT_READ_FILES_TEXT}</p>}
+      {showText && (
+        <div className="flex min-w-0 flex-[2_1_20rem] flex-col bg-zinc-950">
+          <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-4 py-2">
+            <span className="text-xs text-zinc-300">The text of this version</span>
+            {shownId !== null && onSendAgain && <Button size="sm" onClick={() => onSendAgain(shownId)}>Send this version again</Button>}
+          </div>
+          <pre
+            aria-label="The text of the picked version"
+            className="m-0 max-h-80 overflow-auto p-4 font-mono text-[0.8125rem] leading-relaxed text-zinc-100"
+          >
+            {versionText(shownVersion)}
+          </pre>
         </div>
-        <pre
-          aria-label="The text of the picked version"
-          className="m-0 max-h-80 overflow-auto p-4 font-mono text-[0.8125rem] leading-relaxed text-zinc-100"
-        >
-          {versionText(shownVersion)}
-        </pre>
-      </div>
+      )}
     </div>
+  );
+}
+
+/** The date and the path of one version */
+function VersionLabel({ file, event, isNewest }: { file: UploadFile; event: UploadEvent; isNewest: boolean }) {
+  return (
+    <>
+      <span className="font-semibold">{formatDateTime(event.uploaded_at)}</span>
+      <span className="text-xs text-zinc-300">
+        {event.target_name && event.target_name !== file.file_name ? `As ${event.target_name} · ` : ''}
+        {event.remote_path}
+        {isNewest ? ' · newest' : ''}
+      </span>
+    </>
   );
 }
 

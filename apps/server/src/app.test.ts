@@ -1380,4 +1380,84 @@ describe('API Routes', () => {
       expect(log.text('error')).toBe('');
     });
   });
+
+  describe('who may read the content of a program', () => {
+    const roleCookies: Record<'viewer' | 'operator' | 'admin', string> = { viewer: '', operator: '', admin: '' };
+
+    beforeAll(async () => {
+      roleCookies.admin = cookie;
+      for (const role of ['viewer', 'operator'] as const) {
+        const login = { username: role, password: 'test-password' };
+        await accounts.add({ ...login, role });
+        roleCookies[role] = `${SESSION_COOKIE}=${await auth.logIn(login, { userAgent: 'test browser', address: '127.0.0.1' })}`;
+      }
+    });
+
+    /** A machine whose connector gives one file in its tree and the text "G00 X0" for a download */
+    async function machineWithFile(): Promise<string> {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const connector = poller.getConnector(machine.id)!;
+      vi.spyOn(connector, 'getFileTree').mockResolvedValue([{ name: 'O1000.NC', path: '/PRG/O1000.NC', type: 'file', size: 6 }] as never);
+      vi.spyOn(connector, 'downloadFile').mockImplementation(async (_path, output) => { output.write('G00 X0'); });
+      vi.mocked(getUploadEventById).mockResolvedValue({ id: 1, file_name: 'O1000.NC', file_content: 'G00 X0' } as never);
+      return machine.id;
+    }
+
+    const contentPaths = (id: string) => [
+      `/api/machine/${id}/files/download?path=/PRG/O1000.NC`,
+      `/api/machine/${id}/uploads/events/1`,
+    ];
+    const listPaths = (id: string) => [
+      `/api/machine/${id}/files?path=/PRG`,
+      `/api/machine/${id}/uploads`,
+      `/api/machine/${id}/uploads/1/events`,
+    ];
+
+    const getAs = (role: keyof typeof roleCookies, path: string) => app.request(path, { headers: { Cookie: roleCookies[role] } });
+    /** The header of a program that logs in as the Viewer, with no cookie */
+    const basicViewer = { Authorization: `Basic ${Buffer.from('viewer:test-password').toString('base64')}` };
+
+    it('refuses the content of a program to a Viewer', async () => {
+      const id = await machineWithFile();
+      for (const path of contentPaths(id)) {
+        const res = await getAs('viewer', path);
+        expect(res.status, path).toBe(403);
+        expect(await res.text(), path).not.toContain('G00 X0');
+      }
+      expect(poller.getConnector(id)!.downloadFile).not.toHaveBeenCalled();
+      expect(getUploadEventById).not.toHaveBeenCalled();
+    });
+
+    it.each(['operator', 'admin'] as const)('gives the content of a program to an %s', async role => {
+      const id = await machineWithFile();
+      for (const path of contentPaths(id)) {
+        const res = await getAs(role, path);
+        expect(res.status, path).toBe(200);
+        expect(await res.text(), path).toContain('G00 X0');
+      }
+    });
+
+    it.each(['viewer', 'operator', 'admin'] as const)('gives the program names and dates to a %s', async role => {
+      const id = await machineWithFile();
+      for (const path of listPaths(id)) {
+        expect((await getAs(role, path)).status, path).toBe(200);
+      }
+    });
+
+    // A program logs in with HTTP Basic on each request. The role of its user applies the same as for a browser.
+    it('refuses the content of a program to a Viewer that logs in with HTTP Basic, but gives the names', async () => {
+      const id = await machineWithFile();
+      const getAsBasicViewer = (path: string) => app.request(path, { headers: basicViewer });
+      for (const path of contentPaths(id)) {
+        const res = await getAsBasicViewer(path);
+        expect(res.status, path).toBe(403);
+        expect(await res.text(), path).not.toContain('G00 X0');
+      }
+      for (const path of listPaths(id)) {
+        expect((await getAsBasicViewer(path)).status, path).toBe(200);
+      }
+      expect(poller.getConnector(id)!.downloadFile).not.toHaveBeenCalled();
+      expect(getUploadEventById).not.toHaveBeenCalled();
+    });
+  });
 });
