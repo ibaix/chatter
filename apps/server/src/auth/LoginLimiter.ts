@@ -4,11 +4,14 @@ import { createLogger } from '../logging/logger.js';
 const log = createLogger('auth');
 
 /**
- * Slows down password guessing. It keeps two counts of the password tries:
+ * Slows down password guessing. It keeps three counts of the password tries:
  * - For each address and username. After 10 tries, that address must wait before it can try that user again.
  *   The other users of a shared address (NAT, a proxy, Docker Desktop) can still log in.
  * - For each username, from all addresses. After 30 tries, nobody can try that user until the lock ends.
  *   This stops a guess of one password from many computers.
+ * - For each known device: a browser with a valid device cookie for the user (see deviceCookie.ts).
+ *   Its tries count only here, and the two counts above do not stop it. After 10 tries, that browser must wait.
+ *   So a person on the network who locks a user cannot lock that user out of their own browser.
  *
  * Each try counts before the password check, so tries sent at the same time cannot all get past the limit.
  * A good password removes the count of that address and that username, and takes its own try back off the count of the username.
@@ -25,6 +28,8 @@ export const MAX_FAILURES = 10;
  * of programs still work during the lock, and an admin can unlock the user.
  */
 export const MAX_USER_FAILURES = 30;
+/** After this many wrong passwords from one known device, that device must wait. A stolen cookie gives no more guesses than this. */
+export const MAX_DEVICE_FAILURES = 10;
 /** How long the lock lasts, from the first wrong password */
 export const LOCK_MINUTES = 15;
 const WINDOW_MS = LOCK_MINUTES * 60 * 1000;
@@ -149,16 +154,23 @@ class FailureCounts<Entry extends Failures> {
 /** One key for each address group and username. JSON keeps the two parts apart, whatever text they have. */
 const addressKey = (address: string, username: string) => JSON.stringify([addressGroup(address), normalUsername(username)]);
 
+/**
+ * Each method takes `device`: the device ID of a valid device cookie for this username, or undefined.
+ * With a device, only the count of that device is used.
+ */
 export class LoginLimiter {
   private readonly byAddress: FailureCounts<AddressFailures>;
   private readonly byUser: FailureCounts<UserFailures>;
+  private readonly byDevice: FailureCounts<UserFailures>;
 
   constructor(now: () => number = Date.now) {
     this.byAddress = new FailureCounts(now, MAX_FAILURES);
     this.byUser = new FailureCounts(now, MAX_USER_FAILURES);
+    this.byDevice = new FailureCounts(now, MAX_DEVICE_FAILURES);
   }
 
-  isBlocked(address: string, username: string): boolean {
+  isBlocked(address: string, username: string, device?: string): boolean {
+    if (device !== undefined) return this.byDevice.isLocked(device);
     return this.byAddress.isLocked(addressKey(address, username)) || this.byUser.isLocked(normalUsername(username));
   }
 
@@ -166,7 +178,8 @@ export class LoginLimiter {
    * Call it for each try that isBlocked() stopped.
    * Returns true only for the first one of each lock, so a computer that keeps trying cannot fill the login log.
    */
-  isFirstBlockedTry(address: string, username: string): boolean {
+  isFirstBlockedTry(address: string, username: string, device?: string): boolean {
+    if (device !== undefined) return this.byDevice.isFirstBlockedTry(device);
     const forAddress = this.byAddress.isFirstBlockedTry(addressKey(address, username));
     const forUser = this.byUser.isFirstBlockedTry(normalUsername(username));
     return forAddress || forUser;
@@ -177,8 +190,12 @@ export class LoginLimiter {
    * so many tries sent at the same time cannot all get past isBlocked().
    * A good password then takes its try back with recordSuccess().
    */
-  recordAttempt(address: string, username: string): void {
+  recordAttempt(address: string, username: string, device?: string): void {
     const user = normalUsername(username);
+    if (device !== undefined) {
+      this.byDevice.add(device, { username: user });
+      return;
+    }
     const group = addressGroup(address);
     this.byAddress.add(addressKey(address, username), { address: group, username: user });
     const count = this.byUser.add(user, { username: user });
@@ -190,7 +207,11 @@ export class LoginLimiter {
    * Forget the tries of this address for this user only.
    * The count of the user on all addresses loses only this good try, so it keeps the wrong passwords from other addresses.
    */
-  recordSuccess(address: string, username: string): void {
+  recordSuccess(address: string, username: string, device?: string): void {
+    if (device !== undefined) {
+      this.byDevice.delete(device);
+      return;
+    }
     this.byAddress.delete(addressKey(address, username));
     this.byUser.undo(normalUsername(username));
   }
@@ -211,8 +232,10 @@ export class LoginLimiter {
     this.byAddress.deleteWhere(entry => entry.address === group);
   }
 
-  /** Let each address try this user again now */
+  /** Let each address and each known device try this user again now */
   unlockUser(username: string): void {
-    this.byUser.delete(normalUsername(username));
+    const user = normalUsername(username);
+    this.byUser.delete(user);
+    this.byDevice.deleteWhere(entry => entry.username === user);
   }
 }
