@@ -45,6 +45,46 @@ function closeServer(server: net.Server): Promise<void> {
   return new Promise(resolve => server.close(() => resolve()));
 }
 
+/** Some computers and CI runners have no IPv6 loopback. Then the tests that need ::1 are skipped. */
+async function canListenOn(host: string): Promise<boolean> {
+  const server = net.createServer();
+  try {
+    await listen(server, 0, host);
+    await closeServer(server);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const hasIpv6Loopback = await canListenOn(CONTROL_HOST);
+
+const SAME_PORT_TRIES = 10;
+
+function isAddressInUse(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException).code === 'EADDRINUSE';
+}
+
+/**
+ * Listen with `first` on a free port, then with `second` on the same port at another host.
+ * Another program can use that port at the second host, so try again with a new port.
+ */
+async function listenOnSamePort(
+  first: { server: net.Server; host: string },
+  second: { server: net.Server; host: string }
+): Promise<number> {
+  for (let attempt = 1; ; attempt += 1) {
+    const port = await listen(first.server, 0, first.host);
+    try {
+      await listen(second.server, port, second.host);
+      return port;
+    } catch (err) {
+      await closeServer(first.server);
+      if (!isAddressInUse(err) || attempt >= SAME_PORT_TRIES) throw err;
+    }
+  }
+}
+
 function readAll(socket: net.Socket): Promise<string> {
   const chunks: Buffer[] = [];
   socket.on('data', chunk => chunks.push(chunk));
@@ -117,14 +157,14 @@ async function startFakeMachine({
     if (waiter) waiter(socket);
     else dataSockets.push(socket);
   });
-  const dataPort = await listen(dataServer, 0, controlHost);
-
   const decoyServer = net.createServer(socket => {
     machine.decoyConnections += 1;
     socket.on('error', () => undefined);
     socket.end();
   });
-  if (pasvReplyHost === PASV_REPLY_HOST) await listen(decoyServer, dataPort, pasvReplyHost);
+  const dataPort = pasvReplyHost === PASV_REPLY_HOST
+    ? await listenOnSamePort({ server: dataServer, host: controlHost }, { server: decoyServer, host: pasvReplyHost })
+    : await listen(dataServer, 0, controlHost);
 
   const address = `${pasvReplyHost.replaceAll('.', ',')},${Math.floor(dataPort / 256)},${dataPort % 256}`;
   const pasvReply = pasvReplyFor?.(dataPort) ?? `227 Entering Passive Mode ${bareAddress ? address : `(${address})`}`;
@@ -187,8 +227,8 @@ function collectText(stream: PassThrough): () => string {
   return () => Buffer.concat(chunks).toString();
 }
 
-describe('FTPClient data connection with a PASV reply that names another host', () => {
-  let machine: FakeMachine;
+describe.skipIf(!hasIpv6Loopback)('FTPClient data connection with a PASV reply that names another host', () => {
+  let machine: FakeMachine | undefined;
   let ftpClient: FTPClient;
 
   beforeEach(async () => {
@@ -198,7 +238,8 @@ describe('FTPClient data connection with a PASV reply that names another host', 
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await machine.close();
+    await machine?.close();
+    machine = undefined;
   });
 
   it('downloads over a data connection to the machine host, not to the host of the reply', async () => {
@@ -207,24 +248,24 @@ describe('FTPClient data connection with a PASV reply that names another host', 
 
     await ftpClient.downloadFile('O1000', destination);
 
-    expect(machine.decoyConnections).toBe(0);
-    expect(machine.dataConnections).toBe(1);
+    expect(machine?.decoyConnections).toBe(0);
+    expect(machine?.dataConnections).toBe(1);
     expect(text()).toBe(PROGRAM_TEXT);
   });
 
   it('reads the file tree over a data connection to the machine host, not to the host of the reply', async () => {
     const tree = await ftpClient.getFileTree('/', 1);
 
-    expect(machine.decoyConnections).toBe(0);
-    expect(machine.dataConnections).toBe(1);
+    expect(machine?.decoyConnections).toBe(0);
+    expect(machine?.dataConnections).toBe(1);
     expect(tree.map(node => node.name)).toEqual(['O1000', 'O2000']);
   });
 
   it('lists a folder through basic-ftp over a data connection to the machine host only', async () => {
     const files = await ftpClient.listFiles('/');
 
-    expect(machine.decoyConnections).toBe(0);
-    expect(machine.dataConnections).toBe(1);
+    expect(machine?.decoyConnections).toBe(0);
+    expect(machine?.dataConnections).toBe(1);
     expect(files.map(file => file.name)).toEqual(['O1000', 'O2000']);
   });
 
@@ -235,8 +276,8 @@ describe('FTPClient data connection with a PASV reply that names another host', 
 
     await expect(ftpClient.downloadFile('O1000', new PassThrough())).rejects.toThrow('FTP download error');
 
-    expect(machine.decoyConnections).toBe(0);
-    expect(machine.dataConnections).toBe(0);
+    expect(machine?.decoyConnections).toBe(0);
+    expect(machine?.dataConnections).toBe(0);
   });
 });
 
