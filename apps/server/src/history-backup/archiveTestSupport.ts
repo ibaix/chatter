@@ -26,8 +26,8 @@ export async function unpack(archive: Uint8Array): Promise<Map<string, Buffer>> 
   return entries;
 }
 
-/** For tests: a .tar.gz of the entries. Texts are written as they are, so a test can make a broken file. */
-export async function pack(entries: Map<string, Buffer | string>): Promise<Buffer> {
+/** For tests: a .tar.gz of the entries. Texts are written as they are, so a test can make a broken file. A name can come two times. */
+export async function pack(entries: Iterable<[string, Buffer | string]>): Promise<Buffer> {
   // tarBytes reads binary parts from files
   const folder = mkdtempSync(path.join(os.tmpdir(), 'pack-'));
   try {

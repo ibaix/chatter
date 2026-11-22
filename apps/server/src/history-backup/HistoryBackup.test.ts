@@ -80,6 +80,12 @@ function endlessExport(victoria: FakeVictoria) {
 }
 
 const HOUR = 3_600_000;
+
+/** Many random values, so the parts are much larger than the buffers of the streams */
+function addManyValues(victoria: FakeVictoria, machine: BackupMachine): void {
+  const speed = { __name__: 'chatter_spindle_speed', machine: machine.id, type: machine.type };
+  for (let index = 0; index < 200_000; index += 1) victoria.add(speed, NOW - 4 * HOUR + index * 10, Math.random());
+}
 const MINUTE = 60_000;
 const NOW = Date.UTC(2026, 10, 21, 12);
 const source: BackupMachine = { id: 'brother_1', name: 'Speedio #1', type: 'brother' };
@@ -139,6 +145,8 @@ describe('HistoryBackup', () => {
   async function refusalOf(archive: Buffer, machine = target): Promise<BackupRefusedError> {
     const error = await receive(archive, machine).then(() => null, (thrown: unknown) => thrown);
     expect(error).toBeInstanceOf(BackupRefusedError);
+    expect(filesLeft()).toEqual([]);
+    expect(victoria.importRequests).toBe(0);
     return error as BackupRefusedError;
   }
 
@@ -228,6 +236,23 @@ describe('HistoryBackup', () => {
       await backups.prepareBackup(source, ALL, 'admin');
     });
 
+    it('gives the download only for the machine of the backup', async () => {
+      const prepared = await backups.prepareBackup(source, ALL, 'admin');
+      expect(() => backups.download(prepared.id, target.id, 'admin')).toThrow(expect.objectContaining({ status: 404 }));
+      await new Response(backups.download(prepared.id, source.id, 'admin').stream).arrayBuffer();
+    });
+
+    it('closes each file that the download read when the browser stops it', async () => {
+      addManyValues(victoria, source);
+      const prepared = await backups.prepareBackup(source, ALL, 'admin');
+      fsHooks.readStreams.length = 0;
+      const reader = backups.download(prepared.id, source.id, 'admin').stream.getReader();
+      await reader.read();
+      await vi.waitFor(() => expect(fsHooks.readStreams.length).toBeGreaterThan(0));
+      await reader.cancel();
+      await vi.waitFor(() => expect(fsHooks.readStreams.every(({ stream }) => stream.destroyed)).toBe(true));
+    });
+
     it('deletes its files when the browser stops the download', async () => {
       const prepared = await backups.prepareBackup(source, ALL, 'admin');
       const reader = backups.download(prepared.id, source.id, 'admin').stream.getReader();
@@ -279,9 +304,7 @@ describe('HistoryBackup', () => {
     });
 
     it('reads the parts for the download only when the browser takes the bytes', async () => {
-      // Many random values, so the parts are much larger than the buffers of the streams
-      const speed = { __name__: 'chatter_spindle_speed', machine: source.id, type: 'brother' };
-      for (let index = 0; index < 200_000; index += 1) victoria.add(speed, NOW - 4 * HOUR + index * 10, Math.random());
+      addManyValues(victoria, source);
       const prepared = await backups.prepareBackup(source, ALL, 'admin');
       fsHooks.readStreams.length = 0;
       const reader = backups.download(prepared.id, source.id, 'admin').stream.getReader();
@@ -502,6 +525,75 @@ describe('HistoryBackup', () => {
       expect(victoria.importRequests).toBe(0);
     });
 
+    it('refuses an entry that comes two times', async () => {
+      const entries = await unpack(await backUp());
+      const archive = await pack([...entries, ['alert-rules.json', entries.get('alert-rules.json')!]]);
+      expect(await refusalOf(archive)).toMatchObject({ status: 400, message: expect.stringMatching(/alert-rules.json two times/) });
+    });
+
+    it('refuses a manifest.json larger than 64 KB, and an alert-rules.json larger than 1 MB, also when they are correct JSON', async () => {
+      const entries = await unpack(await backUp());
+      const largeManifest = new Map(entries);
+      largeManifest.set('manifest.json', Buffer.from(`${entries.get('manifest.json')!.toString()}${' '.repeat(64 * 1024)}`));
+      expect(await refusalOf(await pack(largeManifest))).toMatchObject({ status: 400, message: expect.stringMatching(/manifest.json of the file is too large/) });
+
+      const largeRules = await changeArchive(await backUp(), files => {
+        files.set('alert-rules.json', Buffer.from(`${files.get('alert-rules.json')!.toString()}${' '.repeat(1024 * 1024)}`));
+      });
+      expect(await refusalOf(largeRules)).toMatchObject({ status: 400, message: expect.stringMatching(/alert-rules.json of the file is too large/) });
+    });
+
+    it('refuses a file whose entries are larger than the limit together', async () => {
+      const archive = await changeArchive(await backUp(), entries => {
+        entries.set('history/raw.jsonl.gz', Buffer.alloc(200_000));
+        entries.set('history/averages.jsonl.gz', Buffer.alloc(200_000));
+      });
+      const limit = ARCHIVE_LIMITS.archiveBytes;
+      ARCHIVE_LIMITS.archiveBytes = 300_000;
+      try {
+        expect((await refusalOf(archive)).status).toBe(413);
+      } finally {
+        ARCHIVE_LIMITS.archiveBytes = limit;
+      }
+    });
+
+    it('refuses a state period that starts in the future', async () => {
+      const archive = await changeArchive(await backUp(), (entries, manifest) => {
+        const lines = linesOf(entries.get('state-periods.jsonl.gz')!);
+        lines.push(JSON.stringify({ kind: 'program', value: 'O3000', start: NOW + 2 * HOUR, end: NOW + 3 * HOUR }));
+        entries.set('state-periods.jsonl.gz', partOf(lines));
+        manifest.parts['state-periods.jsonl.gz']!.count += 1;
+      });
+      expect(await refusalOf(archive)).toMatchObject({ status: 400, message: expect.stringMatching(/state period with a time in the future/) });
+    });
+
+    it('refuses alert rules that are not JSON, or not as many as the manifest tells', async () => {
+      const notJson = await changeArchive(await backUp(), entries => {
+        entries.set('alert-rules.json', Buffer.from('{'));
+      });
+      expect(await refusalOf(notJson)).toMatchObject({ status: 400, message: expect.stringMatching(/alert rules of the file are not JSON/) });
+      const otherCount = await changeArchive(await backUp(), (_entries, manifest) => {
+        manifest.parts['alert-rules.json']!.count = 2;
+      });
+      expect(await refusalOf(otherCount)).toMatchObject({ status: 400, message: expect.stringMatching(/alert-rules.json part of the file does not have the count/) });
+    });
+
+    it('refuses a .tar.gz that ends too soon', async () => {
+      const archive = await backUp();
+      const error = await refusalOf(archive.subarray(0, archive.length - 200));
+      expect(error).toMatchObject({ status: 400, message: expect.stringMatching(/not a .tar.gz|not a correct history backup/) });
+    });
+
+    it('stops the read of a part at the first line more than the count of the manifest', async () => {
+      // Without the check during the read, the period in the future at the end gives another message
+      const archive = await changeArchive(await backUp(), entries => {
+        const lines = linesOf(entries.get('state-periods.jsonl.gz')!);
+        lines.push(lines[0], JSON.stringify({ kind: 'program', value: 'O3000', start: NOW + 2 * HOUR, end: NOW + 3 * HOUR }));
+        entries.set('state-periods.jsonl.gz', partOf(lines));
+      });
+      expect((await refusalOf(archive)).message).toMatch(/count of its manifest/);
+    });
+
     it('refuses a count that is not the one in the manifest', async () => {
       const archive = await changeArchive(await backUp(), (_entries, manifest) => {
         manifest.parts['state-periods.jsonl.gz']!.count = 1;
@@ -615,6 +707,51 @@ describe('HistoryBackup', () => {
       expect(filesLeft()).toEqual([]);
     });
 
+    it('restores a file only into the machine that it was sent for', async () => {
+      const preview = await receive(await backUp());
+      await expect(backups.restore(preview.id, source, { alertRules: false }, 'admin')).rejects.toMatchObject({ status: 404 });
+      expect(victoria.importRequests).toBe(0);
+      await backups.restore(preview.id, target, { alertRules: false }, 'admin');
+    });
+
+    it('publishes the alert rules to vmalert once after a restore with rules, and not after a restore without them', async () => {
+      const archive = await backUp();
+      const publish = vi.spyOn(rules, 'publish');
+      await backups.restore((await receive(archive)).id, target, { alertRules: false }, 'admin');
+      expect(publish).not.toHaveBeenCalled();
+      await backups.restore((await receive(archive)).id, target, { alertRules: true }, 'admin');
+      expect(publish).toHaveBeenCalledOnce();
+    });
+
+    it('backs up and restores more periods than one page of the database', async () => {
+      const many = 5000 + 1001;
+      const start = NOW - 10 * HOUR;
+      for (let index = 0; index < many; index += 1) {
+        periods.open(source.id, 'tool', `T${index}`, start + index * 1000);
+        periods.close(source.id, 'tool', start + index * 1000 + 500);
+      }
+      const archive = await backUp();
+      const preview = await receive(archive);
+      expect(preview.counts.periods).toBe(many + 2);
+      expect(await backups.restore(preview.id, target, { alertRules: false }, 'admin')).toMatchObject({ periodsAdded: many + 2, periodsKnown: 0 });
+      expect(periods.read({ machineId: target.id, from: 0, to: NOW, kind: 'tool', limit: 10_000 })).toHaveLength(many);
+    });
+
+    it('restores no period and no rule when the rules cannot be written, and can try again', async () => {
+      const preview = await receive(await backUp());
+      const replace = rules.replaceWithoutPublish.bind(rules);
+      rules.replaceWithoutPublish = () => {
+        throw new Error('The database is locked');
+      };
+      const publish = vi.spyOn(rules, 'publish');
+      await expect(backups.restore(preview.id, target, { alertRules: true }, 'admin')).rejects.toThrow('locked');
+      expect(periods.read({ machineId: target.id, from: 0, to: NOW, limit: 10 })).toEqual([]);
+      expect(rules.rulesOf(target.id)).toEqual([]);
+      expect(publish).not.toHaveBeenCalled();
+      rules.replaceWithoutPublish = replace;
+      expect(await backups.restore(preview.id, target, { alertRules: true }, 'admin')).toMatchObject({ periodsAdded: 2, alertRules: 1 });
+    });
+
     it('keeps one file at a time: a new upload replaces the last one', async () => {
       const archive = await backUp();
       const first = await receive(archive);
@@ -664,6 +801,49 @@ describe('HistoryBackup', () => {
       vi.advanceTimersByTime(31 * 60_000);
       await vi.waitFor(() => expect(filesLeft()).toEqual([]));
       await expect(backups.restore(received.id, target, { alertRules: false }, 'admin')).rejects.toMatchObject({ status: 404 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the file of a restore that runs longer than 30 minutes', async () => {
+    const archive = await backUp();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const preview = await receive(archive);
+      const held = holdImports(victoria);
+      const running = backups.restore(preview.id, target, { alertRules: false }, 'admin');
+      await held.started;
+      vi.advanceTimersByTime(31 * 60_000);
+      vi.useRealTimers();
+      // Time for a deletion of the folder, if the timer of the file was still on
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(filesLeft()).toHaveLength(1);
+      held.release();
+      expect(await running).toMatchObject({ samples: 14400 + AVERAGES, periodsAdded: 2 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('after a failed restore, keeps the file for 30 minutes for another try, then deletes it', async () => {
+    const archive = await backUp();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const preview = await receive(archive);
+      const importLines = victoria.importLines.bind(victoria);
+      victoria.importLines = async () => {
+        throw new Error('VictoriaMetrics answered 503');
+      };
+      await expect(backups.restore(preview.id, target, { alertRules: false }, 'admin')).rejects.toThrow('503');
+      victoria.importLines = importLines;
+      vi.advanceTimersByTime(29 * 60_000);
+      expect(filesLeft()).toHaveLength(1);
+      vi.advanceTimersByTime(2 * 60_000);
+      await vi.waitFor(() => expect(filesLeft()).toEqual([]));
+      await expect(backups.restore(preview.id, target, { alertRules: false }, 'admin')).rejects.toMatchObject({ status: 404 });
     } finally {
       vi.useRealTimers();
     }
