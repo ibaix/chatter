@@ -79,7 +79,8 @@ describe('known device cookie', () => {
     expect(line).toContain(`Max-Age=${ONE_YEAR_SECONDS}`);
     expect(line).not.toContain('Secure');
     expect(line).not.toContain(ADMIN.password);
-    expect(setCookieLine(res, SESSION_COOKIE)).toBeDefined();
+    // The session cookie stays a separate cookie for the whole site
+    expect(setCookieLine(res, SESSION_COOKIE)).toContain('Path=/;');
   });
 
   it('makes the device cookie HTTPS-only when the browser used HTTPS', async () => {
@@ -94,10 +95,14 @@ describe('known device cookie', () => {
 
   it('gives a device cookie also to the first admin at setup', async () => {
     const parts = authParts();
-    app = createApp({ poller: new HardwarePoller(new Database(':memory:')), auth: parts.auth, accounts: parts.accounts, history: noHistory() });
-    const res = await send(ADMIN_COMPUTER, '/api/auth/setup', ADMIN);
+    app = createApp({
+      poller: new HardwarePoller(new Database(':memory:')), auth: parts.auth, accounts: parts.accounts, history: noHistory(),
+      proxySettings: ProxySettings.inMemory(PROXY),
+    });
+    const cookie = deviceCookie(await send(ADMIN_COMPUTER, '/api/auth/setup', ADMIN));
+    await lockUser();
 
-    expect(setCookieLine(res, DEVICE_COOKIE)).toBeDefined();
+    expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie })).status).toBe(200);
   });
 
   it('lets a known device log in while the user is locked on all addresses', async () => {
