@@ -1123,6 +1123,8 @@ describe('API Routes', () => {
   describe('control characters in a path on the machine', () => {
     const CONTROL_CHARACTER_ERROR = 'A path or a file name on the machine cannot have a line break or another control character';
     const BAD_PATHS = ['O1000\r\nDELE O1234', 'O1000\nDELE O1234', 'O1000\0', 'O1000\tX', 'O1000\x7f'];
+    /** The error of a body that the FormData parser of Node 22 cannot read */
+    const MALFORMED_FORM_DATA = 'Malformed FormData';
 
     async function brotherConnector() {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
@@ -1239,6 +1241,9 @@ describe('API Routes', () => {
       const res = await sendBatchWithFileName("filename*=utf-8''O1%0D%0ADELE%20O1234", id);
 
       expect(res.status).toBe(400);
+      const { error } = (await res.json()) as { error: string };
+      // When the body parses, only the check of the route can give the 400
+      if (!error.includes(MALFORMED_FORM_DATA)) expect(error).toBe(CONTROL_CHARACTER_ERROR);
       expect(uploadFiles).not.toHaveBeenCalled();
     });
 
