@@ -138,8 +138,11 @@ export function machineFileRoutes(poller: HardwarePoller) {
       const connector = poller.getConnector(machineId);
       if (!connector) return notFound(c);
 
+      // batchUploadForm checked targetNames, so this error is only a second guard
+      const names = readTargetNames(targetNames);
+      if (!names.ok) return c.json({ error: names.error }, 400);
       const received = await Promise.all(files.map(receive));
-      const plan = planUpload(received, basePath, readTargetNames(targetNames));
+      const plan = planUpload(received, basePath, names.names);
       const results = await connector.uploadFiles(plan.files, isTrueText(overwrite));
       await recordSentFiles(machineId, plan, results.success.map(sent => sent.remotePath));
 
