@@ -83,7 +83,9 @@ function replyLoggedIn(c: Context, origin: RequestOrigin, token: string) {
 
 export const logInFirst = (c: Context) => c.json({ error: 'Log in first' }, 401);
 const tooManyTries = (c: Context) =>
-  c.json({ error: `Too many wrong passwords. Wait ${LOCK_MINUTES} minutes, then try again.` }, 429);
+  c.json({
+    error: `Too many wrong passwords. Try again in up to ${LOCK_MINUTES} minutes, or ask an Admin to unlock you in Settings > Logins.`,
+  }, 429);
 const wrongLogin = (c: Context) => c.json({ error: 'Wrong username or password' }, 401);
 
 type Checked<Value> = { ok: true; value: Value } | { ok: false; reply: Response };
@@ -97,7 +99,7 @@ interface PasswordTry<Value> {
   check: () => Promise<Value | null>;
 }
 
-/** Check a password from the caller. Each try counts against the caller's address and goes in the login log. */
+/** Check a password from the caller. Each try counts against the caller's address and the username, and goes in the login log. */
 async function withPasswordCheck<Value>(
   c: Context,
   { auth, limiter, loginLog }: LoginGuard,
@@ -106,8 +108,8 @@ async function withPasswordCheck<Value>(
 ): Promise<Checked<Value>> {
   const recordTry = (result: LoginResult) =>
     withoutFailing('[Login log] Could not save a login try', () => loginLog.record({ username, address, result }));
-  if (limiter.isBlocked(address)) {
-    if (limiter.isFirstBlockedTry(address)) recordTry('locked');
+  if (limiter.isBlocked(address, username)) {
+    if (limiter.isFirstBlockedTry(address, username)) recordTry('locked');
     return { ok: false, reply: tooManyTries(c) };
   }
   // Count the try before the slow check, so tries sent at the same time cannot all get past the block
@@ -117,7 +119,7 @@ async function withPasswordCheck<Value>(
     recordTry(auth.hasUser(username) ? 'wrong-password' : 'no-such-user');
     return { ok: false, reply: wrongLogin(c) };
   }
-  limiter.recordSuccess(address);
+  limiter.recordSuccess(address, username);
   recordTry(success);
   return { ok: true, value };
 }

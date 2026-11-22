@@ -25,6 +25,7 @@ const logins = api.settings.logins;
 /** The computers that must wait after too many wrong passwords, and the last password tries */
 export type LoginsReport = InferResponseType<typeof logins.$get, 200>;
 export type LockedComputer = LoginsReport['locked'][number];
+export type LockedUser = LoginsReport['lockedUsers'][number];
 export type LoginTry = LoginsReport['tries'][number];
 export type LoginResult = LoginTry['result'];
 
@@ -35,6 +36,11 @@ export async function fetchLoginsReport(): Promise<LoginsReport> {
 /** Let this computer try a password again now */
 export async function unlockComputer(address: string): Promise<LoginsReport> {
   return jsonOrThrow(await logins.unlock.$post({ json: { address } }), `Could not unlock ${address}`);
+}
+
+/** Let each computer try a password for this user again now */
+export async function unlockUser(username: string): Promise<LoginsReport> {
+  return jsonOrThrow(await logins.unlock.$post({ json: { username } }), `Could not unlock the user ${username}`);
 }
 
 const users = api.settings.users;

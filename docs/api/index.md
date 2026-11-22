@@ -13,8 +13,11 @@ curl -u <username>:<password> http://localhost:3001/api/machines
 ```
 
 A request with no login, or a wrong login, gets `401`.
-After 10 wrong passwords from one address, that address must wait 15 minutes. During that wait, a password try gets `429`.
-Browsers that are logged in, and programs whose login worked before, keep working during that wait.
+After 10 wrong passwords for one user from one address in 15 minutes, that address must wait before it can try that user again. During that wait, a password try for that user gets `429`.
+After 30 wrong passwords for one user from all addresses in 15 minutes, a password try for that user gets `429` from each address.
+Each wait ends 15 minutes after the first wrong password. Good logins do not count.
+All IPv6 addresses in one /64 network count as one address.
+Browsers that are logged in, and programs whose login worked before, keep working during a wait.
 **Log out** stops the login of that browser only. To log out your other browsers, use **Log out all other browsers** in **Settings > Your account**, or change your password.
 
 ## Roles
