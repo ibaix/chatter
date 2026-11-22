@@ -21,6 +21,7 @@ import { captureLog } from '../logging/testSupport.js';
 import { HardwarePoller } from '../polling/poller.js';
 import { StatePeriodStore } from '../recording/StatePeriodStore.js';
 import { applySchema } from '../storage/schema.js';
+import { STREAM_STOPPED_TEXT } from './streamReplies.js';
 import { testApp, type TestApp } from './testSupport.js';
 
 const HOUR = 3_600_000;
@@ -350,6 +351,30 @@ describe.each(BACKENDS)('history backup routes (%s VictoriaMetrics)', (_name, ma
       const res = await uploadTo(machineId, Buffer.from('not a backup'));
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ error: expect.stringMatching(/not a .tar.gz/) });
+    });
+
+    it('logs an error in the middle of the download, and does not send its text or its path', async () => {
+      const localError = "ENOENT: no such file or directory, open '/app/data/history-backup/part-1.jsonl.gz'";
+      const download = vi.spyOn(HistoryBackup.prototype, 'download').mockReturnValue({
+        fileName: 'chatter-history-Speedio.tar.gz',
+        stream: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([0x1f, 0x8b]));
+            controller.error(new Error(localError));
+          },
+        }),
+      });
+      const log = captureLog();
+
+      const res = await request('GET', `/machine/${machineId}/history-backup/any`, 'admin');
+      const failure = await res.arrayBuffer().then(() => null, (error: Error) => error);
+      log.restore();
+      download.mockRestore();
+
+      expect(res.status).toBe(200);
+      expect(failure?.message).toBe(STREAM_STOPPED_TEXT);
+      expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
+      expect(log.text('error')).toContain(localError);
     });
 
     it('gives 500 for an error that Chatter does not expect, and logs it', async () => {
