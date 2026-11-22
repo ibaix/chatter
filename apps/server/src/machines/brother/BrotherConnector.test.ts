@@ -1283,13 +1283,17 @@ describe('Brother planned reconnect when the control does not close its side', (
 
   it('destroys the old connection after 2 s, and the poll ends connected on a new connection', async () => {
     const brother = await brotherThatKeepsItsSideOpen();
+    const oldSocket = Reflect.get(brother, 'socket') as net.Socket;
     let status: BrotherMachineStatus | undefined;
     const poll = brother.poll().then(result => { status = result; });
     await vi.advanceTimersByTimeAsync(1999);
     expect(status).toBeUndefined();
     expect(machineSides).toHaveLength(1);
+    // Chatter still waits for the control to close its side
+    expect(oldSocket.destroyed).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
+    expect(oldSocket.destroyed).toBe(true);
     await poll;
 
     expect(machineSides).toHaveLength(2);
