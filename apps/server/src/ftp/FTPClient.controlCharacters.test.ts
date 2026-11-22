@@ -8,6 +8,7 @@ import { PassThrough } from 'stream';
 const mockAccess = vi.fn();
 const mockSend = vi.fn();
 const mockWrite = vi.fn();
+const mockRequest = vi.fn();
 const mockFtpClient = {
   access: mockAccess,
   send: mockSend,
@@ -18,7 +19,7 @@ const mockFtpClient = {
   uploadFrom: vi.fn(),
   downloadTo: vi.fn(),
   close: vi.fn(),
-  ftp: { verbose: false, socket: { write: mockWrite } },
+  ftp: { verbose: false, request: mockRequest, socket: { write: mockWrite, remoteAddress: '127.0.0.1' } },
 };
 
 vi.mock('basic-ftp', () => ({
@@ -60,9 +61,7 @@ describe('FTPClient with a control character in a path', () => {
     const dataServer = net.createServer(socket => socket.end());
     await new Promise<void>(resolve => dataServer.listen(0, '127.0.0.1', resolve));
     const { port } = dataServer.address() as net.AddressInfo;
-    mockSend.mockImplementation(async (command: string) => (command === 'PASV'
-      ? { code: 227, message: `227 Entering Passive Mode (127,0,0,1,${Math.floor(port / 256)},${port % 256})` }
-      : { code: 200, message: 'OK' }));
+    mockRequest.mockResolvedValue({ code: 227, message: `227 Entering Passive Mode (127,0,0,1,${Math.floor(port / 256)},${port % 256})` });
     const manualDownload = ftpClient as unknown as {
       downloadOverPassiveSocket(client: typeof mockFtpClient, filePath: string, destination: PassThrough): Promise<void>;
     };
@@ -74,6 +73,7 @@ describe('FTPClient with a control character in a path', () => {
       dataServer.close();
     }
     expect(mockSend).not.toHaveBeenCalled();
+    expect(mockRequest).not.toHaveBeenCalled();
     expect(mockWrite).not.toHaveBeenCalled();
   });
 
