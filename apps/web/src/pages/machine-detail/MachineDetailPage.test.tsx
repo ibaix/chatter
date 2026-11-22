@@ -279,6 +279,17 @@ describe('MachineDetailPage', () => {
       expect(within(chart()).getByRole('button', { name: 'Next view' })).toBeEnabled();
     });
 
+    it('starts a new view history of the chart for the next machine', () => {
+      renderPage({ machines: [testMachine(), testMachine({ id: 'm2', name: 'Mill 2' })] });
+      fireEvent.click(within(chart()).getByRole('button', { name: '7d' }));
+      expect(within(chart()).getByRole('button', { name: 'Previous view' })).toBeEnabled();
+
+      go('/machine/m2');
+
+      expect(within(chart()).getByRole('button', { name: '10m' })).toHaveAttribute('aria-pressed', 'true');
+      expect(within(chart()).getByRole('button', { name: 'Previous view' })).toBeDisabled();
+    });
+
     it('keeps the time range of the report when the user opens another tab and comes back', () => {
       renderPage({ address: '/machine/m1?tab=report' });
       fireEvent.click(within(screen.getByRole('region', { name: 'Report' })).getByRole('button', { name: '7d' }));
