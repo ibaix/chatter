@@ -1,0 +1,52 @@
+name: Pi update helper
+
+# Runs the shell tests of the update helper on the Pi (tools/pi-image/in-pi/update-chatter.sh) and the
+# round trip with the release script. npm test does not run them: they need Linux tools and run in a
+# Debian container (tools/pi-image/test/in-linux.sh). The runner has Docker.
+# The paths are the helper, its tests, the release script and the files that the round trip reads,
+# and the status contract in packages/shared.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/pi-image/**'
+      - 'tools/release/**'
+      - 'packages/shared/src/updates.ts'
+      - 'docker-compose.yml'
+      - 'vmalert/rules.yml'
+      - '.github/workflows/pi-image-tests.yml'
+  # Each pull request, also one in a stack that targets another branch (see ci.yml)
+  pull_request:
+    paths:
+      - 'tools/pi-image/**'
+      - 'tools/release/**'
+      - 'packages/shared/src/updates.ts'
+      - 'docker-compose.yml'
+      - 'vmalert/rules.yml'
+      - '.github/workflows/pi-image-tests.yml'
+
+permissions:
+  contents: read
+
+# A new push to a pull request stops the run of the push before it. Runs on main always finish.
+concurrency:
+  group: pi-image-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  update-helper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test the update helper and the round trip
+        run: |
+          tools/pi-image/test/in-linux.sh \
+            tools/pi-image/test/update-chatter-check.test.sh \
+            tools/pi-image/test/update-chatter-install.test.sh \
+            tools/pi-image/test/update-chatter-recover.test.sh \
+            tools/pi-image/test/update-file-round-trip.test.sh

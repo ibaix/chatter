@@ -32,6 +32,8 @@ INSTALLED_VERSION_FILE="$STATE_DIR/installed-version"
 LOCK_FILE="$STATE_DIR/lock"
 # A heartbeat writes status.json only while it holds this lock. stop_heartbeat takes it too.
 STATUS_LOCK_FILE="$STATE_DIR/status.lock"
+# The step that the helper does now, and the start time of the run. write_status reads it, also in the heartbeat.
+STEP_FILE="$STATE_DIR/step"
 INCOMING="$STATE_DIR/incoming"
 COPY="$STATE_DIR/update.tar"
 FILES="$STATE_DIR/files"
@@ -105,8 +107,18 @@ known_version=""
 manifest_version=""
 manifest_arch=""
 declare -A signed_sha256=() signed_size=() unchanged_tag=() unchanged_id=()
+# The names of the tar entries, from the one listing of the check
+listed_names=()
+listed_name=""
 old_version=""
 old_container=""
+# The status that the heartbeat writes again while the helper works: checking or installing, and the version
+busy_state=""
+busy_version=""
+
+# The steps in status.json (UPDATE_STEPS in packages/shared/src/updates.ts). Chatter shows a text for each.
+# tools/guardrails/updateSteps.test.ts makes sure that the two lists are the same.
+STEPS=(copying listing signature space files images verifying backing-up loading starting health)
 
 main() {
   exec 3>&1
@@ -238,8 +250,65 @@ write_status() {
   if is_release_version "$version"; then json+=",\"version\":\"$version\""; fi
   if [ -n "$reason" ]; then json+=",\"reason\":\"$reason\""; fi
   json+=",\"heartbeat\":\"$(utc_now)\",\"freeBytes\":$(free_bytes)"
+  if [ "$state" = checking ] || [ "$state" = installing ]; then json+="$(step_json)"; fi
   if [[ $freed =~ ^[0-9]+$ ]]; then json+=",\"freedBytes\":$freed"; fi
   printf '%s\n' "$json}" | atomic_write "$UPDATE_DIR/status.json" 644
+}
+
+# The step fields of a busy status, from the step file:  ,"step":"loading","part":1,"parts":3,"startedAt":"..."
+# Each value must have its pattern, or it is not written.
+step_json() {
+  local step part parts started_at json=""
+  step="$(step_value step)"
+  part="$(step_value part)"
+  parts="$(step_value parts)"
+  started_at="$(step_value started_at)"
+  if is_step "$step"; then
+    json+=",\"step\":\"$step\""
+    if [[ $part =~ ^[1-9][0-9]{0,2}$ && $parts =~ ^[1-9][0-9]{0,2}$ ]] && [ "$part" -le "$parts" ]; then
+      json+=",\"part\":$part,\"parts\":$parts"
+    fi
+  fi
+  if [[ $started_at =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    json+=",\"startedAt\":\"$started_at\""
+  fi
+  printf '%s' "$json"
+}
+
+is_step() {
+  local step
+  for step in "${STEPS[@]}"; do
+    [ "$1" != "$step" ] || return 0
+  done
+  return 1
+}
+
+step_value() {
+  [ -f "$STEP_FILE" ] || return 0
+  sed -n "s/^$1=//p" "$STEP_FILE" | head -n 1
+}
+
+# Starts a check or an install: writes the busy status with the start time, and starts the heartbeat.
+# begin_run <checking or installing> [version]
+begin_run() {
+  busy_state="$1"
+  busy_version="${2:-}"
+  printf 'started_at=%s\n' "$(utc_now)" | atomic_write "$STEP_FILE" 600
+  write_status "$busy_state" "$busy_version"
+  start_heartbeat "$busy_state" "$busy_version"
+}
+
+# Tells Chatter the step that starts now: set_step <step> [part parts], for example "set_step loading 2 3".
+# It holds the status lock, so a heartbeat never writes the step before over it.
+set_step() {
+  local step="$1" part="${2:-}" parts="${3:-}" started_at
+  started_at="$(step_value started_at)"
+  log "Step: $step${part:+ ($part of $parts)}."
+  {
+    flock 8
+    printf '%s\n' "started_at=$started_at" "step=$step" "part=$part" "parts=$parts" | atomic_write "$STEP_FILE" 600
+    write_status "$busy_state" "$busy_version"
+  } 8> "$STATUS_LOCK_FILE"
 }
 
 # Writes stdin to a file: atomic_write <path> <mode>
@@ -381,17 +450,23 @@ run_check() {
   refuse_while_old_data_waits
   undo_unfinished_install
   remove_temp_files
-  write_status checking
-  start_heartbeat checking
+  begin_run checking
   forget_ready_file
+  set_step copying
   take_update_file
+  set_step listing
   check_tar_entries
+  set_step signature
   check_signature
   read_signed_manifest
   check_manifest_fits_this_pi
+  set_step space
   check_free_space_for_install
+  set_step files
   extract_and_check_files
+  set_step images
   check_unchanged_images
+  remove_copy
   mark_ready
 }
 
@@ -435,24 +510,33 @@ take_update_file() {
 }
 
 check_tar_entries() {
+  tar_has_its_end "$COPY" || refuse "$R_BAD_FILE"
   tar_entries_are_safe "$COPY" || refuse "$R_BAD_FILE"
+}
+
+# A tar ends with two blocks of 512 zero bytes. GNU tar reads a file without them and gives no error,
+# so a download or an upload that stopped there would look complete.
+tar_has_its_end() {
+  local size
+  size="$(file_size "$1")"
+  [ $((size % 512)) -eq 0 ] && [ "$size" -ge 1024 ] || return 1
+  [ -z "$(tail --bytes 1024 -- "$1" | tr -d '\0' | head --bytes 1)" ]
 }
 
 # Each entry must be a regular file with an allowed name, and each name comes only once.
 # At most 7 entries, and the manifest and its signature are small. All before anything is extracted.
+# tar lists the file one time. The names come from the long listing, and listed_names keeps them for
+# tar_matches_manifest. --quoting-style=escape writes a newline in a name as "\n", so each line is one entry.
 tar_entries_are_safe() {
-  local names listing name line
-  names="$(limited_listing "$1")" || return 1
+  local listing line
+  listed_names=()
   listing="$(limited_listing "$1" --verbose --numeric-owner)" || return 1
-  is_short_listing "$names" && is_short_listing "$listing" || return 1
-  [ "$(wc -l <<< "$names")" -eq "$(wc -l <<< "$listing")" ] || return 1
-  [ -z "$(sort <<< "$names" | uniq --repeated)" ] || return 1
-  while IFS= read -r name; do
-    is_allowed_member "$name" || return 1
-  done <<< "$names"
+  is_short_listing "$listing" || return 1
   while IFS= read -r line; do
     is_safe_listing_line "$line" || return 1
+    listed_names+=("$listed_name")
   done <<< "$listing"
+  [ -z "$(printf '%s\n' "${listed_names[@]}" | sort | uniq --repeated)" ]
 }
 
 # Prints the tar listing, but never more than LISTING_LIMIT_BYTES + 1 bytes.
@@ -467,12 +551,17 @@ is_short_listing() {
 }
 
 # A line of the long listing, for example "-rw-r--r-- 0/0 123 2026-11-10 10:00 manifest.txt".
-# GNU tar starts it with "-" for a regular file. The third field is the size.
+# GNU tar starts it with "-" for a regular file. Then come the owner, the size, the date, and the time.
+# The name is the rest of the line, as it is: a space before or after it makes a name that is not allowed.
+# A symlink or a hard link has a different first letter, and " -> " or " link to " after its name.
+# Sets listed_name.
 is_safe_listing_line() {
-  local mode size name
-  read -r mode _ size _ _ name <<< "$1"
-  [ "${mode:0:1}" = "-" ] && [[ $size =~ ^[0-9]+$ ]] || return 1
-  case "$name" in
+  local shape='^-[^ ]* +[0-9]+/[0-9]+ +([0-9]+) [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} (.*)$' size
+  [[ $1 =~ $shape ]] || return 1
+  size="${BASH_REMATCH[1]}"
+  listed_name="${BASH_REMATCH[2]}"
+  is_allowed_member "$listed_name" || return 1
+  case "$listed_name" in
     manifest.txt | manifest.txt.sig) [ "$size" -le "$MANIFEST_LIMIT_BYTES" ] ;;
   esac
 }
@@ -503,9 +592,12 @@ is_image_member() {
 }
 
 # Extracts the named entries of the copy, one by one, into the new root-only folder. Then checks each again.
+# --occurrence=1: tar stops to read when it has each name. Each name comes only once (tar_entries_are_safe),
+# so this is the same as a read of the whole file. The manifest comes first in an update file, so the check
+# of the signature does not read the large image files.
 extract_members() {
   local name
-  read_tar "$COPY" 10m --extract --no-wildcards --no-same-owner --no-same-permissions \
+  read_tar "$COPY" 10m --extract --occurrence=1 --no-wildcards --no-same-owner --no-same-permissions \
     --directory "$FILES" -- "$@" 2> /dev/null || return 1
   for name in "$@"; do
     is_plain_file "$FILES/$name" || return 1
@@ -594,10 +686,12 @@ is_new_payload_member() {
 }
 
 # The tar holds the manifest, its signature, and each "file" of the manifest. Nothing else.
+# The names are from the listing of tar_entries_are_safe: only root can change the copy.
 tar_matches_manifest() {
   local expected actual
+  [ "${#listed_names[@]}" -gt 0 ] || return 1
   expected="$(printf '%s\n' manifest.txt manifest.txt.sig "${!signed_sha256[@]}" | sort)"
-  actual="$(read_tar "$COPY" 2m --list | sort)" || return 1
+  actual="$(printf '%s\n' "${listed_names[@]}" | sort)"
   [ "$expected" = "$actual" ]
 }
 
@@ -611,10 +705,14 @@ check_manifest_fits_this_pi() {
 }
 
 # Space for the extracted files, the loaded images, a backup of the data, and the reserve.
+# The extracted files come next to the copy now. The check deletes the copy at its end,
+# so the install gets the space of the copy back.
 check_free_space_for_install() {
-  local needed
+  local needed extracted
   needed="$(space_for_install)" || refuse "$R_NO_SIZE"
-  has_free_space $((needed + $(extracted_bytes))) || refuse "$R_NO_SPACE"
+  extracted="$(extracted_bytes)"
+  has_free_space $((extracted + RESERVE_BYTES)) || refuse "$R_NO_SPACE"
+  has_free_space $((needed + extracted - $(file_size "$COPY"))) || refuse "$R_NO_SPACE"
 }
 
 extracted_bytes() {
@@ -638,14 +736,20 @@ space_for_install() {
 }
 
 extract_and_check_files() {
-  local member
   extract_members "${!signed_sha256[@]}" || refuse "$R_BAD_FILE"
-  for member in "${!signed_sha256[@]}"; do
-    [ "$(file_size "$FILES/$member")" = "${signed_size[$member]}" ] || refuse "$R_BAD_CHECKSUM"
-    [ "$(file_sha256 "$FILES/$member")" = "${signed_sha256[$member]}" ] || refuse "$R_BAD_CHECKSUM"
-  done
+  files_match_manifest || refuse "$R_BAD_CHECKSUM"
   log "Each file has its signed size and checksum."
   new_compose_names_the_version || refuse "$R_BAD_FILE"
+}
+
+# Each "file" of the signed manifest is in $FILES, with its signed size and sha256.
+files_match_manifest() {
+  local member
+  for member in "${!signed_sha256[@]}"; do
+    is_plain_file "$FILES/$member" || return 1
+    [ "$(file_size "$FILES/$member")" = "${signed_size[$member]}" ] || return 1
+    [ "$(file_sha256 "$FILES/$member")" = "${signed_sha256[$member]}" ] || return 1
+  done
 }
 
 # A roll back finds the old Chatter image by its tag. If the new compose file used "latest" (or another version),
@@ -661,8 +765,16 @@ check_unchanged_images() {
   done
 }
 
+# The install uses the checked files in $FILES only, so the copy is not needed after the check.
+# Then a ready update holds about the size of the update file on the card, not two times that size.
+remove_copy() {
+  rm -f -- "$COPY"
+}
+
+# The state keeps the sha256 of the signed manifest. The install reads the manifest again from $FILES,
+# and checks each file against it.
 mark_ready() {
-  write_state "phase=ready" "version=$manifest_version" "sha256=$(file_sha256 "$COPY")" \
+  write_state "phase=ready" "version=$manifest_version" "manifest_sha256=$(file_sha256 "$FILES/manifest.txt")" \
     "checked_at=$(date +%s)" "boot_id=$(boot_id)"
   log "Ready to install version $manifest_version."
   finish_with ready "$manifest_version"
@@ -682,8 +794,7 @@ run_install() {
   remove_temp_files
   known_version="$(state_value version)"
   is_release_version "$known_version" || known_version=""
-  write_status installing "$known_version"
-  start_heartbeat installing "$known_version"
+  begin_run installing "$known_version"
   check_ready_file
   back_up_old_version
   load_new_images
@@ -695,9 +806,12 @@ run_install() {
 check_ready_file() {
   is_ready || refuse "$R_NOT_READY"
   is_fresh_check || refuse "$R_TOO_OLD"
-  is_unchanged_copy || refuse "$R_CHANGED"
+  is_unchanged_manifest || refuse "$R_CHANGED"
   old_version="$(installed_version)" || refuse "$R_NOT_RELEASE"
   is_newer "$known_version" "$old_version" || refuse "$R_NOT_NEWER"
+  set_step verifying
+  files_match_manifest || refuse "$R_CHANGED"
+  log "Each checked file still has its signed size and checksum."
   log "Installing version $known_version over version $old_version."
 }
 
@@ -714,9 +828,15 @@ is_fresh_check() {
   [ "$age" -ge 0 ] && [ "$age" -le "$READY_MAX_AGE_SECONDS" ]
 }
 
-is_unchanged_copy() {
-  [ -f "$COPY" ] || return 1
-  [ "$(file_sha256 "$COPY")" = "$(state_value sha256)" ] || return 1
+# The manifest is the one that the check found with a correct signature, and it has the version of the state.
+# The copy of the update file is gone after the check. The install loads the files in $FILES,
+# so check_ready_file checks each of them against this manifest (files_match_manifest).
+is_unchanged_manifest() {
+  local checked_sha256
+  checked_sha256="$(state_value manifest_sha256)"
+  [[ $checked_sha256 =~ ^[0-9a-f]{64}$ ]] || return 1
+  is_plain_file "$FILES/manifest.txt" || return 1
+  [ "$(file_sha256 "$FILES/manifest.txt")" = "$checked_sha256" ] || return 1
   read_manifest "$FILES/manifest.txt" || return 1
   [ "$manifest_version" = "$known_version" ]
 }
@@ -725,6 +845,7 @@ is_unchanged_copy() {
 back_up_old_version() {
   local needed
   set_phase backing-up
+  set_step backing-up
   old_container="$(compose ps --all --quiet chatterbox)" || old_container=""
   compose stop chatterbox > /dev/null || fail_install "$R_STOP_FAILED"
   needed="$(space_for_install)" || fail_install "$R_NO_SIZE"
@@ -822,11 +943,16 @@ restore_data() {
 # Deletes the images of the version before the old one first, so the card never holds 3 sets of images.
 # Then loads the new images. Each image file is deleted after it loads, to give the card the space back.
 load_new_images() {
-  local member
+  local member members=() number=0
   set_phase loading
+  set_step loading
   remove_images_except "$(images_in "$CHATTER_DIR/docker-compose.yml"; unchanged_images)"
   for member in "${!signed_size[@]}"; do
-    is_image_member "$member" || continue
+    if is_image_member "$member"; then members+=("$member"); fi
+  done
+  for member in "${members[@]}"; do
+    number=$((number + 1))
+    set_step loading "$number" "${#members[@]}"
     log "Loading $member. On a Pi, this takes some minutes."
     docker_within "$LOAD_TIMEOUT" load --input "$FILES/$member" > /dev/null || fail_install "$R_LOAD_FAILED"
     rm -f -- "$FILES/$member"
@@ -853,10 +979,12 @@ new_images_are_here() {
 # vmalert must read the new rules, also when its own settings did not change.
 start_new_version() {
   set_phase swapped
+  set_step starting
   put_file_in_place "$FILES/docker-compose.yml" "$CHATTER_DIR/docker-compose.yml" || fail_install "$R_START_FAILED"
   put_file_in_place "$FILES/rules.yml" "$CHATTER_DIR/vmalert/rules.yml" || fail_install "$R_START_FAILED"
   log "Starting version $known_version."
   compose up --detach --force-recreate > /dev/null || fail_install "$R_START_FAILED"
+  set_step health
   wait_for_new_version || fail_install "$R_NOT_HEALTHY"
 }
 

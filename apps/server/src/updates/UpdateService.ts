@@ -38,6 +38,11 @@ export interface UpdatesReport {
   newest: NewestRelease & { isNewer: boolean };
   /** Why the last download failed, until the next download starts */
   downloadError: string | null;
+  /**
+   * The time of the server (ISO text). The helper writes its times with the same clock, and the clock of
+   * the browser can be different. So the page counts the age of a heartbeat from this time, not from its own clock.
+   */
+  serverTime: string;
 }
 
 const REQUEST_TIMEOUT = 408;
@@ -108,6 +113,7 @@ export class UpdateService {
       isRequestPending: await this.folder.hasRequest(),
       newest: { ...newest, isNewer: newest.version !== null && isNewerVersion(newest.version, this.version) },
       downloadError: this.downloadError,
+      serverTime: new Date().toISOString(),
     };
   }
 
