@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { OutgoingMessage } from './channels/ChannelType.js';
-import { MAX_KEPT_MESSAGES, Outbox, type OutboxEntry, SEND_LIMIT, SEND_LIMIT_WINDOW_MS } from './Outbox.js';
+import { BACKLOG_SEND, EVENT_REPEAT_MS, MAX_KEPT_MESSAGES, Outbox, type OutboxEntry, SEND_LIMIT, SEND_LIMIT_WINDOW_MS } from './Outbox.js';
 
 const NOW = Date.UTC(2026, 10, 13, 9, 0);
 const MINUTE = 60_000;
@@ -124,6 +124,249 @@ describe('Outbox', () => {
 
     expect(outbox.list({}).find(message => message.id === id)).toMatchObject({ status: 'failed', attempts: 1, lastError: 'Twilio refused the login.' });
     expect(texts(outbox.takeDue(NOW))).toEqual(['ended - Haas VF-2: In alarm']);
+  });
+
+  describe('the hold of a channel', () => {
+    it('holds the channel after a failed message, until the time of the hold, and not the other channels', () => {
+      const id = queue('phones', 1);
+      outbox.takeDue(NOW);
+
+      outbox.markFailed(id, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      queue('phones', 2);
+      queue('slack', 3);
+
+      expect(outbox.takeDue(NOW).map(entry => entry.channelId)).toEqual(['slack']);
+      expect(outbox.takeDue(NOW + 60 * MINUTE).map(entry => entry.channelId)).toEqual(['phones']);
+    });
+
+    it('keeps the longer hold when a shorter one comes', () => {
+      const first = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markFailed(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      const second = queue('phones', 2);
+      outbox.takeDue(NOW + 60 * MINUTE);
+
+      outbox.markRetry(second, 'ntfy answered 503.', NOW + 61 * MINUTE);
+      outbox.markFailed(second, 'ntfy answered 503.', NOW + 30 * MINUTE);
+      queue('phones', 3);
+
+      expect(outbox.takeDue(NOW + 61 * MINUTE - 1)).toEqual([]);
+      expect(outbox.takeDue(NOW + 61 * MINUTE)).toHaveLength(1);
+    });
+
+    it('ends the hold when a message to the channel goes, for example a test', () => {
+      const id = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markFailed(id, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      queue('phones', 2);
+
+      outbox.keepTestResult('phones', { ...moreAlerts(0), kind: 'test', text: 'Test from Chatter.' }, { ok: true, detail: 'ntfy sent it' }, NOW);
+
+      expect(outbox.takeDue(NOW)).toHaveLength(1);
+    });
+
+    it('gives the message of the hold first and at once, when the hold ends early', () => {
+      const first = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markRetry(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      queue('phones', 2, alertMessage('started'), NOW + MINUTE);
+
+      outbox.endHold('phones', NOW + 2 * MINUTE);
+
+      expect(outbox.takeDue(NOW + 2 * MINUTE).map(entry => entry.id)).toEqual([first]);
+    });
+
+    it('does not make an event message that waits for its repeat time due, when the hold ends early', () => {
+      const first = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markRetry(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      const event = outbox.queue({ channelId: 'slack', alertId: 2, message: alertMessage('started'), event: true }, NOW);
+      outbox.markSent(outbox.takeDue(NOW).find(entry => entry.id === event)!.id, 'Sent', NOW);
+      const next = outbox.queue({ channelId: 'slack', alertId: 3, message: alertMessage('started'), event: true }, NOW + MINUTE);
+
+      outbox.endHold('slack', NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).not.toContain(next);
+    });
+
+    it('ends the hold of a removed channel', () => {
+      const id = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markFailed(id, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+
+      outbox.removeChannel('phones');
+
+      expect(db.prepare('SELECT COUNT(*) AS count FROM notification_channel_holds').get()).toEqual({ count: 0 });
+    });
+  });
+
+  describe('the messages that waited while the channel was held', () => {
+    function named(alertName: string, machineName: string, kind: 'started' | 'ended' = 'started'): OutgoingMessage {
+      return { ...alertMessage(kind, machineName.toLowerCase()), alertName, machine: { id: machineName.toLowerCase(), name: machineName }, text: `${kind} ${alertName}` };
+    }
+
+    /** The first message fails and holds the channel for one hour. Then `waiting` more messages come. */
+    function holdWith(waiting: OutgoingMessage[]): number {
+      const first = queue('phones', 1, named('In alarm', 'Haas VF-2'));
+      outbox.takeDue(NOW);
+      outbox.markRetry(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      waiting.forEach((message, index) => queue('phones', 10 + index, message, NOW + index * MINUTE));
+      return first;
+    }
+
+    function status(id: number) {
+      return outbox.list({}).find(message => message.id === id);
+    }
+
+    it(`sends one summary message and then only the newest ${BACKLOG_SEND}, when the hold ends`, () => {
+      const first = holdWith([
+        named('Program ended', 'Haas ST-10'), named('Program ended', 'Haas ST-10'), named('Program ended', 'Haas ST-10'),
+        named('In alarm', 'Haas VF-2'), named('Idle', 'Haas VF-2'), named('Idle', 'Haas ST-10'), named('Spindle load', 'Haas VF-2'),
+      ]);
+
+      const [summary] = outbox.takeDue(NOW + 60 * MINUTE);
+
+      expect(summary.message).toMatchObject({ kind: 'more', machine: null });
+      expect(summary.message.text).toBe(
+        'Chatter could not send 5 alerts while the channel was blocked: Program ended on Haas ST-10 (3), In alarm on Haas VF-2 (2). Open Chatter to see them.',
+      );
+      expect(status(first)).toMatchObject({
+        status: 'grouped', lastError: 'ntfy: the limit is used.',
+        detail: 'In one summary message, because the service did not take messages for a time.',
+      });
+      outbox.markSent(summary.id, 'ntfy sent it', NOW + 60 * MINUTE);
+      const sent: string[] = [];
+      for (let entry = outbox.takeDue(NOW + 60 * MINUTE)[0]; entry; entry = outbox.takeDue(NOW + 60 * MINUTE)[0]) {
+        sent.push(entry.message.text);
+        outbox.markSent(entry.id, 'ntfy sent it', NOW + 60 * MINUTE);
+      }
+      expect(sent).toEqual(['started Idle', 'started Idle', 'started Spindle load']);
+      expect(outbox.list({}).filter(message => message.status === 'grouped')).toHaveLength(5);
+    });
+
+    it('counts the start and the end of one alert one time, and adds the alerts of a "more" message', () => {
+      const more = moreAlerts(4);
+      holdWith([named('Idle', 'Haas VF-2'), more, named('A', 'M'), named('B', 'M'), named('C', 'M')]);
+      queue('phones', 1, named('In alarm', 'Haas VF-2', 'ended'), NOW + 30 * MINUTE);
+      db.prepare("UPDATE notification_messages SET alert_count = 4 WHERE kind = 'more'").run();
+
+      // Kept: B, C and the end of alert 1. The summary has alert 1 (its start), Idle, the 4 alerts of "more", and A.
+      expect(outbox.takeDue(NOW + 60 * MINUTE)[0].message.text).toBe(
+        'Chatter could not send 7 alerts while the channel was blocked: A on M (1), Idle on Haas VF-2 (1), In alarm on Haas VF-2 (1), other alerts (4). '
+        + 'Open Chatter to see them.',
+      );
+    });
+
+    it(`sends each message, when no more than ${BACKLOG_SEND + 1} wait after the hold`, () => {
+      holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M')]);
+
+      expect(texts(outbox.takeDue(NOW + 60 * MINUTE))).toEqual(['started In alarm']);
+    });
+
+    it('makes no summary message for a channel that was not held', () => {
+      Array.from({ length: 8 }, (_, index) => queue('phones', index, named(`Alarm ${index}`, 'M')));
+
+      expect(texts(outbox.takeDue(NOW))).toEqual(['started Alarm 0']);
+    });
+
+    /** Sends each message that the outbox gives at `now`, one at a time, and gives their texts */
+    function sendAll(now: number): string[] {
+      const sent: string[] = [];
+      for (let entry = outbox.takeDue(now)[0]; entry; entry = outbox.takeDue(now)[0]) {
+        sent.push(entry.message.text);
+        outbox.markSent(entry.id, 'ntfy sent it', now);
+      }
+      return sent;
+    }
+
+    const TEST: OutgoingMessage = { ...moreAlerts(0), kind: 'test', text: 'Test from Chatter.' };
+
+    it(`still sends one summary message and then only the newest ${BACKLOG_SEND}, when a test ends the hold early`, () => {
+      holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M'), named('E', 'M')]);
+
+      outbox.keepTestResult('phones', TEST, { ok: true, detail: 'ntfy sent it' }, NOW + 10 * MINUTE);
+
+      expect(sendAll(NOW + 10 * MINUTE)).toEqual([
+        'Chatter could not send 3 alerts while the channel was blocked: A on M (1), B on M (1), In alarm on Haas VF-2 (1). Open Chatter to see them.',
+        'started C', 'started D', 'started E',
+      ]);
+    });
+
+    it('keeps the hold when a test fails, and sends the summary when the hold ends', () => {
+      holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M'), named('E', 'M')]);
+
+      outbox.keepTestResult('phones', TEST, { ok: false, error: 'ntfy: the limit is used.' }, NOW + 10 * MINUTE);
+
+      expect(outbox.takeDue(NOW + 10 * MINUTE)).toEqual([]);
+      expect(sendAll(NOW + 60 * MINUTE)).toEqual([
+        'Chatter could not send 3 alerts while the channel was blocked: A on M (1), B on M (1), In alarm on Haas VF-2 (1). Open Chatter to see them.',
+        'started C', 'started D', 'started E',
+      ]);
+    });
+
+    it(`sends a summary of 2 alerts and the newest ${BACKLOG_SEND}, when exactly ${BACKLOG_SEND + 2} messages wait`, () => {
+      holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M')]);
+
+      expect(sendAll(NOW + 60 * MINUTE)).toEqual([
+        'Chatter could not send 2 alerts while the channel was blocked: A on M (1), In alarm on Haas VF-2 (1). Open Chatter to see them.',
+        'started B', 'started C', 'started D',
+      ]);
+    });
+
+    describe('when the service refuses the summary message too', () => {
+      /** Holds the channel with 6 messages, takes the summary, and holds the channel again for the summary */
+      function refusedSummary(): OutboxEntry {
+        holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M'), named('E', 'M')]);
+        const [summary] = outbox.takeDue(NOW + 60 * MINUTE);
+        expect(summary.message.text).toMatch(/^Chatter could not send 3 alerts /);
+        outbox.markRetry(summary.id, 'ntfy answered 429: too many requests.', NOW + 90 * MINUTE);
+        return summary;
+      }
+
+      it('sends the summary first, before the newest messages', () => {
+        const summary = refusedSummary();
+
+        expect(sendAll(NOW + 90 * MINUTE)).toEqual([summary.message.text, 'started C', 'started D', 'started E']);
+      });
+
+      it('puts the summary and the oldest messages in a new summary, when more messages came, and counts each alert one time', () => {
+        refusedSummary();
+        queue('phones', 30, named('F', 'M'), NOW + 70 * MINUTE);
+        queue('phones', 31, named('G', 'M'), NOW + 71 * MINUTE);
+
+        expect(sendAll(NOW + 90 * MINUTE)).toEqual([
+          'Chatter could not send 5 alerts while the channel was blocked: C on M (1), D on M (1), other alerts (3). Open Chatter to see them.',
+          'started E', 'started F', 'started G',
+        ]);
+      });
+    });
+
+    it('makes no summary for the messages that came after the hold ended, also when the message of the hold failed for good', () => {
+      const first = holdWith([]);
+      outbox.takeDue(NOW + 60 * MINUTE);
+      outbox.markFailed(first, 'ntfy refused the message.');
+      Array.from({ length: 6 }, (_, index) => queue('phones', 20 + index, named(`Alarm ${index}`, 'M'), NOW + DAY));
+
+      expect(texts(outbox.takeDue(NOW + DAY))).toEqual(['started Alarm 0']);
+    });
+
+    it('makes no summary for the messages that came after a hold of a failed message ended', () => {
+      const id = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markFailed(id, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      Array.from({ length: 6 }, (_, index) => queue('phones', 20 + index, named(`Alarm ${index}`, 'M'), NOW + DAY));
+
+      expect(texts(outbox.takeDue(NOW + DAY))).toEqual(['started Alarm 0']);
+    });
+
+    it('does not put a test message in the summary message', () => {
+      const test = queue('phones', null, { ...moreAlerts(0), kind: 'test', text: 'Test from Chatter.' }, NOW);
+      holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M'), named('E', 'M')]);
+
+      outbox.takeDue(NOW + 60 * MINUTE);
+
+      expect(status(test)?.status).toBe('waiting');
+    });
   });
 
   it('gives a message again after a restart, when Chatter stopped while it was sending the message', () => {
@@ -337,60 +580,133 @@ describe('Outbox', () => {
   });
 
   describe('event messages, such as "program ended"', () => {
-    function queueEvent(channelId: string, alertId: number, now: number): number {
-      return outbox.queue({ channelId, alertId, message: alertMessage('started'), event: true }, now);
+    const LINK = 'http://chatter.local:3001/machine/haas-st10';
+
+    function programEnded(machineId = 'haas-st10', alertName = 'Program ended'): OutgoingMessage {
+      return {
+        ...alertMessage('started', machineId), alertName, severity: 'warning', link: LINK,
+        text: `WARNING - ${machineId}: ${alertName}. Started 9:00 AM. ${LINK}`,
+      };
     }
 
-    it('sends an event message when the channel is at its limit', () => {
-      sendMessages('phones', SEND_LIMIT, NOW);
-      const event = queueEvent('phones', 1, NOW + MINUTE);
+    function queueEvent(channelId: string, alertId: number, now: number, message = programEnded()): number {
+      return outbox.queue({ channelId, alertId, message, event: true }, now);
+    }
 
-      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([event]);
+    /** Queues an event message and sends it at `now` */
+    function sendEvent(alertId: number, now: number, message = programEnded()): void {
+      const id = queueEvent('phones', alertId, now, message);
+      if (!outbox.takeDue(now).some(entry => entry.id === id)) throw new Error(`Event ${id} was not due`);
+      outbox.markSent(id, 'Sent', now);
+    }
+
+    function status(id: number) {
+      return outbox.list({}).find(message => message.id === id);
+    }
+
+    it('sends the first event of a rule and a machine at once', () => {
+      const event = queueEvent('phones', 1, NOW);
+
+      expect(outbox.takeDue(NOW).map(entry => entry.id)).toEqual([event]);
     });
 
-    it('sends an event message that waits after an alert message that the limit holds', () => {
-      sendMessages('phones', SEND_LIMIT, NOW);
-      const held = queue('phones', 1, alertMessage('started'), NOW + MINUTE);
-      const event = queueEvent('phones', 2, NOW + MINUTE);
+    it(`holds the next event of the same rule and machine until ${EVENT_REPEAT_MS / MINUTE} minutes after the last one went`, () => {
+      sendEvent(1, NOW);
+      const next = queueEvent('phones', 2, NOW + MINUTE);
 
-      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([event]);
-      expect(outbox.list({}).find(message => message.id === held)?.status).toBe('waiting');
+      expect(outbox.takeDue(NOW + EVENT_REPEAT_MS - 1)).toEqual([]);
+      expect(outbox.takeDue(NOW + EVENT_REPEAT_MS).map(entry => entry.id)).toEqual([next]);
     });
 
-    it('still sends one message of a channel at a time', () => {
-      sendMessages('phones', SEND_LIMIT, NOW);
-      queue('phones', 1, alertMessage('started'), NOW + MINUTE);
-      queueEvent('phones', 2, NOW + MINUTE);
-      queueEvent('phones', 3, NOW + MINUTE);
+    it(`holds an event that comes while the same event is being sent, until ${EVENT_REPEAT_MS / MINUTE} minutes after that time`, () => {
+      const first = queueEvent('phones', 1, NOW);
+      expect(outbox.takeDue(NOW).map(entry => entry.id)).toEqual([first]);
+      const next = queueEvent('phones', 2, NOW + MINUTE);
+      outbox.markSent(first, 'Sent', NOW + 2 * MINUTE);
 
-      expect(outbox.takeDue(NOW + MINUTE)).toHaveLength(1);
+      expect(outbox.takeDue(NOW + MINUTE + EVENT_REPEAT_MS - 1)).toEqual([]);
+      expect(outbox.takeDue(NOW + MINUTE + EVENT_REPEAT_MS).map(entry => entry.id)).toEqual([next]);
+    });
+
+    it('makes a repeated event due when the hold ends early, also when the service refused the first event', () => {
+      const first = queueEvent('phones', 1, NOW);
+      outbox.takeDue(NOW);
+      outbox.markRetry(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      const next = queueEvent('phones', 2, NOW + MINUTE);
       expect(outbox.takeDue(NOW + MINUTE)).toEqual([]);
+
+      outbox.endHold('phones', NOW + 2 * MINUTE);
+
+      expect(outbox.takeDue(NOW + 2 * MINUTE).map(entry => entry.id)).toEqual([next]);
     });
 
-    it('does not count a sent event message in the limit', () => {
-      for (let alertId = 1; alertId <= SEND_LIMIT; alertId += 1) {
-        const id = queueEvent('phones', alertId, NOW);
-        outbox.takeDue(NOW);
-        outbox.markSent(id, 'Sent', NOW);
-      }
-      const alarm = queue('phones', 99, alertMessage('started'), NOW + MINUTE);
-      queue('phones', 100, alertMessage('started'), NOW + MINUTE);
+    it('does not hold the other messages of the channel behind an event that waits', () => {
+      sendEvent(1, NOW);
+      queueEvent('phones', 2, NOW + MINUTE);
+      const alarm = queue('phones', 3, alertMessage('started'), NOW + MINUTE);
 
       expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([alarm]);
     });
 
-    it('never puts an event message into a "more" message', () => {
-      sendMessages('phones', SEND_LIMIT - 1, NOW);
-      queue('phones', 1, alertMessage('started'), NOW + MINUTE);
-      const event = queueEvent('phones', 2, NOW + MINUTE);
-      queue('phones', 3, alertMessage('started'), NOW + MINUTE);
+    it('does not hold an event of another rule or of another machine', () => {
+      sendEvent(1, NOW);
+      const otherMachine = queueEvent('phones', 2, NOW + MINUTE, programEnded('haas-vf2'));
+      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([otherMachine]);
+      outbox.markSent(otherMachine, 'Sent', NOW + MINUTE);
+
+      const otherRule = queueEvent('phones', 3, NOW + MINUTE, programEnded('haas-st10', 'Tool change'));
+      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([otherRule]);
+    });
+
+    it('puts the events that come while one waits into one message, with the count and the time of the first', () => {
+      sendEvent(1, NOW);
+      const first = queueEvent('phones', 2, NOW + MINUTE);
+      const second = queueEvent('phones', 3, NOW + 2 * MINUTE);
+      const third = queueEvent('phones', 4, NOW + 3 * MINUTE);
+
+      const detail = `In the next message about this event, because a channel gets at most one message about an event of a machine in ${EVENT_REPEAT_MS / MINUTE} minutes.`;
+      expect(status(first)).toMatchObject({ status: 'grouped', detail });
+      expect(status(second)).toMatchObject({ status: 'grouped', detail });
+      const [entry] = outbox.takeDue(NOW + EVENT_REPEAT_MS);
+      expect(entry.id).toBe(third);
+      // The default text options give the time in UTC, and the link stays at the end
+      expect(entry.message.text).toBe(`WARNING - haas-st10: Program ended. Started 9:00 AM. This happened 3 times since 9:01 AM UTC. ${LINK}`);
+      expect(status(third)?.text).toBe(entry.message.text);
+    });
+
+    it('gives the time of the first event in the time zone of the shop', () => {
+      const chicago = new Outbox(new Database(':memory:'), moreAlerts, () => ({ timeZone: 'America/Chicago', linkBaseUrl: null }));
+      const message = { ...programEnded(), link: null, text: 'Program ended.' };
+      chicago.queue({ channelId: 'phones', alertId: 1, message, event: true }, NOW);
+      chicago.queue({ channelId: 'phones', alertId: 2, message, event: true }, NOW + MINUTE);
+
+      expect(texts(chicago.takeDue(NOW + MINUTE))).toEqual(['Program ended. This happened 2 times since 3:00 AM.']);
+    });
+
+    it('counts a sent event message in the limit of the channel', () => {
+      for (let alertId = 1; alertId <= SEND_LIMIT; alertId += 1) sendEvent(alertId, NOW, programEnded(`machine-${alertId}`));
+      queue('phones', 99, alertMessage('started'), NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE)).toEqual([]);
+    });
+
+    it('waits at the limit of the channel, like each other alert', () => {
+      sendMessages('phones', SEND_LIMIT, NOW);
+      const event = queueEvent('phones', 1, NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE)).toEqual([]);
+      expect(outbox.takeDue(NOW + SEND_LIMIT_WINDOW_MS + 1).map(entry => entry.id)).toEqual([event]);
+    });
+
+    it('puts an event message into a "more" message, with each event that it has', () => {
+      sendEvent(1, NOW);
+      sendMessages('phones', SEND_LIMIT - 2, NOW);
+      queue('phones', 10, alertMessage('started'), NOW + MINUTE);
+      [11, 12, 13].forEach(alertId => queueEvent('phones', alertId, NOW + MINUTE));
 
       const [more] = outbox.takeDue(NOW + MINUTE);
-      expect(more.message).toEqual(moreAlerts(2));
-      expect(outbox.list({}).find(message => message.id === event)?.status).toBe('waiting');
 
-      outbox.markSent(more.id, 'Sent', NOW + MINUTE);
-      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).toEqual([event]);
+      expect(more.message).toEqual(moreAlerts(4));
     });
 
     it('adds the event column to the table of an older Chatter, and keeps its messages', () => {
@@ -412,7 +728,34 @@ describe('Outbox', () => {
 
       expect(texts(upgraded.takeDue(NOW))).toEqual(['started - Haas VF-2: In alarm']);
       upgraded.queue({ channelId: 'slack', alertId: 2, message: alertMessage('started'), event: true }, NOW);
-      expect(upgraded.list({})).toHaveLength(2);
+      upgraded.queue({ channelId: 'slack', alertId: 3, message: alertMessage('started'), event: true }, NOW);
+      expect(upgraded.list({}).map(message => message.status)).toEqual(['waiting', 'grouped', 'waiting']);
+    });
+
+    it('holds a channel whose message failed in an older Chatter, so the next messages do not go past it', () => {
+      const failed = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markRetry(failed, 'ntfy answered 503.', NOW + 10 * MINUTE);
+      db.exec('DELETE FROM notification_channel_holds');
+      queue('phones', 2);
+
+      const upgraded = new Outbox(db, moreAlerts);
+
+      expect(upgraded.takeDue(NOW)).toEqual([]);
+      expect(upgraded.takeDue(NOW + 10 * MINUTE).map(entry => entry.id)).toEqual([failed]);
+    });
+
+    it('counts each event of an event message in the summary after a hold', () => {
+      const first = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markRetry(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      [2, 3, 4].forEach(alertId => queueEvent('phones', alertId, NOW + alertId * MINUTE));
+      [5, 6, 7, 8].forEach(alertId => queue('phones', alertId, alertMessage('started', `machine-${alertId}`), NOW + 10 * MINUTE));
+
+      expect(outbox.takeDue(NOW + 60 * MINUTE)[0].message.text).toBe(
+        'Chatter could not send 5 alerts while the channel was blocked: Program ended on Haas VF-2 (3), In alarm on Haas VF-2 (2). '
+        + 'Open Chatter to see them.',
+      );
     });
   });
 

@@ -203,12 +203,59 @@ test_install_after_the_file_changed() {
   check "a new file in the inbox after the check: the checked version installs" new_version_runs
   check "a new file in the inbox after the check: it stays in the inbox, unread" test -f "$inbox/chatter-update.tar"
 
+  check "the copy is gone after the check, and the install works with the checked files" status_is "done"
+}
+
+# The check deletes the copy of the update file. The install loads the checked files, so it checks each of them again.
+test_install_after_a_checked_file_changed() {
+  local member
+  for member in chatter.tar.gz rules.yml docker-compose.yml; do
+    set_up_ready
+    echo "changed" >> "$state_dir/files/$member"
+    send_request install
+    check "the checked $member changed: refused" status_is refused
+    check "the checked $member changed: the reason says so" reason_has "changed"
+    check "the checked $member changed: nothing is stopped" bash -c "! grep -q stop '$fake/calls.log'"
+    check "the checked $member changed: nothing is loaded" bash -c "! grep -q load '$fake/calls.log'"
+    check "the checked $member changed: the work files are gone" nothing_of_the_run_stays
+  done
+
   set_up_ready
-  echo "changed" >> "$state_dir/update.tar"
+  rm "$state_dir/files/vmalert.tar.gz"
   send_request install
-  check "the checked copy changed: refused" status_is refused
-  check "the checked copy changed: the reason says so" reason_has "changed"
-  check "the checked copy changed: nothing is stopped" bash -c "! grep -q stop '$fake/calls.log'"
+  check "a checked file is gone: refused" reason_has "changed"
+
+  set_up_ready
+  sed -i 's/^version .*/version 1.3.0/' "$state_dir/files/manifest.txt"
+  sed -i 's/^version=.*/version=1.3.0/' "$state_dir/state"
+  send_request install
+  check "the checked manifest changed: refused" reason_has "changed"
+  check "the checked manifest changed: nothing is stopped" bash -c "! grep -q stop '$fake/calls.log'"
+}
+
+# The steps of an install, in order. Loading tells which image of how many.
+test_the_status_tells_the_steps_of_an_install() {
+  set_up_ready
+  : > "$sandbox/helper.log"
+  UPDATE_HEARTBEAT=1 FAKE_DOCKER_HANGS_ON="load --input" send_request install &
+  local helper=$! first_beat
+  wait_until test -s "$fake/hung"
+  check "while the first image loads, the step is loading" test "$(status_field step)" = loading
+  check "while the first image loads, it is image 1" test "$(status_field part)" = 1
+  check "while the first image loads, there are 3 images" test "$(status_field parts)" = 3
+  check "the busy status with a part is the JSON that Chatter reads" status_is_valid_json
+  first_beat="$(status_field heartbeat)"
+  wait_until heartbeat_is_not "$first_beat"
+  check "a heartbeat write keeps the image number" test "$(status_field part)" = 1
+  stop_hung_docker
+  wait "$helper"
+
+  set_up_ready
+  : > "$sandbox/helper.log"
+  send_request install
+  check "the steps of a good install, in order" \
+    test "$(steps_in_log)" = "verifying backing-up loading loading loading loading starting health "
+  check "the done status has no step" test -z "$(status_field step)"
 }
 
 test_the_same_update_after_a_roll_back() {
@@ -335,6 +382,8 @@ test_install_with_no_ready_file_is_refused
 test_a_ready_file_older_than_a_day_is_refused
 test_a_second_install_of_the_same_file_does_nothing
 test_install_after_the_file_changed
+test_install_after_a_checked_file_changed
+test_the_status_tells_the_steps_of_an_install
 test_the_same_update_after_a_roll_back
 test_a_leftover_old_backup_is_deleted
 test_too_little_space_at_install_starts_the_old_version_again

@@ -12,6 +12,8 @@ export function useServerReport<Report>(load: () => Promise<Report>) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [changeError, setChangeError] = useState<string | null>(null);
   const [isChanging, setIsChanging] = useState(false);
+  // The last refresh failed. The report is still the last one that came.
+  const [isUnreachable, setIsUnreachable] = useState(false);
 
   useEffect(() => {
     let isCurrent = true;
@@ -43,8 +45,10 @@ export function useServerReport<Report>(load: () => Promise<Report>) {
   const refresh = useCallback(async () => {
     try {
       setReport(await load());
+      setIsUnreachable(false);
     } catch {
       // The next refresh tries again
+      setIsUnreachable(true);
     }
   }, [load]);
 
@@ -58,5 +62,5 @@ export function useServerReport<Report>(load: () => Promise<Report>) {
     }
   }, []);
 
-  return { report, loadError, changeError, isChanging, change, refresh, refreshPart };
+  return { report, loadError, changeError, isChanging, change, refresh, refreshPart, isUnreachable };
 }

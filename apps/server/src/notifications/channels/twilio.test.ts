@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OutgoingMessage } from './ChannelType.js';
-import { fakeFetch } from './testSupport.js';
+import { BUSY, fakeFetch, TOO_MANY } from './testSupport.js';
 import { createTwilioChannel, TWILIO_API, twilioAddressOf } from './twilio.js';
 
 const MESSAGE: OutgoingMessage = {
@@ -121,11 +121,49 @@ describe('twilioChannel', () => {
     expect(readBytes).toBeLessThanOrEqual(64 * 1024 + part.byteLength);
   });
 
-  it.each([[408, undefined], [429, 20429], [500, undefined], [503, undefined]])('tries again later when Twilio answers %i', async (status, code) => {
-    const twilio = fakeTwilio(() => twilioError(status, code));
+  it.each([[408, undefined, BUSY], [429, 20429, TOO_MANY], [500, undefined, BUSY], [503, undefined, BUSY]])(
+    'tries again later when Twilio answers %i, with the text of the other channel types',
+    async (status, code, ending) => {
+      const twilio = fakeTwilio(() => twilioError(status, code));
 
-    expect(await twilioChannel.send({ ...settings, to: ['+15559870001'] }, MESSAGE, twilio.context()))
-      .toEqual({ ok: false, retry: true, error: `Twilio answered ${status}. Chatter tries again later.` });
+      expect(await twilioChannel.send({ ...settings, to: ['+15559870001'] }, MESSAGE, twilio.context()))
+        .toEqual({ ok: false, retry: true, error: `Twilio answered ${status}${ending}` });
+    },
+  );
+
+  describe('the wait of a 429', () => {
+    const tooMany = (retryAfter: string) => {
+      const answer = twilioError(429, 20429);
+      answer.headers.set('retry-after', retryAfter);
+      return answer;
+    };
+
+    it('reads the Retry-After header, and tells the wait', async () => {
+      const twilio = fakeTwilio(() => tooMany('60'));
+
+      expect(await twilioChannel.send({ ...settings, to: ['+15559870001'] }, MESSAGE, twilio.context())).toEqual({
+        ok: false, retry: true, retryAfterMs: 60_000,
+        error: 'Twilio answered 429: too many requests. The service asks Chatter to wait 60 seconds.',
+      });
+    });
+
+    it('uses the longest wait of the phones, and tells it one time', async () => {
+      const twilio = fakeTwilio(to => tooMany(to === '+15559870001' ? '30' : '60'));
+
+      expect(await twilioChannel.send(settings, MESSAGE, twilio.context())).toEqual({
+        ok: false, retry: true, retryAfterMs: 60_000,
+        error: 'Twilio answered 429: too many requests. The service asks Chatter to wait 60 seconds.',
+      });
+    });
+
+    it('gives no wait when some phones got the message, because Chatter does not try again', async () => {
+      const twilio = fakeTwilio(to => (to === '+15559870001' ? created() : tooMany('60')));
+
+      expect(await twilioChannel.send(settings, MESSAGE, twilio.context())).toEqual({
+        ok: false, retry: false,
+        error: 'Sent to 1 of 2 phones. Twilio answered 429: too many requests. Chatter does not try again, so no phone gets the message two times.',
+      });
+    });
   });
 
   it('tells the problem one time when it is the same for each phone', async () => {
@@ -142,7 +180,7 @@ describe('twilioChannel', () => {
 
     expect(result).toEqual({
       ok: false, retry: true,
-      error: 'Twilio answered 503. +15559870002 is not a phone number that Twilio can send to. Check the number. Chatter tries again later.',
+      error: `Twilio answered 503${BUSY} +15559870002 is not a phone number that Twilio can send to. Check the number.`,
     });
   });
 
@@ -151,7 +189,7 @@ describe('twilioChannel', () => {
 
     expect(await twilioChannel.send(settings, MESSAGE, twilio.context())).toEqual({
       ok: false, retry: false,
-      error: 'Sent to 1 of 2 phones. Twilio answered 503. Chatter does not try again, so no phone gets the message two times.',
+      error: `Sent to 1 of 2 phones. Twilio answered 503${BUSY} Chatter does not try again, so no phone gets the message two times.`,
     });
   });
 
@@ -192,9 +230,9 @@ describe('twilioChannel', () => {
     const onePhone = { ...settings, to: ['+15559870001'] };
 
     expect(await twilioChannel.send(onePhone, MESSAGE, offline.context()))
-      .toEqual({ ok: false, retry: true, error: 'Chatter could not reach Twilio (ENOTFOUND). Chatter tries again later.' });
+      .toEqual({ ok: false, retry: true, error: 'Chatter could not reach Twilio (ENOTFOUND).' });
     expect(await twilioChannel.send(onePhone, MESSAGE, slow.context()))
-      .toEqual({ ok: false, retry: true, error: 'Twilio did not answer in time. Chatter tries again later.' });
+      .toEqual({ ok: false, retry: true, error: 'Twilio did not answer in time.' });
   });
 
   describe('settings', () => {

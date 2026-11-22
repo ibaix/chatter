@@ -137,8 +137,8 @@ function parseValue(
  * A Brother control serves one client at a time. It accepts a second connection, but it does not answer on it.
  */
 export const NO_REPLY_ERROR =
-  'The machine accepts the connection, but it does not answer. Another program can be connected to it: ' +
-  'a Brother control serves only one program at a time. Stop the other program, or restart the network of the control.';
+  'The machine accepts the connection, but it does not answer. Possibly another program is connected to it. ' +
+  'A Brother control serves only one program at a time. Stop the other program. If you cannot find it, turn the control off and on again.';
 
 /** A command got no reply in time. The connection is not usable after this. */
 class NoReplyError extends Error {

@@ -67,6 +67,7 @@ The alert fires only when all of these are true:
 A feed hold, an M00 or M01 stop, a single block stop, an alarm, or an emergency stop does not fire the alert.
 
 The alert stops by itself after about 1 minute. Chatter sends only the start message to the channels. It sends no "OK" message when the alert stops.
+A channel gets at most one **Program ended** message for each machine in 15 minutes. The next message tells how many programs ended since the last message. See [Limits for each channel](./notifications.md#limits-for-each-channel).
 The **Alerts** panel shows the alert as a past alert.
 
 Some limits:

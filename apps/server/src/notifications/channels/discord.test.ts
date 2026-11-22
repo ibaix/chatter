@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { defineChannelType, type OutgoingMessage } from './ChannelType.js';
 import { discordChannel } from './discord.js';
-import { fakeFetch, textOf, WARNING_MESSAGE as MESSAGE } from './testSupport.js';
+import { BUSY, fakeFetch, textOf, WARNING_MESSAGE as MESSAGE, TOO_MANY } from './testSupport.js';
 
 const TOKEN = 'token-for-tests_abc-123';
 const WEBHOOK = `https://discord.com/api/webhooks/123456789012345678/${TOKEN}`;
@@ -191,8 +191,8 @@ describe('discordChannel', () => {
     );
   });
 
-  it.each([408, 429, 500, 503])('tries again later when Discord answers %i (busy or a problem)', async status => {
-    expect(await resultFor(status)).toEqual({ ok: false, retry: true, error: `Discord answered ${status}. Chatter tries again later.` });
+  it.each([[408, BUSY], [429, TOO_MANY], [500, BUSY], [503, BUSY]])('tries again later when Discord answers %i (busy or a problem)', async (status, ending) => {
+    expect(await resultFor(status)).toEqual({ ok: false, retry: true, error: `Discord answered ${status}${ending}` });
   });
 
   it.each([401, 403, 404])('stops at once when Discord answers %i, and tells the admin to copy the address again', async status => {

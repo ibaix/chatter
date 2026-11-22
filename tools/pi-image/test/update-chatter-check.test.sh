@@ -23,7 +23,9 @@ test_a_correct_update_file_is_ready() {
   check "the request is moved out of the inbox" test ! -e "$inbox/request.json"
   check "the helper does not delete other inbox entries" test -e "$inbox/.partial-abc"
   check "the state file says ready" test "$(state_value phase)" = ready
-  check "the helper keeps its own copy of the update file" test -f "$state_dir/update.tar"
+  check "the copy of the update file is deleted after the check" test ! -e "$state_dir/update.tar"
+  check "the checked files stay for the install" test -f "$state_dir/files/chatter.tar.gz"
+  check "the checked files are in the root-only folder" test "$(stat --format %a "$state_dir")" = 700
   check "the moved file is deleted after the copy" test -z "$(ls -A "$state_dir/incoming")"
   check "the check does not change the installed version" test "$(cat "$state_dir/installed-version")" = "$OLD_VERSION"
 }
@@ -204,6 +206,77 @@ test_too_little_space_is_refused() {
   check "too little free space: no work files stay" work_files_are_gone
 }
 
+sum_of_sizes() {
+  local total=0 file
+  for file in "$@"; do total=$((total + $(stat --format %s "$file"))); done
+  echo "$total"
+}
+
+data_bytes_in_volume() {
+  du --summarize --bytes "$fake/volumes/chatter_chatterbox-data" | cut -f 1
+}
+
+# The space that the install needs, as the helper counts it: 3 times each image file (the loaded image), the data,
+# the 200 MB reserve, and the extracted files. The helper deletes the copy of the update file, so the copy does not count.
+space_for_install_of() {
+  local dir="$1" images extracted copy
+  images="$(sum_of_sizes "$dir/chatter.tar.gz" "$dir/victoria-metrics.tar.gz" "$dir/vmalert.tar.gz")"
+  extracted="$(sum_of_sizes "$dir"/{chatter.tar.gz,victoria-metrics.tar.gz,vmalert.tar.gz,docker-compose.yml,rules.yml})"
+  copy="$(stat --format %s "$inbox/chatter-update.tar")"
+  echo $((3 * images + $(data_bytes_in_volume) + 200 * 1024 * 1024 + extracted - copy))
+}
+
+last_step_in_log() {
+  steps_in_log | awk '{ print $NF }'
+}
+
+# The data is large (a sparse 1 GB file), so the install needs more space than the copy step.
+test_too_little_space_for_the_install_is_refused() {
+  local dir needed
+  set_up
+  truncate --size 1G "$(data_file big.db)"
+  dir="$(put_update_file)"
+  needed="$(space_for_install_of "$dir")"
+  check "the test needs more space for the install than for the copy (size + 200 MB)" \
+    test "$needed" -gt $(($(stat --format %s "$inbox/chatter-update.tar") + 200 * 1024 * 1024))
+  FAKE_FREE_BYTES=$((needed - 1)) send_request check
+  check "1 byte less than the install needs: refused" status_is refused
+  check "1 byte less than the install needs: the reason is the space" reason_has "space"
+  check "1 byte less than the install needs: the copy step passed, the space step refused" \
+    test "$(last_step_in_log)" = space
+  check "1 byte less than the install needs: no work files stay" work_files_are_gone
+
+  set_up
+  truncate --size 1G "$(data_file big.db)"
+  dir="$(put_update_file)"
+  FAKE_FREE_BYTES="$(space_for_install_of "$dir")" send_request check
+  check "exactly the space that the install needs: ready" status_is ready
+}
+
+# The extracted files come next to the copy, so they need their size and the reserve while the check works.
+# A correct file is always larger than its extracted files, so only a signed size that is too large fails here.
+# The data is small, so the install needs less space than the extracted files.
+test_too_little_space_for_the_extracted_files_is_refused() {
+  local dir size extracted free
+  set_up
+  rm -r "$(data_file focas)"
+  dir="$(make_payload "$NEW_VERSION")"
+  write_manifest "$dir" "$NEW_VERSION"
+  size="$(stat --format %s "$dir/rules.yml")"
+  sed -i "s/^\(file rules.yml [0-9a-f]*\) $size$/\1 $((size + 1000000000))/" "$dir/manifest.txt"
+  sign_manifest "$dir"
+  pack_into_inbox "$dir"
+  extracted=$(($(sum_of_sizes "$dir"/{chatter.tar.gz,victoria-metrics.tar.gz,vmalert.tar.gz,docker-compose.yml,rules.yml}) + 1000000000))
+  free=$((extracted + 200 * 1024 * 1024 - 1))
+  check "the test has enough space for the copy and for the install, with the signed sizes" \
+    test "$(stat --format %s "$inbox/chatter-update.tar")" -lt "$free" -a $(($(space_for_install_of "$dir") + 1000000000)) -le "$free"
+  FAKE_FREE_BYTES="$free" send_request check
+  check "1 byte less than the signed sizes and the reserve: refused for space, before the checksums" \
+    reason_has "space"
+  check "1 byte less than the signed sizes and the reserve: the space step refused" test "$(last_step_in_log)" = space
+  check "1 byte less than the signed sizes and the reserve: no work files stay" work_files_are_gone
+}
+
 test_a_too_large_file_is_refused() {
   set_up
   truncate --size 629145601 "$inbox/chatter-update.tar"
@@ -310,10 +383,36 @@ pack_with_unknown_name() {
   pack_into_inbox "$1"
 }
 
+pack_with_duplicate_manifest() {
+  pack_into_inbox "$1"
+  tar --append --file "$inbox/chatter-update.tar" --directory "$1" manifest.txt
+}
+
+# A name with a space after it. The long listing shows it as "rules.yml ", which is not an allowed name.
+pack_with_space_after_a_name() {
+  mv "$1/rules.yml" "$1/rules.yml "
+  pack_into_inbox "$1" manifest.txt manifest.txt.sig chatter.tar.gz victoria-metrics.tar.gz vmalert.tar.gz \
+    docker-compose.yml "rules.yml "
+}
+
+# A name with a newline: --quoting-style=escape lists it as one line, "rules.yml\nmanifest.txt".
+pack_with_newline_in_a_name() {
+  cp "$1/rules.yml" "$1/rules.yml"$'\n'"manifest.txt"
+  pack_into_inbox "$1" manifest.txt.sig chatter.tar.gz victoria-metrics.tar.gz vmalert.tar.gz docker-compose.yml \
+    rules.yml "rules.yml"$'\n'"manifest.txt"
+}
+
+pack_with_fifo() {
+  rm "$1/rules.yml"
+  mkfifo "$1/rules.yml"
+  pack_into_inbox "$1"
+}
+
 test_tar_tricks_are_refused() {
   local trick
   for trick in pack_with_symlink pack_with_dot_dot pack_with_hard_link pack_with_duplicate pack_with_folder \
-    pack_with_unknown_name; do
+    pack_with_unknown_name pack_with_duplicate_manifest pack_with_space_after_a_name pack_with_newline_in_a_name \
+    pack_with_fifo; do
     set_up
     tar_trick "$trick"
     send_request check
@@ -335,6 +434,57 @@ test_tar_tricks_are_refused() {
   send_request check
   check "a correct update file in gzip: refused" reason_has "not a correct"
   check "a correct update file in gzip: no work files stay" work_files_are_gone
+}
+
+# Makes a correct update file with the manifest first, as the release script does. Prints its payload folder.
+put_update_file_in_release_order() {
+  local dir
+  dir="$(make_payload "$NEW_VERSION")"
+  write_manifest "$dir" "$NEW_VERSION"
+  sign_manifest "$dir"
+  pack_into_inbox "$dir" manifest.txt manifest.txt.sig chatter.tar.gz victoria-metrics.tar.gz vmalert.tar.gz \
+    docker-compose.yml rules.yml
+  echo "$dir"
+}
+
+# Prints the block number (512 bytes) of a line of the tar listing: block_of <text in the line>
+block_of() {
+  tar --list --block-number --verbose --file "$inbox/chatter-update.tar" | sed -n "s/^block \([0-9]*\): .*$1.*/\1/p"
+}
+
+cut_update_file_at() {
+  truncate --size "$1" "$inbox/chatter-update.tar"
+}
+
+# A download or an upload that stops early gives a file that is cut short.
+test_an_update_file_that_is_cut_short_is_refused() {
+  local dir start size end cut
+  set_up
+  dir="$(put_update_file_in_release_order)"
+  start=$((($(block_of chatter.tar.gz) + 1) * 512))
+  size="$(stat --format %s "$dir/chatter.tar.gz")"
+  cut_update_file_at $((start + size / 2))
+  send_request check
+  check "a file cut in the middle of chatter.tar.gz: refused" reason_has "not a correct"
+  check "a file cut in the middle of chatter.tar.gz: no work files stay" work_files_are_gone
+
+  # GNU tar ends the file with two blocks of zeros. The last file is complete before them.
+  for cut in 0 512 700; do
+    set_up
+    put_update_file_in_release_order > /dev/null
+    end=$(($(block_of "Block of NULs") * 512))
+    cut_update_file_at $((end + cut))
+    send_request check
+    check "a file cut $cut bytes into the two end blocks: refused" reason_has "not a correct"
+    check "a file cut $cut bytes into the two end blocks: no work files stay" work_files_are_gone
+  done
+
+  set_up
+  put_update_file_in_release_order > /dev/null
+  end=$(($(block_of "Block of NULs") * 512))
+  cut_update_file_at $((end + 1024))
+  send_request check
+  check "a file with the two end blocks, but cut in the zeros that fill the last record: ready" status_is ready
 }
 
 # The limits hold before the signature check, so an unsigned file cannot make the helper store or read much.
@@ -404,6 +554,64 @@ test_a_manifest_that_does_not_match_the_tar_is_refused() {
   pack_into_inbox "$dir"
   send_request check
   check "a signed manifest with CR LF line ends: refused" reason_has "not a correct"
+}
+
+# The tar has an allowed name that the signed manifest does not list as a "file".
+test_an_extra_entry_that_the_manifest_does_not_list_is_refused() {
+  local dir old_vm="victoriametrics/victoria-metrics:$OLD_VM_TAG"
+  set_up
+  dir="$(make_payload "$NEW_VERSION")"
+  mv "$dir/victoria-metrics.tar.gz" "$sandbox/build/extra"
+  MANIFEST_EXTRA="unchanged victoria-metrics.tar.gz $old_vm $(fake_image_id "$old_vm")" write_manifest "$dir" "$NEW_VERSION"
+  sign_manifest "$dir"
+  mv "$sandbox/build/extra" "$dir/victoria-metrics.tar.gz"
+  pack_into_inbox "$dir"
+  send_request check
+  check "an image file that the manifest calls unchanged: refused" reason_has "not a correct"
+  check "an extra entry: no work files stay" work_files_are_gone
+}
+
+# The release script puts the manifest first, but the order is not part of the check.
+test_a_manifest_at_the_end_is_ready() {
+  set_up
+  local dir
+  dir="$(make_payload "$NEW_VERSION")"
+  write_manifest "$dir" "$NEW_VERSION"
+  sign_manifest "$dir"
+  pack_into_inbox "$dir" chatter.tar.gz victoria-metrics.tar.gz vmalert.tar.gz docker-compose.yml rules.yml \
+    manifest.txt.sig manifest.txt
+  send_request check
+  check "a correct update file with the manifest at the end: ready" status_is ready
+}
+
+# Fake tar and sha256sum that write each call to a log, then run the real command.
+count_reads() {
+  local command
+  for command in tar sha256sum; do
+    cat > "$sandbox/bin/$command" << EOF
+#!/usr/bin/env bash
+echo "\$* < \$(readlink /proc/self/fd/0)" >> "$fake/$command.log"
+exec /usr/bin/$command "\$@"
+EOF
+    chmod +x "$sandbox/bin/$command"
+  done
+}
+
+# Each read of the update file takes minutes on a Pi. The check reads it fully only to copy it and to extract it.
+test_the_check_reads_the_update_file_few_times() {
+  set_up
+  put_update_file > /dev/null
+  count_reads
+  send_request check
+  check "read count: the file is ready" status_is ready
+  check "read count: tar lists the copy one time" test "$(grep -c -- '--list' "$fake/tar.log")" -eq 1
+  check "read count: tar extracts the manifest and stops (--occurrence=1)" \
+    grep -q -- '--extract --occurrence=1 .* manifest.txt manifest.txt.sig < .*update.tar' "$fake/tar.log"
+  check "read count: tar runs 3 times on the copy (list, manifest, files)" \
+    test "$(grep -c 'update.tar$' "$fake/tar.log")" -eq 3
+  check "read count: no sha256 of the whole copy" bash -c "! grep -q update.tar '$fake/sha256sum.log'"
+  check "read count: one sha256 for each of the 5 files, and one for the manifest" \
+    test "$(grep -c 'files/' "$fake/sha256sum.log")" -eq 6
 }
 
 test_unchanged_images_must_be_on_the_pi() {
@@ -510,6 +718,34 @@ test_the_heartbeat_changes_while_the_helper_works() {
 
 # A heartbeat that writes at the moment the helper stops it must not write "checking" over the result.
 # The heartbeat writes each 10 ms, and each of its writes takes 0.5 seconds, so it is nearly always writing.
+# The step is in status.json while the helper works, and the heartbeat keeps it.
+test_the_status_tells_the_step() {
+  set_up
+  put_update_file > /dev/null
+  UPDATE_HEARTBEAT=1 FAKE_DOCKER_HANGS_ON="du" send_request check &
+  local helper=$! first_beat started
+  wait_until test -s "$fake/hung"
+  check "while the data is measured, the step is space" test "$(status_field step)" = space
+  check "the busy status has the start time" test -n "$(status_field startedAt)"
+  check "the busy status with a step is the JSON that Chatter reads" status_is_valid_json
+  first_beat="$(status_field heartbeat)"
+  started="$(status_field startedAt)"
+  wait_until heartbeat_is_not "$first_beat"
+  check "a heartbeat write keeps the step" test "$(status_field step)" = space
+  check "a heartbeat write keeps the start time" test "$(status_field startedAt)" = "$started"
+  stop_hung_docker
+  wait "$helper"
+  check "the steps of a check that stopped, in order, are in the log" \
+    test "$(steps_in_log)" = "copying listing signature space "
+  check "the result has no step" test -z "$(status_field step)"
+
+  set_up
+  put_update_file > /dev/null
+  send_request check
+  check "the steps of a good check, in order" test "$(steps_in_log)" = "copying listing signature space files images "
+  check "a ready status has no step and no start time" test -z "$(status_field step)$(status_field startedAt)"
+}
+
 test_the_heartbeat_never_writes_after_the_result() {
   set_up
   put_update_file > /dev/null
@@ -531,13 +767,19 @@ test_an_older_version_is_refused
 test_a_bad_version_text_is_refused
 test_the_wrong_processor_type_is_refused
 test_too_little_space_is_refused
+test_too_little_space_for_the_install_is_refused
+test_too_little_space_for_the_extracted_files_is_refused
 test_a_too_large_file_is_refused
 test_a_symlink_or_fifo_as_the_update_file_is_refused
 test_a_symlink_or_fifo_as_the_request_does_nothing
 test_only_the_exact_request_texts_work
 test_tar_tricks_are_refused
+test_an_update_file_that_is_cut_short_is_refused
 test_size_limits_before_the_signature_check
 test_a_manifest_that_does_not_match_the_tar_is_refused
+test_an_extra_entry_that_the_manifest_does_not_list_is_refused
+test_a_manifest_at_the_end_is_ready
+test_the_check_reads_the_update_file_few_times
 test_unchanged_images_must_be_on_the_pi
 test_a_fake_status_in_the_inbox_changes_nothing
 test_a_new_check_deletes_the_old_ready_file
@@ -545,5 +787,6 @@ test_the_installed_version_file
 test_a_hung_container_does_not_hang_the_check
 test_the_check_command_works_without_a_request
 test_the_heartbeat_changes_while_the_helper_works
+test_the_status_tells_the_step
 test_the_heartbeat_never_writes_after_the_result
 finish_tests

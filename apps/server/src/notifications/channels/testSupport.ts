@@ -33,3 +33,8 @@ export function fakeFetch(answer: (request: SentRequest) => Response | Promise<R
 export function textOf(result: SendResult): string {
   return result.ok ? result.detail : result.error;
 }
+
+/** The end of the error text of an answer 408 or 5xx, after "X answered 503" */
+export const BUSY = '. The service is busy or has a problem.';
+/** The end of the error text of an answer 429, after "X answered 429" */
+export const TOO_MANY = ': too many requests.';

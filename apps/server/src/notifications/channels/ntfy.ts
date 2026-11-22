@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { type ChannelDefinition, type OutgoingMessage, type SendResult, titleOf } from './ChannelType.js';
-import { type Answer, type JsonObject, postJson, serviceReason, statusResult } from './http.js';
+import { type Answer, durationText, type JsonObject, postJson, serviceReason, statusResult } from './http.js';
 import { soundField, soundSetting } from './sound.js';
 import { HEADER_SAFE, hasNoLogin, isHttpAddress } from './webAddress.js';
 
@@ -110,12 +110,43 @@ function hasTopicPath(url: string, topic: string): boolean {
   return pathname.replace(/\/$/, '').endsWith(`/${topic}`);
 }
 
-function resultOf({ status, json }: Answer, settings: NtfySettings): SendResult {
+/** The code of ntfy for "daily message quota reached". ntfy gives each limit its own code: https://github.com/binwiederhier/ntfy/blob/main/server/errors.go */
+const DAILY_QUOTA_CODE = 42908;
+
+/**
+ * An older ntfy server sends no Retry-After with the daily limit. The limit resets one time each day,
+ * so a try each hour finds the reset soon enough, and does not send a request each 10 minutes for a day.
+ */
+const DAILY_QUOTA_WAIT_MS = 60 * 60_000;
+
+/** The limits of ntfy.sh for a sender with no account: https://docs.ntfy.sh/publish/#limitations */
+const PUBLIC_DAILY_MESSAGES = 250;
+
+function resultOf({ status, json, retryAfterMs }: Answer, settings: NtfySettings): SendResult {
+  if (status === 429) return tooManyResult(json, retryAfterMs, settings);
   return statusResult(status, {
     answered: `ntfy answered ${status}`,
     sent: 'ntfy sent it',
     refused: () => refusalOf(status, json, settings),
   });
+}
+
+/**
+ * A 429 of ntfy. The daily limit of messages tells the limit and its reset, because a new try does not help before the reset.
+ * Each other 429 is a request limit for a short time. Chatter tells a reset time only when ntfy gave one.
+ */
+function tooManyResult(json: JsonObject | undefined, retryAfterMs: number | undefined, { url, token }: NtfySettings): SendResult {
+  if (json?.code !== DAILY_QUOTA_CODE) {
+    const wait = retryAfterMs === undefined ? '' : ` Wait ${durationText(retryAfterMs)}.`;
+    return { ok: false, retry: true, error: `Too many requests to ntfy.${wait}`, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) };
+  }
+  const resets = retryAfterMs === undefined ? '' : ` It resets in ${durationText(retryAfterMs)}.`;
+  const anonymousOnPublic = !token && new URL(serverOf(url)).hostname === PUBLIC_HOST;
+  const error = anonymousOnPublic
+    ? `${PUBLIC_HOST} allows ${PUBLIC_DAILY_MESSAGES} messages each day for each network (IP address). The limit is used.${resets} `
+      + 'Use an access token or your own ntfy server.'
+    : `The daily message limit of the ntfy server is used.${resets}`;
+  return { ok: false, retry: true, error, retryAfterMs: retryAfterMs ?? DAILY_QUOTA_WAIT_MS };
 }
 
 /** `json` is the error answer of ntfy, for example {"code":40009,"http":400,"error":"invalid request"} */

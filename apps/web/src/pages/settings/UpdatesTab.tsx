@@ -28,7 +28,7 @@ export const POLL_MS = 3000;
  * On a normal computer, the Admin updates with docker compose.
  */
 export function UpdatesTab() {
-  const { report, loadError, changeError, isChanging, change, refresh } = useServerReport(fetchUpdatesReport);
+  const { report, loadError, changeError, isChanging, change, refresh, isUnreachable } = useServerReport(fetchUpdatesReport);
   // Chatter itself restarts during an install, so failed requests in that time are normal
   usePolling(report !== null && isWaitingForServer(report), refresh);
   if (loadError || !report) return <ReportPending loadError={loadError} />;
@@ -41,7 +41,7 @@ export function UpdatesTab() {
       {report.helper && !report.canUpdate && <Notice tone="info" title="Development build: it cannot update from here" />}
       {report.helper && report.canUpdate && (
         <>
-          <UpdateStatusPanel report={report} changes={changes} />
+          <UpdateStatusPanel report={report} changes={changes} isUnreachable={isUnreachable} />
           <UpdateFilePanel report={report} changes={changes} />
         </>
       )}

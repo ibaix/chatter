@@ -1,9 +1,7 @@
 import { isPhoneNumber } from '@local-chatter/shared';
 import { z } from 'zod';
 import type { ChannelDefinition, OutgoingMessage, SendContext, SendResult } from './ChannelType.js';
-import { isBusy, jsonOf } from './http.js';
-import { networkFailure } from './networkFailure.js';
-import { REDIRECTS } from './webAddress.js';
+import { type Answer, postForm, statusResult, withWait } from './http.js';
 
 export const TWILIO_API = 'https://api.twilio.com';
 const THIS_COMPUTER = new Set(['127.0.0.1', 'localhost', '[::1]']);
@@ -47,9 +45,6 @@ const twilioSettings = z.object({
 });
 
 type TwilioSettings = z.infer<typeof twilioSettings>;
-
-/** The result for one phone. `cause` tells what went wrong, but not what Chatter does next. */
-type PhoneResult = { ok: true } | { ok: false; retry: boolean; cause: string };
 
 /** The Twilio error codes that the user can fix, from https://www.twilio.com/docs/api/errors */
 const REFUSALS: Record<number, (phone: string) => string> = {
@@ -95,55 +90,45 @@ export function createTwilioChannel(apiBase: string): ChannelDefinition<TwilioSe
   };
 }
 
-async function sendOne(
-  base: string, settings: TwilioSettings, phone: string, message: OutgoingMessage, { fetch, signal }: SendContext,
-): Promise<PhoneResult> {
+/** The result for one phone. Its text tells what went wrong, but not what Chatter does next. */
+function sendOne(
+  base: string, settings: TwilioSettings, phone: string, message: OutgoingMessage, context: SendContext,
+): Promise<SendResult> {
   const login = Buffer.from(`${settings.accountSid}:${settings.authToken}`).toString('base64');
-  try {
-    const response = await fetch(`${base}/2010-04-01/Accounts/${settings.accountSid}/Messages.json`, {
-      method: 'POST',
-      headers: { authorization: `Basic ${login}`, 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ To: phone, From: settings.from, Body: message.text }),
-      // A redirect would change the POST to a GET, so Chatter does not follow it
-      redirect: 'manual',
-      signal,
-    });
-    if (response.ok) {
-      response.body?.cancel().catch(() => {});
-      return { ok: true };
-    }
-    return refusal(response.status, await twilioCodeOf(response), phone);
-  } catch (error) {
-    const { retry, error: cause } = networkFailure(error, 'Twilio');
-    return { ok: false, retry, cause };
-  }
+  const request = {
+    url: `${base}/2010-04-01/Accounts/${settings.accountSid}/Messages.json`,
+    headers: { authorization: `Basic ${login}` },
+    form: new URLSearchParams({ To: phone, From: settings.from, Body: message.text }),
+    readJson: true,
+  };
+  return postForm(context, 'Twilio', request, answer => resultOf(answer, phone));
 }
 
-/** The Twilio error code in the answer, for example 21211 */
-async function twilioCodeOf(response: Response): Promise<number | undefined> {
-  const code = (await jsonOf(response))?.code;
-  return typeof code === 'number' ? code : undefined;
-}
-
-function refusal(status: number, code: number | undefined, phone: string): PhoneResult {
+/**
+ * `json` has the Twilio error code, for example 21211. The wait of a 429 goes on the result without a text,
+ * so the result of all the phones tells it one time (see combined).
+ */
+function resultOf({ status, json, retryAfterMs }: Answer, phone: string): SendResult {
+  const code = typeof json?.code === 'number' ? json.code : undefined;
   const known = status === 401 ? REFUSALS[20003] : code === undefined ? undefined : REFUSALS[code];
-  if (known) return { ok: false, retry: false, cause: known(phone) };
-  if (REDIRECTS.has(status)) {
-    return { ok: false, retry: false, cause: `Twilio answered ${status} and points to another address. A proxy of the shop network can cause this.` };
-  }
-  if (isBusy(status)) return { ok: false, retry: true, cause: `Twilio answered ${status}.` };
-  return { ok: false, retry: false, cause: `Twilio refused the message to ${phone} (${code ? `error ${code}` : `answer ${status}`}).` };
+  if (known) return { ok: false, retry: false, error: known(phone) };
+  const result = statusResult(status, {
+    answered: `Twilio answered ${status}`,
+    moved: 'A proxy of the shop network can cause this.',
+    refused: () => `Twilio refused the message to ${phone} (${code ? `error ${code}` : `answer ${status}`}).`,
+  });
+  return !result.ok && result.retry && retryAfterMs !== undefined ? { ...result, retryAfterMs } : result;
 }
 
 /**
  * One result for all the phones. When some phones got the message, Chatter does not try again,
  * because then those phones would get the message two times.
  */
-function combined(results: PhoneResult[]): SendResult {
-  const failures = results.filter((result): result is Extract<PhoneResult, { ok: false }> => !result.ok);
+function combined(results: SendResult[]): SendResult {
+  const failures = results.filter((result): result is Extract<SendResult, { ok: false }> => !result.ok);
   const sentCount = results.length - failures.length;
   if (failures.length === 0) return { ok: true, detail: `Sent to ${phones(sentCount)}` };
-  const causes = [...new Set(failures.map(failure => failure.cause))].join(' ');
+  const causes = [...new Set(failures.map(failure => failure.error))].join(' ');
   if (sentCount > 0) {
     return {
       ok: false, retry: false,
@@ -151,7 +136,13 @@ function combined(results: PhoneResult[]): SendResult {
     };
   }
   const retry = failures.some(failure => failure.retry);
-  return { ok: false, retry, error: retry ? `${causes} Chatter tries again later.` : causes };
+  return withWait({ ok: false, retry, error: causes }, longestWait(failures));
+}
+
+/** The longest wait that Twilio asked for, for one of the phones */
+function longestWait(failures: ReadonlyArray<{ retryAfterMs?: number }>): number | undefined {
+  const waits = failures.flatMap(failure => (failure.retryAfterMs === undefined ? [] : [failure.retryAfterMs]));
+  return waits.length === 0 ? undefined : Math.max(...waits);
 }
 
 function phones(count: number): string {

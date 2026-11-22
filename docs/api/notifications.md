@@ -72,8 +72,8 @@ A test of a form with a wrong value, for example a wrong phone number, gets `200
 
 Each message is `{ id, channelId, alertId, kind, machineId, severity, text, status, attempts, lastError, detail, createdAt, sentAt }`.
 
-- `kind` is `started`, `ended`, `combined` (started and ended), `more` (an "And N more alerts" message), or `test`.
-- `status` is `waiting`, `sent`, `failed`, `grouped` (the alert went in a `more` message), or `ignored` (the text has an ignore pattern of the channel, so Chatter did not send it).
+- `kind` is `started`, `ended`, `combined` (started and ended), `more` (an "And N more alerts" message, or a summary after the channel was blocked), or `test`.
+- `status` is `waiting`, `sent`, `failed`, `grouped` (the alert went in a `more` message, or in the next message about the same event; `detail` tells which), or `ignored` (the text has an ignore pattern of the channel, so Chatter did not send it).
 - For an `ignored` message, `detail` tells why, for example `Ignored by the pattern "Door open"`, or `Ignored, because the start of this alert was ignored`.
 - `lastError` is the reason of the last failed try. `detail` is the answer of the service when it took the message.
 

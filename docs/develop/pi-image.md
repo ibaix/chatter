@@ -110,6 +110,46 @@ Later starts skip step 3.
 
 When an Admin checks or installs an update file in Chatter, Chatter writes `request.json` into `/opt/chatter/update/inbox/`. `chatter-update.path` sees it and starts `chatter-update.service`, which runs `update-chatter.sh` as root. To see what the helper did: `journalctl -u chatter-update`.
 
+## The steps of the update helper
+
+The helper writes each step to the log, and to `/opt/chatter/update/status.json`. Settings > Updates shows a fixed text for each step.
+
+A check (`update-chatter.sh check`) does these steps, in this order. Each step must pass before the next step starts.
+
+| Step | What the helper does |
+| --- | --- |
+| `copying` | Moves the update file out of the inbox, and copies it into `/var/lib/chatter-update/` (root only). |
+| `listing` | The file must end with the two blocks of zeros that end a tar, so a file that is cut short is refused. Then the helper lists the tar one time. Each entry must be a regular file with an allowed name. Each name comes one time only. There are 7 entries or fewer, and the manifest and its signature are small. Nothing is extracted before this. |
+| `signature` | Extracts only `manifest.txt` and `manifest.txt.sig` (tar stops after them). Checks the signature. Then reads the manifest, and makes sure that the tar holds the same files as the signed manifest. Checks the version and the processor type. |
+| `space` | Measures the Chatter data and the free space. |
+| `files` | Extracts the other files, and compares the size and the sha256 of each file with the signed manifest. |
+| `images` | Makes sure that each image that the manifest calls `unchanged` is on the Pi. |
+
+Then the helper deletes the copy of the update file, and writes `ready`. The checked files stay in `/var/lib/chatter-update/files/`. So a ready update uses about one time the size of the update file on the card, not two times.
+
+An install (`update-chatter.sh install`) does these steps:
+
+| Step | What the helper does |
+| --- | --- |
+| `verifying` | Reads the signed manifest again (its sha256 must be the one that the check kept), and compares the size and the sha256 of each checked file with it. A changed file stops the install before Chatter stops. |
+| `backing-up` | Stops Chatter, and makes a backup of the data. |
+| `loading` | Loads each new image. `part` and `parts` tell which image, for example 2 of 3. |
+| `starting` | Puts the new `docker-compose.yml` and rules in place, and starts the new version. |
+| `health` | Waits up to 5 minutes until the new version runs correctly. |
+
+### status.json
+
+The helper writes `status.json` in one shape (`UpdateStatus` in `packages/shared/src/updates.ts`):
+
+- `state`, `heartbeat` (UTC, the clock of the Pi), `freeBytes`. Also `version`, `reason`, and `freedBytes` when the helper knows them.
+- While the state is `checking` or `installing`: `step`, `part` and `parts` (only while images load), and `startedAt` (UTC, when the check or the install started).
+
+The heartbeat runs in its own process. It writes `status.json` again each 30 seconds. It reads the step from `/var/lib/chatter-update/step` (root only), so it keeps the current step.
+
+Chatter reads `step` strictly: a step that is not in `UPDATE_STEPS` is dropped. A helper of an older card writes no `step` and no `startedAt`. Then the page counts the time from the first busy status that it saw. The report of Chatter has `serverTime`, so the page counts the age of the heartbeat with the clock of the Pi, not the clock of the browser.
+
+An update file never changes the helper. Only a new card image brings a new helper. So a Pi with an older card shows no step names.
+
 ## Files
 
 All paths are in `tools/pi-image/`.
@@ -126,6 +166,7 @@ All paths are in `tools/pi-image/`.
 - `test/imager-list.test.sh`: tests for `imager-list.sh` (needs python3). Run it with `tools/pi-image/test/imager-list.test.sh`.
 - `test/update-chatter-check.test.sh`, `test/update-chatter-install.test.sh`, `test/update-chatter-recover.test.sh`: tests for `in-pi/update-chatter.sh`, with a fake Docker. They run in a Debian 13 container (`test/in-linux.sh`), because they need Linux tools and OpenSSL 3 for Ed25519 signatures. macOS does not have these. Each test makes its own throwaway keys.
 - `test/update-file-round-trip.test.sh`: makes an update file with the real `tools/release/make-update-file.sh`, and checks that the real `in-pi/update-chatter.sh check` says ready, and refuses the file when one byte of an image changes. It runs in the Debian 13 container, with a fake Docker and a throwaway key.
+- The CI runs the three helper tests and the round trip in the workflow `.github/workflows/pi-image-tests.yml`, when a pull request changes the helper, its tests, the release script, or `packages/shared/src/updates.ts`.
 - `test/customize-update.test.sh`: tests for the update folders, owners, and keys that `customize.sh` puts on the card. It also runs in the Debian 13 container.
 - `test/build-version.test.sh`: tests for `CHATTER_VERSION`, `CHATTER_USE_RELEASE_IMAGE`, and the key warning in `build.sh`.
 - `test/update-mounts.test.sh`: tests that the Chatter container can write only into the inbox (needs Docker).

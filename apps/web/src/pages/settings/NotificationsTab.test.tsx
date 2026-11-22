@@ -278,6 +278,22 @@ describe('NotificationsTab', () => {
     expect(within(screen.getByRole('region', { name: 'Messages' })).getByText('Twilio says: unverified number.')).toBeInTheDocument();
   });
 
+  it('shows why a waiting message did not go yet, for example a limit of the service', async () => {
+    const error = 'ntfy.sh allows 250 messages each day for each network (IP address). The limit is used.';
+    await renderTab([message({ status: 'waiting', attempts: 3, lastError: error, detail: null, sentAt: null })]);
+
+    expect(within(screen.getByRole('region', { name: 'Messages' })).getByText(error)).toBeInTheDocument();
+  });
+
+  it('shows a grouped message as Grouped, with the reason', async () => {
+    const reason = 'In one summary message, because the service did not take messages for a time.';
+    await renderTab([message({ status: 'grouped', detail: reason, sentAt: null })]);
+
+    const messages = within(screen.getByRole('region', { name: 'Messages' }));
+    expect(messages.getByText('Grouped')).toBeInTheDocument();
+    expect(messages.getByText(reason)).toBeInTheDocument();
+  });
+
   it('shows an ignored message as Ignored, with the pattern that matched', async () => {
     await renderTab([message({ status: 'ignored', detail: 'Ignored by the pattern "In alarm"', attempts: 0, sentAt: null })]);
 

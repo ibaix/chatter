@@ -27,7 +27,7 @@ export const STATUS_LABELS: Record<MessageStatus, string> = {
   waiting: 'Waiting',
   sent: 'Sent',
   failed: 'Failed',
-  grouped: 'In an "And more alerts" message',
+  grouped: 'Grouped',
   ignored: 'Ignored',
 };
 

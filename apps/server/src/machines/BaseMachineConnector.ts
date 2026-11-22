@@ -105,7 +105,10 @@ export abstract class BaseMachineConnector extends EventEmitter {
    * because the poll itself has not ended yet and so has not given a reason.
    */
   reportPollTimeout(timeoutMs: number): void {
-    this.addError(`The machine did not answer all requests in ${Math.round(timeoutMs / 1000)} seconds. Chatter disconnected, and connects again.`);
+    // The user sees this text, so a time limit under one second shows as 1 second, not 0 seconds
+    const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+    const unit = seconds === 1 ? 'second' : 'seconds';
+    this.addError(`The machine did not answer all requests in ${seconds} ${unit}. Chatter disconnected. It will connect again.`);
   }
 
   protected clearErrors(): void {

@@ -424,6 +424,6 @@ describe('Haas openSocket when the socket closes before it connects', () => {
     socket.destroy();
 
     await expect(opening).rejects.toThrow('Query port connection closed before it opened');
-    expect(onDown).toHaveBeenCalled();
+    expect(onDown).toHaveBeenCalledTimes(1);
   });
 });

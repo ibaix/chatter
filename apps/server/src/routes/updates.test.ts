@@ -150,7 +150,36 @@ describe('update routes', () => {
         isRequestPending: false,
         newest: { checkGitHub: true, version: null, error: null, checkedAt: null, isNewer: false },
         downloadError: null,
+        serverTime: expect.any(String),
       });
+    });
+
+    it('tells the time of the server, so the page can count from the heartbeat with the clock of the Pi', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-11-10T12:00:00.000Z'));
+      try {
+        const res = await appWith().request('/api/updates/status', { headers: { Cookie: cookie } });
+        expect(await res.json()).toMatchObject({ serverTime: '2026-11-10T12:00:00.000Z' });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('passes on the step of a busy helper, and drops a step that it does not know', async () => {
+      const heartbeat = new Date().toISOString();
+      const writeBusy = (fields: object) => writeFileSync(path.join(root, 'status.json'),
+        JSON.stringify({ state: 'installing', version: '1.3.0', heartbeat, freeBytes: 1000, ...fields }));
+      const statusOf = async () =>
+        ((await (await appWith().request('/api/updates/status', { headers: { Cookie: cookie } })).json()) as { status: object }).status;
+
+      writeBusy({ step: 'loading', part: 1, parts: 3, startedAt: heartbeat });
+      expect(await statusOf()).toMatchObject({ step: 'loading', part: 1, parts: 3, startedAt: heartbeat });
+
+      writeBusy({ step: 'rm -rf', part: 1, parts: 3 });
+      const status = await statusOf();
+      expect(status).toMatchObject({ state: 'installing' });
+      expect(status).not.toHaveProperty('step');
+      expect(status).not.toHaveProperty('part');
     });
 
     it('says that a development build cannot update', async () => {
