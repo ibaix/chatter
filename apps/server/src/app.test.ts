@@ -1120,6 +1120,22 @@ describe('API Routes', () => {
       expect(recordUpload).toHaveBeenCalledWith(machine.id, 'test.nc', 'test.nc', '/PRG/O1000.NC', 'test');
     });
 
+    it('replies with success when the file is on the machine but the upload history cannot be saved, and logs the error', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'uploadFile').mockResolvedValue();
+      vi.mocked(recordUpload).mockRejectedValueOnce(new Error('SQLITE_FULL: database or disk is full'));
+      const log = captureLog();
+
+      const res = await call('POST', `/api/machine/${machine.id}/files/upload`, uploadForm({ withFile: true, path: '/PRG/O1000.NC' }));
+      log.restore();
+
+      expect(res.status).toBe(200);
+      expect(res.body.path).toBe('/PRG/O1000.NC');
+      expect(JSON.stringify(res.body)).not.toContain('SQLITE');
+      expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
+      expect(log.text('error')).toContain('SQLITE_FULL');
+    });
+
     it('returns 409 when the file already exists', async () => {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
       vi.spyOn(poller.getConnector(machine.id)!, 'uploadFile')
@@ -1156,6 +1172,25 @@ describe('API Routes', () => {
         { filename: 'a.nc', targetName: 'O0100.NC', path: '/PRG/O0100.NC' },
         { filename: 'b.nc', targetName: 'b.nc', path: '/PRG/b.nc' },
       ]);
+    });
+
+    it('replies with the sent files when the upload history cannot be saved, and logs the error', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'uploadFiles').mockResolvedValue({ success: [{ remotePath: '/PRG/a.nc' }], failed: [] });
+      vi.mocked(recordUpload).mockRejectedValueOnce(new Error('SQLITE_FULL: database or disk is full'));
+      const form = new FormData();
+      form.append('files', new File(['G00'], 'a.nc'));
+      form.append('basePath', '/PRG');
+      const log = captureLog();
+
+      const res = await call('POST', `/api/machine/${machine.id}/files/upload-batch`, form);
+      log.restore();
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toEqual([{ filename: 'a.nc', targetName: 'a.nc', path: '/PRG/a.nc' }]);
+      expect(JSON.stringify(res.body)).not.toContain('SQLITE');
+      expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
+      expect(log.text('error')).toContain('SQLITE_FULL');
     });
 
     it('returns 400 when no files are given', async () => {
