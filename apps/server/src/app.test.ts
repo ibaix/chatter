@@ -1137,6 +1137,18 @@ describe('API Routes', () => {
       return form;
     }
 
+    // A raw multipart body, because a File object cannot set the encoded file name that a client can send.
+    function sendBatchWithFileName(fileNameParameter: string, id: string) {
+      const body = [
+        '--x', `Content-Disposition: form-data; name="files"; ${fileNameParameter}`, '', 'G00',
+        '--x', 'Content-Disposition: form-data; name="basePath"', '', '/PRG',
+        '--x--', '',
+      ].join('\r\n');
+      return send(`/api/machine/${id}/files/upload-batch`, {
+        method: 'POST', headers: { 'Content-Type': 'multipart/form-data; boundary=x' }, body,
+      });
+    }
+
     it.each(BAD_PATHS)('refuses a download of %j and sends nothing to the machine', async path => {
       const { id, connector } = await brotherConnector();
       const downloadFile = vi.spyOn(connector, 'downloadFile');
@@ -1204,22 +1216,28 @@ describe('API Routes', () => {
       expect(uploadFiles).not.toHaveBeenCalled();
     });
 
-    // The file name goes into the path when targetNames gives no other name. filename* can hold an encoded line break.
+    // The file name goes into the path when targetNames gives no other name. The FormData parser decodes
+    // %0D%0A in a quoted filename to a line break on each Node version, so the route must refuse it.
     it('refuses a batch upload of a file whose own name has a line break', async () => {
       const { id, connector } = await brotherConnector();
       const uploadFiles = vi.spyOn(connector, 'uploadFiles');
-      const body = [
-        '--x', `Content-Disposition: form-data; name="files"; filename*=utf-8''O1%0D%0ADELE%20O1234`, '', 'G00',
-        '--x', 'Content-Disposition: form-data; name="basePath"', '', '/PRG',
-        '--x--', '',
-      ].join('\r\n');
 
-      const res = await send(`/api/machine/${id}/files/upload-batch`, {
-        method: 'POST', headers: { 'Content-Type': 'multipart/form-data; boundary=x' }, body,
-      });
+      const res = await sendBatchWithFileName('filename="O1%0D%0ADELE%20O1234"', id);
 
       expect(res.status).toBe(400);
       expect(((await res.json()) as { error: string }).error).toBe(CONTROL_CHARACTER_ERROR);
+      expect(uploadFiles).not.toHaveBeenCalled();
+    });
+
+    // Node 24 decodes filename* to a line break, and the route refuses it. Node 22 cannot parse filename*,
+    // and refuses the body as malformed. Each way, no file goes to the machine.
+    it('refuses a batch upload of a file whose filename* has a line break', async () => {
+      const { id, connector } = await brotherConnector();
+      const uploadFiles = vi.spyOn(connector, 'uploadFiles');
+
+      const res = await sendBatchWithFileName("filename*=utf-8''O1%0D%0ADELE%20O1234", id);
+
+      expect(res.status).toBe(400);
       expect(uploadFiles).not.toHaveBeenCalled();
     });
 
