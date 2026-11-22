@@ -206,7 +206,7 @@ export class HistoryBackup {
       abort.abort();
       await rm(folder, { recursive: true, force: true });
       this.running = null;
-      throw error;
+      throw isDiskFull(error) ? new BackupRefusedError(DISK_FULL_MESSAGE, 507) : error;
     } finally {
       signal?.removeEventListener('abort', stop);
     }
@@ -793,6 +793,10 @@ function isZlibError(error: unknown): boolean {
 /** A problem with the file is a refusal with status 400. A full disk is a refusal with status 507. */
 function refusalOf(error: unknown): unknown {
   if (error instanceof ArchiveError) return new BackupRefusedError(error.message, 400);
-  if ((error as { code?: unknown })?.code === 'ENOSPC') return new BackupRefusedError(DISK_FULL_MESSAGE, 507);
+  if (isDiskFull(error)) return new BackupRefusedError(DISK_FULL_MESSAGE, 507);
   return error;
+}
+
+function isDiskFull(error: unknown): boolean {
+  return (error as { code?: unknown })?.code === 'ENOSPC';
 }

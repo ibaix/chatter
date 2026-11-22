@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import type { NewAlertRule } from '@local-chatter/shared';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AlertRuleService } from '../alert-rules/AlertRuleService.js';
 import { AlertRuleStore } from '../alert-rules/AlertRuleStore.js';
 import type { Auth } from '../auth/Auth.js';
@@ -15,7 +15,7 @@ import { unpack } from '../history-backup/archiveTestSupport.js';
 import { HistoryBackup } from '../history-backup/HistoryBackup.js';
 import { sampleFacts, textLines } from '../history-backup/relabel.js';
 import { addHistory, FakeVictoria, holdImports } from '../history-backup/testSupport.js';
-import { VictoriaHistory, type HistoryStore } from '../history-backup/victoriaHistory.js';
+import { HistoryUnavailableError, VictoriaHistory, type HistoryStore } from '../history-backup/victoriaHistory.js';
 import { MetricsReader, type HistorySource } from '../recording/MetricsReader.js';
 import { captureLog } from '../logging/testSupport.js';
 import { HardwarePoller } from '../polling/poller.js';
@@ -133,6 +133,8 @@ describe.each(BACKENDS)('history backup routes (%s VictoriaMetrics)', (_name, ma
     const historyBackup = new HistoryBackup({
       folder: path.join(folder, 'history-backup'), history: backend.store, statePeriods: periods, alertRules: rules, version: '1.4.0',
       freeBytes: async () => 100 * 1024 ** 3,
+      // Small batches, so a restore sends more than one import request
+      importBatchBytes: 100_000,
     });
     app = testApp({ auth, accounts, poller, history: backend.history, statePeriods: periods, alertRules: rules, historyBackup });
 
@@ -310,6 +312,75 @@ describe.each(BACKENDS)('history backup routes (%s VictoriaMetrics)', (_name, ma
     held.release();
     expect((await running).status).toBe(200);
     expect((await request('DELETE', `/machine/${machineId}/history-restore/${restoreId}`, 'admin')).status).toBe(404);
+  });
+
+  describe('the reason of a failure', () => {
+    const failExport = (error: Error) => {
+      backend.store.exportSeries = async () => {
+        throw error;
+      };
+    };
+
+    it('gives 503 when VictoriaMetrics does not answer', async () => {
+      failExport(new HistoryUnavailableError('VictoriaMetrics did not answer'));
+      const res = await request('POST', `/machine/${machineId}/history-backup`, 'admin', {});
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: expect.stringMatching(/history database \(VictoriaMetrics\) does not answer/) });
+    });
+
+    it('gives 507 when the disk is full', async () => {
+      failExport(Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }));
+      const res = await request('POST', `/machine/${machineId}/history-backup`, 'admin', {});
+      expect(res.status).toBe(507);
+      expect(await res.json()).toEqual({ error: expect.stringMatching(/disk of Chatter is full/) });
+    });
+
+    it('gives 400 for a restore file that is not correct', async () => {
+      const res = await uploadTo(machineId, Buffer.from('not a backup'));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: expect.stringMatching(/not a .tar.gz/) });
+    });
+
+    it('gives 500 for an error that Chatter does not expect, and logs it', async () => {
+      failExport(new Error('a bug'));
+      const log = captureLog();
+      const res = await request('POST', `/machine/${machineId}/history-backup`, 'admin', {});
+      log.restore();
+      expect(res.status).toBe(500);
+      expect(log.text('error')).toMatch(/History backup or restore failed.*a bug/);
+      // The place is free again
+      backend.store.exportSeries = makeBackend().store.exportSeries;
+    });
+  });
+
+  it('when VictoriaMetrics fails during a restore, writes no period and no rule, and a new try doubles nothing', async () => {
+    const archive = await backUp();
+    const added = await request('POST', '/machines', 'admin', { type: 'brother', name: 'Speedio 2', host: '10.0.0.7' });
+    const newId = (await added.json() as { id: string }).id;
+    const { id: restoreId } = await (await uploadTo(newId, archive)).json() as { id: string };
+    const importLines = backend.store.importLines.bind(backend.store);
+    let calls = 0;
+    backend.store.importLines = async body => {
+      calls += 1;
+      if (calls > 1) throw new HistoryUnavailableError('VictoriaMetrics answered 503: busy');
+      return importLines(body);
+    };
+    const publish = vi.spyOn(rules, 'publish');
+    const rulesBefore = rules.rulesOf(newId);
+
+    const failed = await request('POST', `/machine/${newId}/history-restore/${restoreId}`, 'admin', { alertRules: true });
+    expect(failed.status).toBe(503);
+    expect(calls).toBe(2);
+    expect(periods.read({ machineId: newId, from: 0, to: Date.now(), limit: 10 })).toEqual([]);
+    expect(rules.rulesOf(newId)).toEqual(rulesBefore);
+    expect(publish).not.toHaveBeenCalled();
+
+    backend.store.importLines = importLines;
+    const done = await request('POST', `/machine/${newId}/history-restore/${restoreId}`, 'admin', { alertRules: true });
+    expect(done.status).toBe(200);
+    expect(await done.json()).toMatchObject({ periodsAdded: 3, alertRules: 1 });
+    expect(publish).toHaveBeenCalledOnce();
+    expect(await backend.sampleCount(newId)).toBe(await backend.sampleCount(machineId));
   });
 
   it('gives 409 while the backup of another machine waits for its download, and a new backup of the same machine replaces it', async () => {

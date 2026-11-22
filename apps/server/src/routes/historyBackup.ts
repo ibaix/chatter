@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono';
 import { requirePermission, type LoggedInEnv } from '../auth/authRoutes.js';
 import { ARCHIVE_LIMITS } from '../history-backup/archive.js';
 import { BackupRefusedError, tooLargeMessage, type BackupMachine, type HistoryBackup } from '../history-backup/HistoryBackup.js';
+import { HistoryUnavailableError } from '../history-backup/victoriaHistory.js';
 import { createLogger } from '../logging/logger.js';
 import type { HardwarePoller } from '../polling/poller.js';
 import { checkedJson } from './checks.js';
@@ -11,14 +12,20 @@ import { historyBackupSchema, historyRestoreSchema } from './schemas.js';
 
 const log = createLogger('history-backup');
 
-/** The reply of a request that Chatter refused, or of a machine history that does not answer */
+/**
+ * The reply of a request that Chatter refused (with the reason and its status), of a history database that does not
+ * answer (503), or of an error that Chatter does not expect (500)
+ */
 async function replyOrRefusal<Reply extends Response>(c: Context, action: () => Promise<Reply>) {
   try {
     return await action();
   } catch (error) {
     if (error instanceof BackupRefusedError) return c.json({ error: error.message }, error.status);
     log.error('History backup or restore failed', { error });
-    return c.json({ error: 'The machine history is not available now. Try again later.' }, 503);
+    if (error instanceof HistoryUnavailableError) {
+      return c.json({ error: 'The history database (VictoriaMetrics) does not answer now. Try again later.' }, 503);
+    }
+    return c.json({ error: 'The history backup or restore failed because of an error in Chatter. The log of Chatter tells more.' }, 500);
   }
 }
 

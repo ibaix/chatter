@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { textLines } from './relabel.js';
-import { AVERAGE_SERIES, RAW_SERIES, VictoriaHistory } from './victoriaHistory.js';
+import { AVERAGE_SERIES, HistoryUnavailableError, RAW_SERIES, VictoriaHistory } from './victoriaHistory.js';
 
 async function textOf(source: AsyncIterable<Uint8Array>): Promise<string[]> {
   const lines: string[] = [];
@@ -66,11 +66,19 @@ describe('VictoriaHistory', () => {
     status = 400;
     try {
       await expect(new VictoriaHistory(url).importLines('x')).rejects.toThrow('VictoriaMetrics answered 400: bad request');
+      await expect(new VictoriaHistory(url).importLines('x')).rejects.toBeInstanceOf(HistoryUnavailableError);
       await expect(new VictoriaHistory(url).exportSeries('m1', RAW_SERIES, { from: null, to: 1 }, new AbortController().signal))
         .rejects.toThrow('answered 400');
+      await expect(new VictoriaHistory(url).importDone()).rejects.toBeInstanceOf(HistoryUnavailableError);
     } finally {
       status = 200;
     }
+  });
+
+  it('tells that VictoriaMetrics does not answer when nothing listens', async () => {
+    const closed = new VictoriaHistory('http://127.0.0.1:1');
+    await expect(closed.importLines('x')).rejects.toBeInstanceOf(HistoryUnavailableError);
+    await expect(closed.exportSeries('m1', RAW_SERIES, { from: null, to: 1 }, new AbortController().signal)).rejects.toBeInstanceOf(HistoryUnavailableError);
   });
 });
 

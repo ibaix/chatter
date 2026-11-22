@@ -10,6 +10,9 @@ const RESET_CACHE_PATH = '/internal/resetRollupResultCache';
 const IMPORT_TIMEOUT_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 10_000;
 
+/** VictoriaMetrics does not answer, or it refuses a request. The route gives 503. */
+export class HistoryUnavailableError extends Error {}
+
 /** The raw values of the history (metricLines.ts), and the averages that vmalert saves (vmalert/rules.yml) */
 export const RAW_SERIES = 'chatter_[a-z0-9_]+';
 export const AVERAGE_SERIES = 'chatter_[a-z0-9_]+:avg1[mh]';
@@ -51,8 +54,8 @@ export class VictoriaHistory implements HistoryStore {
     signal.addEventListener('abort', stop, { once: true });
     const timer = setTimeout(() => controller.abort(new Error('VictoriaMetrics did not answer')), CONNECT_TIMEOUT_MS);
     try {
-      const response = await fetch(new URL(`${EXPORT_PATH}?${params}`, this.url), { signal: controller.signal });
-      if (!response.ok || !response.body) throw new Error(await describeAnswer(response));
+      const response = await answerOf(new URL(`${EXPORT_PATH}?${params}`, this.url), { signal: controller.signal }, signal);
+      if (!response.body) throw new HistoryUnavailableError('VictoriaMetrics answered with no body');
       return Readable.fromWeb(response.body as WebReadableStream<Uint8Array>);
     } finally {
       clearTimeout(timer);
@@ -60,14 +63,25 @@ export class VictoriaHistory implements HistoryStore {
   }
 
   async importLines(body: string): Promise<void> {
-    const response = await fetch(new URL(IMPORT_PATH, this.url), { method: 'POST', body, signal: AbortSignal.timeout(IMPORT_TIMEOUT_MS) });
-    if (!response.ok) throw new Error(await describeAnswer(response));
+    await answerOf(new URL(IMPORT_PATH, this.url), { method: 'POST', body, signal: AbortSignal.timeout(IMPORT_TIMEOUT_MS) });
   }
 
   async importDone(): Promise<void> {
-    const response = await fetch(new URL(RESET_CACHE_PATH, this.url), { signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS) });
-    if (!response.ok) throw new Error(await describeAnswer(response));
+    await answerOf(new URL(RESET_CACHE_PATH, this.url), { signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS) });
   }
+}
+
+/** The answer of VictoriaMetrics. No answer, or an answer that is not OK, is a HistoryUnavailableError. A stop by `stop` is not. */
+async function answerOf(url: URL, init: RequestInit, stop?: AbortSignal): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    if (stop?.aborted) throw error;
+    throw new HistoryUnavailableError(`VictoriaMetrics did not answer: ${(error as Error).message}`, { cause: error });
+  }
+  if (!response.ok) throw new HistoryUnavailableError(await describeAnswer(response));
+  return response;
 }
 
 /** The time in seconds, with milliseconds, as VictoriaMetrics reads it */
