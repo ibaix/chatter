@@ -72,6 +72,18 @@ describe('AlertStore', () => {
     expect(startedBefore.read(allAlertsQuery)).toHaveLength(2);
   });
 
+  it.each([
+    ['', 0],
+    [' during the startup wait', NOW],
+  ])('keeps a new start as a second alert when vmalert resolved the first alert in the grace time%s', (_name, startedAt) => {
+    // The alarm cleared, and it came back 20 seconds later
+    const store = AlertStore.inMemory(startedAt);
+    store.save([anAlert({ startsAt: NOW - 5 * MINUTE_MS, endsAt: NOW - 30_000, resolved: true })], NOW - 30_000);
+    store.save([anAlert({ startsAt: NOW - 10_000 })], NOW);
+
+    expect(store.read(allAlertsQuery).map(found => found.startsAt)).toEqual([NOW - 10_000, NOW - 5 * MINUTE_MS]);
+  });
+
   it('keeps each start of an event, such as "program ended", as a new alert', () => {
     const labels = { alertname: 'Program ended', machine: 'm1', [EVENT_LABEL]: 'true' };
     store.save([anAlert({ labels, startsAt: NOW - 2 * MINUTE_MS, endsAt: NOW + MINUTE_MS })], NOW);

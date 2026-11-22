@@ -135,6 +135,19 @@ describe('AlertChangeFinder', () => {
     expect(new Set(found.changes.map(change => change.alertId)).size).toBe(1);
   });
 
+  it('reports a start, an end and a new start when the alarm clears and comes back within the grace time', () => {
+    alerts.save([anAlert()], NOW);
+    finder.findChanges(NOW);
+    alerts.save([anEndedAlert({ endsAt: NOW + 30_000 })], NOW + 30_000);
+    finder.findChanges(NOW + 30_000);
+    alerts.save([anAlert({ startsAt: NOW + 50_000, endsAt: NOW + 2 * MINUTE_MS })], NOW + MINUTE_MS);
+    finder.findChanges(NOW + MINUTE_MS);
+
+    expect(found.kinds()).toEqual(['started SpindleLoadHigh', 'ended SpindleLoadHigh', 'started SpindleLoadHigh']);
+    expect(found.changes[2].at).toBe(NOW + 50_000);
+    expect(found.changes[2].alertId).not.toBe(found.changes[0].alertId);
+  });
+
   it('does not report a firing alert as ended', () => {
     alerts.save([anAlert()], NOW);
     finder.findChanges(NOW + MINUTE_MS - 1);
