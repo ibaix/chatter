@@ -27,6 +27,7 @@ describe('errorReply', () => {
     expect(await res.json()).toEqual({ error: UNEXPECTED_ERROR_TEXT });
     // The user gets a next step: an admin reads the log in the web app
     expect(UNEXPECTED_ERROR_TEXT).toContain('Settings > Diagnostics');
+    expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
     const errors = log.text('error');
     expect(errors).toContain('SQLITE_CORRUPT at /app/data/chatter.db');
     expect(errors).toContain('method=POST');
@@ -68,6 +69,7 @@ describe('machineErrorReply', () => {
 
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: 'FTP download error: 550' });
+    expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
     expect(log.text('error')).toContain('FTP download error: 550');
     expect(log.text('error')).toContain('path=/fail');
   });

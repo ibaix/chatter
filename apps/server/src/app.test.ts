@@ -1386,7 +1386,6 @@ describe('API Routes', () => {
       expect(log.text('error')).toContain('path=/api/machines');
     });
 
-
     it('returns 400 for a JSON body that is not an object', async () => {
       const res = await send('/api/machines', {
         method: 'POST',
