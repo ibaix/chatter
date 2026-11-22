@@ -116,8 +116,13 @@ export class AlertChangeFinder {
     `).all({ now, isAfterStartupWait: isAfterStartupWait ? 1 : 0 }) as StoredAlertRow[];
   }
 
+  /**
+   * An alert that is reported as ended is also resolved, in the same transaction. So after a restart, the alert store
+   * knows that the alert ended, and it does not keep a new start of the same alert as this alert (see OPEN_SQL).
+   */
   private keepNote(change: AlertChange): void {
     this.db.prepare('INSERT INTO alert_notices (alert_id, kind) VALUES (?, ?)').run(change.alertId, change.kind);
+    if (change.kind === 'ended') this.db.prepare('UPDATE alerts SET resolved = 1 WHERE id = ?').run(change.alertId);
   }
 
   /** The alert store deletes old alerts and the alerts of a removed machine. Their notes are not necessary. */

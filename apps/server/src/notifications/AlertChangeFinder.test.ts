@@ -218,6 +218,76 @@ describe('AlertChangeFinder', () => {
     expect(afterUpdate.kinds()).toEqual([]);
   });
 
+  describe('after Chatter was off for 10 minutes', () => {
+    const labels = { alertgroup: 'machine-m1', alertname: 'SpindleLoadHigh', machine: 'm1', severity: 'warning' };
+    /** vmalert sent the alert last just before Chatter stopped, at NOW - 10 minutes */
+    const firingAtStop = anAlert({ labels, startsAt: NOW - 20 * MINUTE_MS, endsAt: NOW - 9 * MINUTE_MS });
+    let restartedAlerts: AlertStore;
+    let afterRestart: ChangeList;
+    let restartedFinder: AlertChangeFinder;
+
+    beforeEach(() => {
+      const earlierStart = NOW - 60 * MINUTE_MS;
+      const earlierAlerts = new AlertStore(db, earlierStart);
+      const earlierFinder = new AlertChangeFinder(db, new ChangeList(), earlierStart);
+      earlierAlerts.save([firingAtStop], NOW - 10 * MINUTE_MS);
+      earlierFinder.findChanges(NOW - 10 * MINUTE_MS);
+
+      restartedAlerts = new AlertStore(db, NOW);
+      afterRestart = new ChangeList();
+      restartedFinder = new AlertChangeFinder(db, afterRestart, NOW);
+    });
+
+    it('ends at the first sync an alert that vmalert resolved while Chatter was off', () => {
+      const result = restartedAlerts.updateFromVmalert({ firing: [], lastChecks: new Map([['machine-m1\nSpindleLoadHigh', NOW - 10_000]]) }, NOW);
+      restartedFinder.findChanges(NOW);
+
+      expect(result).toEqual({ renewed: 0, ended: 1 });
+      expect(afterRestart.kinds()).toEqual(['ended SpindleLoadHigh']);
+    });
+
+    it.each([
+      ['the first sync comes before the first send', true],
+      ['the first send comes before the first sync', false],
+    ])('keeps an alert that still fires after a restart of vmalert as one alert, when %s', (_name, isSyncFirst) => {
+      // vmalert also restarted, so it sends the alert with a new start time
+      const sendAgain = (at: number) => restartedAlerts.save([{ ...firingAtStop, startsAt: NOW - 30_000, endsAt: at + MINUTE_MS }], at);
+      const sync = () => restartedAlerts.updateFromVmalert({ firing: [{ labels }], lastChecks: new Map() }, NOW);
+      if (isSyncFirst) sync();
+      sendAgain(NOW);
+      if (!isSyncFirst) sync();
+      restartedFinder.findChanges(NOW);
+      sendAgain(NOW + STARTUP_WAIT_MS);
+      restartedFinder.findChanges(NOW + STARTUP_WAIT_MS);
+      // The last send gives an end time of NOW + 3 minutes, and the grace time is 3 minutes more
+      restartedFinder.findChanges(NOW + STARTUP_WAIT_MS + MINUTE_MS + ALERT_END_GRACE_MS - 1);
+
+      expect(afterRestart.kinds()).toEqual([]);
+      expect(restartedAlerts.read({ now: NOW, firingOnly: false, endedAfter: 0, limit: 10 })).toMatchObject([
+        { startsAt: firingAtStop.startsAt, endsAt: NOW + STARTUP_WAIT_MS + MINUTE_MS, resolved: false },
+      ]);
+    });
+  });
+
+  it('reports a new start after a restart when the alert ended after the grace time before the stop', () => {
+    // The alert ended while Chatter was on, with no resolve. It started again while Chatter was off.
+    const earlierStart = NOW - 60 * MINUTE_MS;
+    const earlierAlerts = new AlertStore(db, earlierStart);
+    const earlierFinder = new AlertChangeFinder(db, new ChangeList(), earlierStart);
+    earlierAlerts.save([anAlert({ startsAt: NOW - 50 * MINUTE_MS, endsAt: NOW - 49 * MINUTE_MS })], NOW - 50 * MINUTE_MS);
+    earlierFinder.findChanges(NOW - 50 * MINUTE_MS);
+    earlierFinder.findChanges(NOW - 40 * MINUTE_MS);
+    const restartedAlerts = new AlertStore(db, NOW);
+    const afterRestart = new ChangeList();
+    const restartedFinder = new AlertChangeFinder(db, afterRestart, NOW);
+
+    restartedAlerts.save([anAlert({ startsAt: NOW - 30_000 })], NOW);
+    restartedFinder.findChanges(NOW);
+
+    expect(afterRestart.changes).toMatchObject([{ kind: 'started', at: NOW - 30_000 }]);
+    expect(restartedAlerts.read({ now: NOW, firingOnly: false, endedAfter: 0, limit: 10 })).toHaveLength(2);
+  });
+
   it('marks the old alerts only at the first start, so a restart reports the new alerts', () => {
     alerts.save([anAlert()], NOW);
     const afterRestart = new ChangeList();

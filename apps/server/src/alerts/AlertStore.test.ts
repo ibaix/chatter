@@ -1,7 +1,7 @@
 import { ALERT_END_GRACE_MS, EVENT_LABEL } from '@local-chatter/shared';
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { type Alert, AlertStore, KEEP_ALERTS_MS, VMALERT_LEASE_MS, type VmalertState } from './AlertStore.js';
+import { type Alert, AlertStore, KEEP_ALERTS_MS, STARTUP_WAIT_MS, VMALERT_LEASE_MS, type VmalertState } from './AlertStore.js';
 
 const NOW = Date.UTC(2026, 10, 9, 9, 0);
 const MINUTE_MS = 60_000;
@@ -55,6 +55,21 @@ describe('AlertStore', () => {
     store.save([anAlert({ startsAt: NOW - 30_000, endsAt: NOW + 90_000, resolved: true })], NOW + 2 * MINUTE_MS);
 
     expect(store.read(allAlertsQuery)).toMatchObject([{ startsAt: NOW - 10 * MINUTE_MS, endsAt: NOW + 90_000, resolved: true }]);
+  });
+
+  it('during the startup wait, keeps a firing alert as one alert also when its end time passed long ago', () => {
+    // Chatter and vmalert were off for 10 minutes. vmalert gives the alert a new start time.
+    const fired = anAlert({ startsAt: NOW - 20 * MINUTE_MS, endsAt: NOW - 9 * MINUTE_MS });
+    const sendAfterRestart = anAlert({ startsAt: NOW - 30_000 });
+    const restarted = AlertStore.inMemory(NOW);
+    const startedBefore = AlertStore.inMemory(NOW - STARTUP_WAIT_MS);
+    for (const store of [restarted, startedBefore]) {
+      store.save([fired], NOW - 10 * MINUTE_MS);
+      store.save([sendAfterRestart], NOW);
+    }
+
+    expect(restarted.read(allAlertsQuery)).toMatchObject([{ startsAt: fired.startsAt, endsAt: sendAfterRestart.endsAt }]);
+    expect(startedBefore.read(allAlertsQuery)).toHaveLength(2);
   });
 
   it('keeps each start of an event, such as "program ended", as a new alert', () => {

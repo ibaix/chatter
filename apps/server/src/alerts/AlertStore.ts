@@ -14,7 +14,10 @@ export interface Alert {
   startsAt: number;
   /** While the alert fires, this is in the future. vmalert sends the alert again before this time. */
   endsAt: number;
-  /** True when vmalert said that the alert ended. Then `endsAt` is the real end. See isAlertFiring(). */
+  /**
+   * True when the alert ended for sure: vmalert said that it ended, or AlertChangeFinder reported its end after the
+   * grace time. Then `endsAt` is the end. See isAlertFiring().
+   */
   resolved: boolean;
 }
 
@@ -50,6 +53,14 @@ export const VMALERT_LEASE_MS = 60_000;
  */
 export const STARTUP_WAIT_MS = 2 * 60_000;
 
+/**
+ * The SQL test for a row of an alert that can still fire, with the parameters @now and @isStartupWait.
+ * After the startup wait, this is an alert in its grace time. During the startup wait, it is each alert that is not
+ * resolved: vmalert could not send while Chatter was off, so the end time of an alert that still fires can be long ago.
+ * AlertChangeFinder resolves each alert that it reports as ended, so these are only the alerts that fired at the stop.
+ */
+const OPEN_SQL = `(NOT resolved AND (${FIRING_UNTIL_SQL} > @now OR @isStartupWait))`;
+
 /** What vmalert has now: GET /api/v1/rules (see VmalertAlertSync) */
 export interface VmalertState {
   /** The alerts that fire now */
@@ -66,7 +77,7 @@ export interface AlertRow {
   annotations: string;
   starts_at: number;
   ends_at: number;
-  /** 1 when vmalert said that the alert ended */
+  /** 1 when the alert ended for sure (see Alert.resolved) */
   resolved: number;
 }
 
@@ -76,7 +87,7 @@ export interface AlertRow {
  */
 export class AlertStore {
   /** `startedAt` is the start time of Chatter. The first start after the update that adds the "resolved" column also uses it. */
-  constructor(private readonly db: Database.Database, startedAt: number) {
+  constructor(private readonly db: Database.Database, private readonly startedAt: number) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS alerts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,6 +140,7 @@ export class AlertStore {
    * Add new alerts, and update the end time and the text of known ones. Also removes alerts older than a year.
    * A start time that is new for an alert that still fires (with the same labels) updates that alert: after a restart,
    * vmalert gives a firing alert a new start time when its rule fires at the first check. It is not a new alert.
+   * During the startup wait, this is also true when the end time of the alert passed while Chatter was off.
    * An event, such as "program ended", is different: each start is a new event.
    */
   save(alerts: Alert[], now: number): void {
@@ -140,7 +152,7 @@ export class AlertStore {
     `);
     const firingWithEarlierStart = this.db.prepare(`
       SELECT id FROM alerts
-      WHERE labels = @labels AND starts_at < @startsAt AND ${FIRING_UNTIL_SQL} > @now
+      WHERE labels = @labels AND starts_at < @startsAt AND ${OPEN_SQL}
       ORDER BY starts_at DESC LIMIT 1
     `).pluck();
     const update = this.db.prepare(`
@@ -150,7 +162,7 @@ export class AlertStore {
       for (const alert of alerts) {
         const parameters = toSqlParameters(alert);
         const isEvent = alert.labels[EVENT_LABEL] === 'true';
-        const id = isEvent ? undefined : firingWithEarlierStart.get({ ...parameters, now }) as number | undefined;
+        const id = isEvent ? undefined : firingWithEarlierStart.get({ ...parameters, ...this.openParameters(now) }) as number | undefined;
         if (id === undefined) upsert.run(parameters);
         else update.run({ ...parameters, id });
       }
@@ -177,17 +189,18 @@ export class AlertStore {
    * An alert that vmalert still fires gets a new end time. An alert that vmalert does not have any more is resolved,
    * but only when vmalert checked its rule after the last send. Else vmalert could still be at its first check.
    * It adds no alert: vmalert sends each firing alert at each check, with its real start time.
+   * During the startup wait, it also checks the alerts whose end time passed while Chatter was off (see OPEN_SQL).
    */
   updateFromVmalert({ firing, lastChecks }: VmalertState, now: number): { renewed: number; ended: number } {
     const firingLabels = new Set(firing.map(alert => labelsText(alert.labels)));
     const openRows = this.db.prepare(`
-      SELECT id, labels, ends_at FROM alerts WHERE NOT resolved AND ${FIRING_UNTIL_SQL} > ?
+      SELECT id, labels, ends_at FROM alerts WHERE ${OPEN_SQL}
     `);
     const renew = this.db.prepare('UPDATE alerts SET ends_at = MAX(ends_at, @endsAt) WHERE id = @id');
     const resolve = this.db.prepare('UPDATE alerts SET ends_at = MIN(ends_at, @now), resolved = 1 WHERE id = @id');
     const result = { renewed: 0, ended: 0 };
     this.db.transaction(() => {
-      for (const row of openRows.all(now) as { id: number; labels: string; ends_at: number }[]) {
+      for (const row of openRows.all(this.openParameters(now)) as { id: number; labels: string; ends_at: number }[]) {
         if (firingLabels.has(row.labels)) {
           renew.run({ id: row.id, endsAt: now + VMALERT_LEASE_MS });
           result.renewed++;
@@ -202,6 +215,10 @@ export class AlertStore {
       }
     })();
     return result;
+  }
+
+  private openParameters(now: number) {
+    return { now, isStartupWait: now - this.startedAt < STARTUP_WAIT_MS ? 1 : 0 };
   }
 
   removeMachine(machineId: string): void {
