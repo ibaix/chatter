@@ -116,6 +116,13 @@ describe('alertReceiverApp', () => {
     expect(response.status).toBe(400);
   });
 
+  it('accepts a body larger than the normal 64 KB limit of JSON, because vmalert sends many alerts at one time', async () => {
+    const response = await send([{ ...vmalertAlert, annotations: { summary: 'x'.repeat(200_000) } }]);
+
+    expect(response.status).toBe(200);
+    expect(store.read(allAlertsQuery)).toHaveLength(1);
+  });
+
   it('refuses a body that is too large', async () => {
     const response = await send([{ ...vmalertAlert, annotations: { summary: 'x'.repeat(TOO_LARGE_TEXT_LENGTH) } }]);
 

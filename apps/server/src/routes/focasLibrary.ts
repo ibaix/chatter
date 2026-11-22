@@ -5,6 +5,7 @@ import { MAX_LIBRARY_BYTES } from '../machines/fanuc/focasLibraryFile.js';
 import { LibraryFileError, type FocasLibraryInstaller } from '../machines/fanuc/focasLibraryInstaller.js';
 import { checkedForm } from './checks.js';
 import { focasLibraryForm } from './schemas.js';
+import { allowLongUpload } from '../webServerOptions.js';
 
 /** Room for the form fields around the file */
 const FORM_OVERHEAD_BYTES = 64 * 1024;
@@ -20,7 +21,7 @@ export function focasLibraryRoutes(installer: FocasLibraryInstaller) {
   return new Hono()
     .get('/focas/status', canManageMachines, async c => c.json(await installer.status()))
 
-    .post('/focas/library', canManageMachines, librarySizeLimit, checkedForm(focasLibraryForm), async c => {
+    .post('/focas/library', canManageMachines, allowLongUpload, librarySizeLimit, checkedForm(focasLibraryForm), async c => {
       const { file } = c.req.valid('form');
       try {
         return c.json(await installer.install(Buffer.from(await file.arrayBuffer())));
