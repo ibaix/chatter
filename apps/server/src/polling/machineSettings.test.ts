@@ -115,11 +115,12 @@ describe('Brother address update', () => {
 
   /**
    * A Brother with a fake connection. `knowsAtc` tells if the control knows ATCTL; it knows no ATCTLD.
-   * The reply to `held.command` does not come. When Chatter closes the connection, that command fails, as on a real socket.
+   * The reply to `held.command` does not come until a test gives it with `held.answer`. When Chatter closes the
+   * connection, that command fails, as on a real socket.
    */
   function brotherThatAnswers(knowsAtc: { value: boolean }) {
     const connector = new BrotherConnector({ name: 'B', host: HOST });
-    const held: { command?: string; waiting?: (error: Error) => void } = {};
+    const held: { command?: string; waiting?: (error: Error) => void; answer?: (reply: string) => void } = {};
     const closeConnection = () => {
       held.waiting?.(new Error('The connection closed before the machine answered'));
       held.waiting = undefined;
@@ -128,7 +129,12 @@ describe('Brother address update', () => {
     connectNow();
     vi.spyOn(connector, 'connect').mockImplementation(async () => { connectNow(); });
     const sent = vi.spyOn(connector, 'sendCommand').mockImplementation(async command => {
-      if (command === held.command) return new Promise((_, reject) => { held.waiting = reject; });
+      if (command === held.command) {
+        return new Promise((resolve, reject) => {
+          held.waiting = reject;
+          held.answer = reply => resolve(connector.parseResponse(reply));
+        });
+      }
       if (command === 'ATCTL' && knowsAtc.value) return connector.parseResponse(ATC_REPLY);
       if (command.startsWith('ATCTL')) return connector.parseResponse(UNKNOWN(command));
       // A01 of MEM: the run state 0 (READY), so the machine is idle and a poll starts a tool read
@@ -213,6 +219,26 @@ describe('Brother address update', () => {
 
     expect(await sync).toEqual({ outcome: 'address-changed' });
     expect(connector.getStatus().data.toolSync).toMatchObject({ error: null, lastAttemptAt: null, running: false });
+  });
+
+  it('keeps nothing of a reply of the old control that came just before the address changed', async () => {
+    const { connector, atcCommandsSent, held } = brotherThatAnswers({ value: true });
+    held.command = 'ATCTL';
+    const sync = connector.requestToolSync();
+    await vi.waitFor(() => expect(held.answer).toBeDefined());
+
+    // The old control does not know ATCTL. Its reply has come, but the read has not used it yet.
+    held.answer!(UNKNOWN('ATCTL'));
+    applyBrotherUpdate(connector, { host: '192.168.1.60' });
+
+    expect(await sync).toEqual({ outcome: 'address-changed' });
+    expect(connector.getStatus().data.controlType).toBeNull();
+    expect(atcCommandsSent()).toEqual(['ATCTL']);
+    held.command = undefined;
+    await pollAndReadTools(connector);
+    // ATCTL is not marked as unknown for the control at the new address
+    expect(atcCommandsSent()).toEqual(['ATCTL', 'ATCTL']);
+    expect(connector.getStatus().data.controlType).toBe('C00');
   });
 
   it('shows no pot of the old control when the control at the new address knows no ATC command', async () => {
