@@ -509,7 +509,17 @@ take_update_file() {
 }
 
 check_tar_entries() {
+  tar_has_its_end "$COPY" || refuse "$R_BAD_FILE"
   tar_entries_are_safe "$COPY" || refuse "$R_BAD_FILE"
+}
+
+# A tar ends with two blocks of 512 zero bytes. GNU tar reads a file without them and gives no error,
+# so a download or an upload that stopped there would look complete.
+tar_has_its_end() {
+  local size
+  size="$(file_size "$1")"
+  [ $((size % 512)) -eq 0 ] && [ "$size" -ge 1024 ] || return 1
+  [ -z "$(tail --bytes 1024 -- "$1" | tr -d '\0' | head --bytes 1)" ]
 }
 
 # Each entry must be a regular file with an allowed name, and each name comes only once.
