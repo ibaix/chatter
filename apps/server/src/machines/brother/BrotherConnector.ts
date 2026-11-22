@@ -163,6 +163,10 @@ export class BrotherConnector extends BaseMachineConnector {
     this.dataItems = this.buildDataItems();
   }
 
+  /**
+   * Open the connection. A failed connect only rejects: ensureConnected writes the one reason,
+   * "Unable to connect: <reason>".
+   */
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.socket) this.socket.destroy();
@@ -176,17 +180,17 @@ export class BrotherConnector extends BaseMachineConnector {
       // Only for the connect. After it, a timeout means that a command got no reply (see sendCommand).
       const onConnectTimeout = () => {
         this.connected = false;
-        this.addError('Connection timeout');
         socket.destroy();
         reject(new Error('Connection timeout'));
       };
       socket.on('timeout', onConnectTimeout);
 
-      socket.on('error', (err: Error) => {
+      // Only for the connect. After it, onSocketError has the errors.
+      const onConnectError = (err: Error) => {
         this.connected = false;
-        this.addError(`Socket error: ${err.message}`);
         reject(err);
-      });
+      };
+      socket.on('error', onConnectError);
 
       // A destroyed socket gives only 'close'. Without this, a disconnect during the connect leaves it waiting forever.
       socket.on('close', () => {
@@ -196,12 +200,25 @@ export class BrotherConnector extends BaseMachineConnector {
 
       socket.connect(this.dataPort, this.host, () => {
         socket.removeListener('timeout', onConnectTimeout);
+        socket.removeListener('error', onConnectError);
+        socket.on('error', (err: Error) => this.onSocketError(socket, err));
         this.connected = true;
         this.connectedAt = Date.now();
         this.clearErrors();
         resolve();
       });
     });
+  }
+
+  /**
+   * An error of the open connection. When a command waits for its reply, sendCommand rejects with the error, and the
+   * poll or the tool read writes the reason. So this writes the reason only between two commands.
+   */
+  private onSocketError(socket: net.Socket, err: Error): void {
+    this.connected = false;
+    // sendCommand adds its own error listener while its command waits
+    const commandWaits = socket.listenerCount('error') > 1;
+    if (!commandWaits) this.addError(`Socket error: ${err.message}`);
   }
 
   /**
