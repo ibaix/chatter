@@ -77,7 +77,7 @@ For more about the log, see [Server logs](./logs.md).
 - The files of the update helper (on the Pi card)
 - The server log
 
-It does not have passwords, tokens, secrets, notification addresses, topics, or phone numbers. See [Security](../security.md#diagnostics).
+It does not have the passwords and tokens that are saved in the settings. But the error texts and the log lines can contain addresses or phone numbers. The bundle is for your own support. Read it before you send it to another person. See [Security](../security.md#diagnostics).
 
 ### Update helper log
 
