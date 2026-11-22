@@ -1345,8 +1345,6 @@ describe('Brother planned reconnect when the control does not close its side', (
     return brother;
   }
 
-  const isReconnecting = (brother: BrotherConnector) => Reflect.get(brother, 'reconnecting') as boolean;
-
   it('destroys the old connection after 2 s, and the poll ends connected on a new connection', async () => {
     const brother = await brotherThatKeepsItsSideOpen();
     const oldSocket = Reflect.get(brother, 'socket') as net.Socket;
@@ -1385,8 +1383,10 @@ describe('Brother planned reconnect when the control does not close its side', (
     await vi.advanceTimersByTimeAsync(1000);
     await poll;
     expect(brother.getStatus().connected).toBe(true);
-    expect(isReconnecting(brother)).toBe(false);
     expect(log.text('warn')).not.toContain('offline');
+    // The reconnect has ended: when the control closes the new connection, the status shows the machine offline
+    machineSides.at(-1)!.destroy();
+    await vi.waitFor(() => expect(brother.getStatus().connected).toBe(false));
   });
 
   it('shows the machine offline with the reason when the new connect fails', async () => {
@@ -1400,9 +1400,9 @@ describe('Brother planned reconnect when the control does not close its side', (
     await vi.advanceTimersByTimeAsync(2000);
     const status = await poll;
 
+    // Also shows that the reconnect has ended: during it, the status says connected
     expect(status.connected).toBe(false);
     expect(status.errors.join('; ')).toContain('Unable to connect');
-    expect(isReconnecting(brother)).toBe(false);
     connectionLog.record(brother);
     expect(log.text('warn')).toMatch(/Machine went offline.*Unable to connect/);
   });

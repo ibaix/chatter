@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockAccess = vi.fn();
 vi.mock('basic-ftp', () => ({
@@ -110,6 +110,10 @@ describe('Siemens settings', () => {
 });
 
 describe('Brother address update', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const ATC_REPLY = 'RLOD    ATCTL   00\r\nM02,  1,0,0\r\n\r\n00%';
   const UNKNOWN = (command: string) => `RLOD    ${command.padEnd(8)}08\r\n01%`;
 
@@ -246,6 +250,8 @@ describe('Brother address update', () => {
   });
 
   it('shows no pot of the old control when the control at the new address knows no ATC command', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-21T08:00:00Z'));
     const knowsAtc = { value: true };
     const { connector } = brotherThatAnswers(knowsAtc);
     await pollAndReadTools(connector);
@@ -253,10 +259,11 @@ describe('Brother address update', () => {
 
     applyBrotherUpdate(connector, { host: '192.168.1.60' });
     knowsAtc.value = false;
+    vi.setSystemTime(new Date('2026-11-21T08:01:00Z'));
     await pollAndReadTools(connector);
 
     expect(connector.getStatus().data).toMatchObject({ toolTable: {}, hasPocketInfo: false, toolSync: { error: null } });
-    expect(connector.getStatus().data.toolSync?.lastSyncAt).not.toBeNull();
+    expect(connector.getStatus().data.toolSync?.lastSyncAt).toBe('2026-11-21T08:01:00.000Z');
   });
 
   it('keeps the control type when the update has the same host and port', async () => {
