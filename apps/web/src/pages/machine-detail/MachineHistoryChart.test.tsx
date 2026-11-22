@@ -218,7 +218,7 @@ describe('MachineHistoryChart', () => {
       await screen.findByRole('img', { name: /^Spindle speed in the last 10 minutes/ });
 
       vi.mocked(fetchValueHistory).mockRejectedValueOnce(new Error('Chatter cannot be reached'));
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
 
       expect(await screen.findByText('Could not load the spindle speed history. Reload the page to try again.')).toBeInTheDocument();
       expect(screen.queryByRole('img', { name: /^Spindle speed/ })).not.toBeInTheDocument();
@@ -231,7 +231,7 @@ describe('MachineHistoryChart', () => {
       await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
 
       vi.mocked(fetchValueHistory).mockReturnValue(new Promise(() => {}));
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
 
       expect(await screen.findByRole('status')).toHaveTextContent('Loading');
       expect(screen.getByRole('img', { name: /^Spindle speed from / })).toBeInTheDocument();
@@ -247,7 +247,7 @@ describe('MachineHistoryChart', () => {
 
     it('tells the newest value in the shown time, not in the time after it', async () => {
       const now = Date.now();
-      // After Earlier, the chart shows the 10 minutes that end 5 minutes ago, and loads the 5 minutes after them
+      // After a scroll of half the range back, the chart shows the 10 minutes that end 5 minutes ago, and loads the 5 minutes after them
       vi.mocked(fetchValueHistory).mockResolvedValue({
         points: [{ time: now - 7 * MINUTE, value: 1000 }, { time: now - 2 * MINUTE, value: 2000 }],
         window: '5s',
@@ -255,7 +255,7 @@ describe('MachineHistoryChart', () => {
       render(<ChartWithMenu machine={runningMachine()} />);
       await screen.findByRole('img', { name: /^Spindle speed in the last 10 minutes/ });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
 
       expect(await screen.findByRole('img', { name: /^Spindle speed from .*Newest value: 1,000 RPM\.$/ })).toBeInTheDocument();
     });
@@ -274,6 +274,11 @@ describe('MachineHistoryChart', () => {
     fireEvent.pointerUp(target, { clientX: toX, pointerId: 1 });
   }
 
+  /** Two sideways scroll steps on the chart, of a quarter of the range each: -1 goes back half the range, 1 goes on */
+  function scrollHalfARange(direction: -1 | 1) {
+    for (let step = 0; step < 2; step++) fireEvent.wheel(chartBody(), { deltaX: direction * 80, deltaY: 0 });
+  }
+
   /** The machine state view, and its overview strip. The strip goes from 0 to BOX_WIDTH. */
   async function overviewOfStateView() {
     const now = Date.now();
@@ -283,19 +288,19 @@ describe('MachineHistoryChart', () => {
   }
 
   describe('moving in time', () => {
-    it('goes back half a range with Earlier, and back to the live chart with Now', async () => {
+    it('goes back half a range with a sideways scroll, and back to the live chart with Now', async () => {
       render(<ChartWithMenu machine={runningMachine()} />);
-      expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
 
       expect(await screen.findByText(`How fast the spindle turned ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Later' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Now' })).toBeEnabled();
 
       fireEvent.click(screen.getByRole('button', { name: 'Now' }));
 
       expect(await screen.findByText('How fast the spindle turned in the last 10 minutes.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
     });
 
     it('moves the time with a sideways scroll, but not with an up or down scroll', async () => {
@@ -387,7 +392,7 @@ describe('MachineHistoryChart', () => {
 
     it('does not drag a chart in the past after now', async () => {
       await overviewOfStateView();
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
       await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`);
 
       // A drag of the full width to the left goes 10 minutes on, but the chart stops at now
@@ -439,23 +444,23 @@ describe('MachineHistoryChart', () => {
       expect(body).toHaveClass('cursor-grab');
     });
 
-    it('goes on in time with Later, and is live again when it gets to now', async () => {
+    it('goes on in time with a sideways scroll, and is live again when it gets to now', async () => {
       await overviewOfStateView();
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
+      scrollHalfARange(-1);
       await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 10 * MINUTE)}.`);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+      scrollHalfARange(1);
       expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+      scrollHalfARange(1);
       expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
     });
 
     it('goes back to the live chart when the user picks another range', async () => {
       render(<ChartWithMenu machine={runningMachine()} />);
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
       await waitFor(() => expect(screen.getByRole('button', { name: 'Now' })).toBeEnabled());
 
       fireEvent.click(screen.getByRole('button', { name: '1h' }));
@@ -612,7 +617,7 @@ describe('MachineHistoryChart', () => {
       await overviewOfStateView();
 
       // The chart shows from 15 to 5 minutes ago. The 10-minute strip goes back with it.
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
 
       const overview = await screen.findByRole('img', { name: name => name.startsWith(`Overview ${viewText(CHART_RANGES[0], NOW - 5 * MINUTE)}.`) });
       const labels = [...overview.querySelectorAll('text')].map(label => label.textContent);
@@ -623,7 +628,7 @@ describe('MachineHistoryChart', () => {
 
     it('clears a zoom in a strip in the past to the time of the strip', async () => {
       await overviewOfStateView();
-      fireEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+      scrollHalfARange(-1);
       const overview = await screen.findByRole('img', { name: /^Overview from / });
       // The strip goes from 15 to 5 minutes ago. The zoom is the middle 5 minutes.
       drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);

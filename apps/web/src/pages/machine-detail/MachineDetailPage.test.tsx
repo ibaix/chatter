@@ -255,7 +255,8 @@ describe('MachineDetailPage', () => {
 
     it('keeps the time of the chart after a move back in time', () => {
       renderPage();
-      fireEvent.click(within(chart()).getByRole('button', { name: 'Earlier' }));
+      // A sideways scroll of a quarter of the range back
+      fireEvent.wheel(within(chart()).getByRole('group', { name: 'Chart: drag or scroll sideways to move in time' }), { deltaX: -80, deltaY: 0 });
       const movedText = within(chart()).getByText(/from .* to /, { selector: 'span' }).textContent;
       expect(within(chart()).getByRole('button', { name: 'Now' })).toBeEnabled();
 
