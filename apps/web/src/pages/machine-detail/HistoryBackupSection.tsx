@@ -17,7 +17,6 @@ import { errorMessageOf } from '../../utils/errorMessage';
 import { formatDateTime, formatSize } from '../../utils/formatters';
 
 const UNKNOWN_ERROR = 'Something went wrong. Try again.';
-const DAY_MS = 24 * 60 * 60_000;
 
 type Message = { tone: 'success' | 'error'; text: string } | null;
 
@@ -45,9 +44,17 @@ export function HistoryBackupSection({ machine, canRestore }: HistoryBackupSecti
   );
 }
 
-/** The start of the day in the date box, in milliseconds, or null when the box is empty */
+/** The start of the day in the date box (local time), in milliseconds, or null when the box is empty */
 function dayStart(date: string): number | null {
   return date ? new Date(`${date}T00:00:00`).getTime() : null;
+}
+
+/** The end of the day in the date box: the start of the next day. A day with a change of summer time has 23 or 25 hours. */
+function dayEnd(date: string): number | null {
+  if (!date) return null;
+  const next = new Date(`${date}T00:00:00`);
+  next.setDate(next.getDate() + 1);
+  return next.getTime();
 }
 
 function BackupForm({ machine }: { machine: Machine }) {
@@ -63,8 +70,8 @@ function BackupForm({ machine }: { machine: Machine }) {
     setBusy(true);
     setMessage(null);
     try {
-      const toDay = dayStart(to);
-      const prepared = await prepareBackup(machine.id, { from: dayStart(from), ...(toDay !== null && { to: toDay + DAY_MS }), averagesOnly });
+      const toDay = dayEnd(to);
+      const prepared = await prepareBackup(machine.id, { from: dayStart(from), ...(toDay !== null && { to: toDay }), averagesOnly });
       startDownload(backupDownloadUrl(machine.id, prepared.id), prepared.fileName);
       const bytes = Object.values(prepared.parts).reduce((sum, part) => sum + (part?.bytes ?? 0), 0);
       setMessage({ tone: 'success', text: `The download of ${prepared.fileName} (about ${formatSize(bytes)}) started.` });

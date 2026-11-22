@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   backupDownloadUrl,
   cancelRestore,
@@ -38,6 +38,7 @@ const PREVIEW: RestorePreview = {
   counts: { rawSamples: 12000, averageSamples: 400, periods: 25, alertRules: 3 },
   tooOld: { samples: 0, periods: 0 },
   sameMachine: false,
+  targetHasHistory: false,
 };
 
 function chooseFile() {
@@ -69,18 +70,44 @@ describe('HistoryBackupSection', () => {
     click.mockRestore();
   });
 
-  it('backs up a range of days, with 1-minute averages only', async () => {
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    render(<HistoryBackupSection machine={machine} canRestore />);
+  describe('in the time zone of New York', () => {
+    let timeZone: string | undefined;
+    beforeEach(() => {
+      timeZone = process.env.TZ;
+      process.env.TZ = 'America/New_York';
+    });
+    afterEach(() => {
+      if (timeZone === undefined) delete process.env.TZ;
+      else process.env.TZ = timeZone;
+    });
 
-    fireEvent.change(screen.getByLabelText('From (empty: all the history)'), { target: { value: '2026-11-01' } });
-    fireEvent.change(screen.getByLabelText('To (empty: now)'), { target: { value: '2026-11-02' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: /1-minute averages only/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Back up history' }));
+    it('backs up a range of days, from the start of the first day to the end of the last day, with 1-minute averages only', async () => {
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+      render(<HistoryBackupSection machine={machine} canRestore />);
 
-    await waitFor(() => expect(prepareBackup).toHaveBeenCalledWith(machine.id, {
-      from: new Date('2026-11-01T00:00:00').getTime(), to: new Date('2026-11-03T00:00:00').getTime(), averagesOnly: true,
-    }));
+      fireEvent.change(screen.getByLabelText('From (empty: all the history)'), { target: { value: '2026-11-01' } });
+      fireEvent.change(screen.getByLabelText('To (empty: now)'), { target: { value: '2026-11-02' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: /1-minute averages only/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Back up history' }));
+
+      // 1 November 2026 is the last day of summer time in New York
+      await waitFor(() => expect(prepareBackup).toHaveBeenCalledWith(machine.id, {
+        from: Date.UTC(2026, 10, 1, 4), to: Date.UTC(2026, 10, 3, 5), averagesOnly: true,
+      }));
+    });
+
+    it('ends a day of 23 hours at its true end, on the first day of summer time', async () => {
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+      render(<HistoryBackupSection machine={machine} canRestore />);
+
+      fireEvent.change(screen.getByLabelText('From (empty: all the history)'), { target: { value: '2026-03-08' } });
+      fireEvent.change(screen.getByLabelText('To (empty: now)'), { target: { value: '2026-03-08' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Back up history' }));
+
+      await waitFor(() => expect(prepareBackup).toHaveBeenCalledWith(machine.id, {
+        from: Date.UTC(2026, 2, 8, 5), to: Date.UTC(2026, 2, 9, 4), averagesOnly: false,
+      }));
+    });
   });
 
   it('shows the reason when the server refuses the backup', async () => {
