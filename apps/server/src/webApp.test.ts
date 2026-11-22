@@ -64,4 +64,74 @@ describe('webAppRoutes', () => {
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'Not found' });
   });
+
+  describe('security headers', () => {
+    /** The policy as a map from each directive to its sources */
+    function policyOf(res: Response): Record<string, string> {
+      const header = res.headers.get('Content-Security-Policy') ?? '';
+      return Object.fromEntries(header.split(';').map(part => part.trim()).filter(Boolean).map(part => {
+        const [name, ...sources] = part.split(/\s+/);
+        return [name, sources.join(' ')];
+      }));
+    }
+
+    function expectSecurityHeaders(res: Response) {
+      expect(res.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(res.headers.get('Referrer-Policy')).toBe('same-origin');
+      // Chatter often runs on plain HTTP on a LAN. HSTS there can lock the users out.
+      expect(res.headers.has('Strict-Transport-Security')).toBe(false);
+      expect(policyOf(res)).toEqual({
+        'default-src': "'self'",
+        'script-src': "'self'",
+        // Some UI parts add <style> elements when they run
+        'style-src': "'self' 'unsafe-inline'",
+        'img-src': "'self' data: blob:",
+        // The built CSS has some fonts in data: addresses
+        'font-src': "'self' data:",
+        'connect-src': "'self'",
+        'object-src': "'none'",
+        'base-uri': "'self'",
+        'form-action': "'self'",
+        'frame-ancestors': "'none'",
+      });
+    }
+
+    it('are on the index page', async () => {
+      const res = await app.request('/');
+      expect(res.status).toBe(200);
+      expectSecurityHeaders(res);
+    });
+
+    it('are on a page of the web app and on a built file', async () => {
+      expectSecurityHeaders(await app.request('/machine/brother_1'));
+      expectSecurityHeaders(await app.request('/assets/app.js'));
+    });
+
+    it('are on an API reply that needs no login', async () => {
+      const res = await app.request('/api/health');
+      expect(res.status).toBe(200);
+      expectSecurityHeaders(res);
+    });
+
+    it('are on a 404 reply', async () => {
+      expectSecurityHeaders(await app.request('/api/nothing-here', loggedIn));
+      expectSecurityHeaders(await app.request('/assets/index-old.js'));
+    });
+
+    it('do not stop a file download', async () => {
+      const res = await app.request('/api/logs', loggedIn);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Disposition')).toMatch(/^attachment; filename="/);
+      expectSecurityHeaders(res);
+    });
+
+    it('do not stop the live events', async () => {
+      const res = await app.request('/api/events', loggedIn);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Type')).toContain('text/event-stream');
+      expectSecurityHeaders(res);
+      await res.body?.cancel();
+    });
+  });
 });
