@@ -145,4 +145,21 @@ describe('test runs', () => {
     expect(testTools).toContain(`--root tools/${name}`);
     expect(projects).toContain(`'tools/${name}'`);
   });
+
+  // npm test does not run the shell tests of the Pi card (they need Linux or Docker). Only a workflow runs them,
+  // so a test script that no workflow names never runs. The *.lib.sh files and in-linux.sh are helpers, not tests.
+  const PI_TESTS = 'tools/pi-image/test';
+  const piTestScripts = readdirSync(join(ROOT, PI_TESTS)).filter(file => file.endsWith('.test.sh'));
+  const workflows = readdirSync(join(ROOT, '.github/workflows'))
+    .filter(file => /\.ya?ml$/.test(file))
+    .map(file => read(join('.github/workflows', file)))
+    .join('\n');
+
+  it('finds the shell tests of the Pi card', () => {
+    expect(piTestScripts).toContain('update-chatter-check.test.sh');
+  });
+
+  it.each(piTestScripts)(`runs ${PI_TESTS}/%s in a workflow`, file => {
+    expect(workflows).toContain(`${PI_TESTS}/${file}`);
+  });
 });
