@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Auth } from './Auth.js';
+import { Auth } from './Auth.js';
 import { authParts } from './testSupport.js';
 import type { UserAccounts } from './userAccounts.js';
+import type { SessionStore } from './sessionStore.js';
 import type { UserStore } from './userStore.js';
 
 const ADMIN = { username: 'admin', password: 'right-password' };
@@ -10,11 +11,12 @@ const BROWSER = { userAgent: 'test browser', address: '192.168.1.20' };
 
 describe('Auth', () => {
   let users: UserStore;
+  let sessions: SessionStore;
   let accounts: UserAccounts;
   let auth: Auth;
 
   beforeEach(() => {
-    ({ users, accounts, auth } = authParts());
+    ({ users, sessions, accounts, auth } = authParts());
   });
 
   it('needs setup before the first admin', () => {
@@ -156,5 +158,51 @@ describe('Auth', () => {
     users.setPasswordHash(users.findByName('admin')!.id, 'the hash of a new password');
 
     expect(await login).toBeNull();
+  });
+
+  describe('known device', () => {
+    it('knows the device of a cookie that it gave to the same user, in any case of the username', async () => {
+      await auth.setUp(ADMIN, BROWSER);
+      const cookie = auth.deviceCookieFor('admin')!;
+
+      expect(auth.knownDeviceOf(cookie, ' Admin ')).toEqual(expect.any(String));
+    });
+
+    it('keeps the device ID that it gets, so the count of the device stays', async () => {
+      await auth.setUp(ADMIN, BROWSER);
+      const device = auth.knownDeviceOf(auth.deviceCookieFor('admin'), 'admin')!;
+
+      expect(auth.knownDeviceOf(auth.deviceCookieFor('admin', device), 'admin')).toBe(device);
+    });
+
+    it('does not know the device for a different user', async () => {
+      await auth.setUp(ADMIN, BROWSER);
+      await accounts.add({ ...SAM, role: 'operator' });
+
+      expect(auth.knownDeviceOf(auth.deviceCookieFor('sam'), 'admin')).toBeNull();
+    });
+
+    it('does not know the device after a password change, or after the user is removed', async () => {
+      await auth.setUp(ADMIN, BROWSER);
+      const sam = await accounts.add({ ...SAM, role: 'operator' });
+      const cookie = auth.deviceCookieFor('sam');
+
+      await accounts.setPassword(sam.id, 'another-password');
+      expect(auth.knownDeviceOf(cookie, 'sam')).toBeNull();
+      const newCookie = auth.deviceCookieFor('sam');
+      accounts.remove(sam.id);
+      expect(auth.knownDeviceOf(newCookie, 'sam')).toBeNull();
+    });
+
+    it('gives no cookie for a user that does not exist', () => {
+      expect(auth.deviceCookieFor('nobody')).toBeNull();
+    });
+
+    it('does not know a device that a different server signed', async () => {
+      await auth.setUp(ADMIN, BROWSER);
+      const other = new Auth(users, sessions);
+
+      expect(auth.knownDeviceOf(other.deviceCookieFor('admin'), 'admin')).toBeNull();
+    });
   });
 });

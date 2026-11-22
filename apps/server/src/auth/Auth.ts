@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Role } from '@local-chatter/shared';
+import { DEVICE_KEY_BYTES, newDeviceId, readDeviceCookie, signDeviceCookie } from './deviceCookie.js';
 import { hashPassword, passwordMatches } from './passwords.js';
 import type { Session, SessionClient, SessionStore } from './sessionStore.js';
 import type { StoredUser, UserStore } from './userStore.js';
@@ -59,7 +60,15 @@ export class Auth {
   /** A password hash to check against when the username does not exist. It is made at the start, so no request waits for it. */
   private readonly hashForMissingUser = hashPassword(randomBytes(MISSING_USER_PASSWORD_BYTES).toString('hex'));
 
-  constructor(private readonly users: UserStore, private readonly sessions: SessionStore) {}
+  /**
+   * `deviceKey` signs the known device cookies. Without it, a random key is used,
+   * and the device cookies stop at the next start.
+   */
+  constructor(
+    private readonly users: UserStore,
+    private readonly sessions: SessionStore,
+    private readonly deviceKey: Buffer = randomBytes(DEVICE_KEY_BYTES),
+  ) {}
 
   /** False until the first admin exists */
   isSetUp(): boolean {
@@ -149,6 +158,22 @@ export class Auth {
     this.knownLogins.set(user.id, { digest: digestOf(login), passwordHash: user.passwordHash });
     this.users.markLoggedIn(user.id);
     return currentUserOf(user);
+  }
+
+  /**
+   * The value of a known device cookie for this user, after a good password. Null when the user does not exist.
+   * Give the device ID of the cookie that the browser has, so the browser keeps its count of wrong passwords.
+   */
+  deviceCookieFor(username: string, deviceId: string = newDeviceId()): string | null {
+    const user = this.users.findByName(username);
+    return user && signDeviceCookie(this.deviceKey, { userId: user.id, deviceId }, user.passwordHash);
+  }
+
+  /** The device ID of a valid device cookie for this username, or null. A cookie of a different user gives null. */
+  knownDeviceOf(cookie: string | null | undefined, username: string): string | null {
+    const device = readDeviceCookie(this.deviceKey, cookie ?? undefined, id => this.users.find(id)?.passwordHash ?? null);
+    if (!device) return null;
+    return this.users.findByName(username.trim())?.id === device.userId ? device.deviceId : null;
   }
 
   private startSession(userId: number, client: SessionClient): string {
