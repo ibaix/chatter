@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { captureLog, type CapturedLog } from '../logging/testSupport.js';
 import { LoginLimiter, MAX_FAILURES, MAX_USER_FAILURES } from './LoginLimiter.js';
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
@@ -215,5 +216,31 @@ describe('LoginLimiter', () => {
 
     expect(limiter.isFirstBlockedTry('10.9.9.1', 'admin')).toBe(true);
     expect(limiter.isFirstBlockedTry('10.9.9.2', 'admin')).toBe(false);
+  });
+});
+
+describe('LoginLimiter log', () => {
+  let log: CapturedLog | undefined;
+
+  afterEach(() => {
+    log?.restore();
+    log = undefined;
+  });
+
+  it('writes one warning when a user lock starts, with the user, the address group and the count', () => {
+    const limiter = new LoginLimiter();
+    failFromManyAddresses(limiter, 'Admin', MAX_USER_FAILURES - 1);
+    log = captureLog();
+    expect(log.text('warn')).toBe('');
+
+    limiter.recordAttempt('2001:db8:1:2::66', 'Admin');
+    limiter.recordAttempt('10.9.9.9', 'admin');
+
+    const warnings = log.lines.filter(line => line.level === 'warn');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].text).toContain('User locked on all addresses');
+    expect(warnings[0].text).toContain('username=admin');
+    expect(warnings[0].text).toContain('address=2001:db8:1:2::/64');
+    expect(warnings[0].text).toContain(`count=${MAX_USER_FAILURES}`);
   });
 });

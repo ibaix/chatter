@@ -1,4 +1,7 @@
 import { addressGroup } from './addressGroup.js';
+import { createLogger } from '../logging/logger.js';
+
+const log = createLogger('auth');
 
 /**
  * Slows down password guessing. It keeps two counts of the password tries:
@@ -91,14 +94,13 @@ class FailureCounts<Entry extends Failures> {
     return true;
   }
 
-  add(key: string, fields: Omit<Entry, keyof Failures>): void {
+  /** Count one try. Returns the new count. */
+  add(key: string, fields: Omit<Entry, keyof Failures>): number {
     const entry = this.current(key);
-    if (entry) {
-      entry.count++;
-      return;
-    }
+    if (entry) return ++entry.count;
     this.makeRoom();
     this.entries.set(key, { ...fields, count: 1, firstAt: this.now() } as Entry);
+    return 1;
   }
 
   /** Take one try back off the count. The entry goes when its count is 0. */
@@ -177,8 +179,11 @@ export class LoginLimiter {
    */
   recordAttempt(address: string, username: string): void {
     const user = normalUsername(username);
-    this.byAddress.add(addressKey(address, username), { address: addressGroup(address), username: user });
-    this.byUser.add(user, { username: user });
+    const group = addressGroup(address);
+    this.byAddress.add(addressKey(address, username), { address: group, username: user });
+    const count = this.byUser.add(user, { username: user });
+    // Anyone on the network can start this lock, so the log tells the admin who did it
+    if (count === MAX_USER_FAILURES) log.warn('User locked on all addresses after too many password tries', { username: user, address: group, count });
   }
 
   /**
