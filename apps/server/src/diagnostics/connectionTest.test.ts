@@ -2,7 +2,19 @@ import net from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BaseMachineStatus } from '../types/index.js';
 import { captureLog, type CapturedLog } from '../logging/testSupport.js';
+import type { PortState } from '../discovery/tcp.js';
 import { ConnectionTester, TestRefusedError, type TestedMachines } from './connectionTest.js';
+
+/** A port state that each port test gives, in place of a real connect. Null: a real connect. */
+const portStateForTest = vi.hoisted(() => ({ state: null as PortState | null }));
+vi.mock('../discovery/tcp.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../discovery/tcp.js')>();
+  return {
+    ...actual,
+    tryConnect: (...args: Parameters<typeof actual.tryConnect>) =>
+      (portStateForTest.state ? Promise.resolve(portStateForTest.state) : actual.tryConnect(...args)),
+  };
+});
 
 /** A fake control on 127.0.0.1. `reply` gives the answer to each request, or null for no answer. */
 async function fakeControl(reply: (request: string) => string | null): Promise<{ port: number; close: () => Promise<void>; connections: () => number }> {
@@ -61,6 +73,7 @@ describe('ConnectionTester', () => {
   });
 
   afterEach(async () => {
+    portStateForTest.state = null;
     log.restore();
     await Promise.all(closers.splice(0).map(close => close()));
   });
@@ -135,6 +148,13 @@ describe('ConnectionTester', () => {
     const { steps } = await tester(machines).test('m1', 'admin');
     expect(steps.map(step => step.result)).toEqual(['ok', 'ok', 'skipped']);
     await vi.waitFor(() => expect(control.connections()).toBe(1));
+  });
+
+  it('a port with no answer tells the time limit of the test', async () => {
+    portStateForTest.state = 'timeout';
+    const { machines } = machinesWith({ type: 'fanuc', focasPort: 8193 });
+    const { steps } = await tester(machines).test('m1', 'admin');
+    expect(steps[1]).toMatchObject({ name: 'Port 8193 (FOCAS)', result: 'failed', text: 'No answer in 0.3 s.' });
   });
 
   it('a Haas: asks Q100 on the Q command port', async () => {

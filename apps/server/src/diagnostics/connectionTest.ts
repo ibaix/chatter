@@ -103,7 +103,7 @@ export class ConnectionTester {
     if (dns.result === 'failed') return [dns];
     const ports = portsOf(machine);
     const states = await Promise.all(ports.map(({ port }) => tryConnect(machine.host, port, this.stepTimeoutMs)));
-    const portSteps = ports.map(({ port, label }, index) => portStep(port, label, states[index]));
+    const portSteps = ports.map(({ port, label }, index) => portStep(port, label, states[index], this.stepTimeoutMs));
     const isOpen = (port: number | undefined) => ports.some((item, index) => item.port === port && states[index] === 'open');
     return [dns, ...portSteps, await this.askMachine(machine, isOpen)];
   }
@@ -192,7 +192,7 @@ function portsOf(machine: TestedMachine): { port: number; label: string }[] {
   return ports;
 }
 
-function portStep(port: number, label: string, state: PortState): ConnectionTestStep {
+function portStep(port: number, label: string, state: PortState, timeoutMs: number): ConnectionTestStep {
   const name = `Port ${port} (${label})`;
   // FTP is only for files, so a closed FTP port does not stop the machine data
   const isOptional = label.startsWith('FTP');
@@ -206,7 +206,7 @@ function portStep(port: number, label: string, state: PortState): ConnectionTest
       };
     case 'timeout':
       return {
-        name, result: isOptional ? 'warning' : 'failed', text: `No answer in ${TEST_STEP_TIMEOUT_MS / 1000} s.`,
+        name, result: isOptional ? 'warning' : 'failed', text: `No answer in ${timeoutMs / 1000} s.`,
         hint: 'The machine is off, a firewall blocks the port, or the address is wrong.',
       };
     case 'unreachable':
