@@ -6,6 +6,12 @@ import { requirePermission } from '../auth/authRoutes.js';
 import { checkedJson } from './checks.js';
 import { notFound } from './responses.js';
 import { addMachineSchema, scanPortSchema, updateMachineSchema } from './schemas.js';
+import type { ToolSyncErrorBody } from '../types/index.js';
+
+/** The route has a reply for each outcome of a Sync. A new outcome fails the typecheck here until it has one. */
+function unknownOutcome(result: never): never {
+  throw new Error(`No reply for the Sync outcome ${JSON.stringify(result)}`);
+}
 
 /** List, add, change, and remove machines */
 export function machineRoutes(poller: HardwarePoller) {
@@ -41,24 +47,28 @@ export function machineRoutes(poller: HardwarePoller) {
       switch (result.outcome) {
         case 'synced': return c.json({ toolSync: result.toolSync }, 200);
         case 'failed':
-          return c.json({ error: `The machine did not send its tool table: ${result.toolSync.error}`, outcome: result.outcome, toolSync: result.toolSync }, 502);
+          return c.json({
+            error: `The machine did not send its tool table: ${result.toolSync.error}`, ...result,
+          } satisfies ToolSyncErrorBody, 502);
         case 'too-soon':
           c.header('Retry-After', String(result.retryAfterSeconds));
           return c.json({
-            error: `Chatter read the tool table a short time ago. Try again in ${result.retryAfterSeconds} seconds.`,
-            outcome: result.outcome,
-            retryAfterSeconds: result.retryAfterSeconds,
-          }, 429);
-        case 'busy': return c.json({ error: 'A read of the tool table runs now. Wait until it is done.', outcome: result.outcome }, 409);
+            error: `Chatter read the tool table a short time ago. Try again in ${result.retryAfterSeconds} seconds.`, ...result,
+          } satisfies ToolSyncErrorBody, 429);
+        case 'busy':
+          return c.json({ error: 'A read of the tool table runs now. Wait until it is done.', ...result } satisfies ToolSyncErrorBody, 409);
         case 'not-connected':
-          return c.json({ error: 'The machine is not connected. Chatter can read its tool table when it is online.', outcome: result.outcome }, 409);
+          return c.json({
+            error: 'The machine is not connected. Chatter can read its tool table when it is online.', ...result,
+          } satisfies ToolSyncErrorBody, 409);
         case 'address-changed':
           return c.json({
-            error: 'The address of the machine changed during the read. Press Sync again to read the tools at the new address.',
-            outcome: result.outcome,
-          }, 409);
-        case 'not-supported': return c.json({ error: 'This machine type has no tool table to read.', outcome: result.outcome }, 400);
+            error: 'The address of the machine changed during the read. Press Sync again to read the tools at the new address.', ...result,
+          } satisfies ToolSyncErrorBody, 409);
+        case 'not-supported':
+          return c.json({ error: 'This machine type has no tool table to read.', ...result } satisfies ToolSyncErrorBody, 400);
         case 'not-found': return notFound(c);
+        default: return unknownOutcome(result);
       }
     })
 

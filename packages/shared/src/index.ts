@@ -14,3 +14,4 @@ export * from './running.js';
 export * from './notifications.js';
 export * from './ignorePatterns.js';
 export * from './pollTimings.js';
+export * from './toolSync.js';

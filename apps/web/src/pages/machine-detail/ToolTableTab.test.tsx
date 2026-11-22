@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ToolSyncError, type SyncRefusal } from '../../api/toolSync';
+import { ToolSyncError, type SyncProblem } from '../../api/toolSync';
 import type { ToolSyncState, ToolTable } from '../../types';
 import { ToolTableTab } from './ToolTableTab';
 
@@ -27,7 +27,7 @@ const tabWith = (toolSync: ToolSyncState, connected = true) =>
   <ToolTableTab machineId="m1" connected={connected} toolTable={TOOLS} hasPocketInfo spindleTool={undefined} toolSync={toolSync} />;
 
 /** The next Sync fails with this text and reason */
-const refuseSync = (text: string, refusal: SyncRefusal) => syncTools.mockRejectedValue(new ToolSyncError(text, refusal));
+const refuseSync = (text: string, problem: SyncProblem) => syncTools.mockRejectedValue(new ToolSyncError(text, problem));
 
 /** Press Sync, and let the reply of the server come */
 async function pressSync() {

@@ -1,4 +1,4 @@
-import type { ToolSyncState } from '@local-chatter/shared';
+import type { ToolSyncOutcome, ToolSyncState } from '@local-chatter/shared';
 
 /**
  * The tool table (ATC) and the tool data (TOLN) are big replies, like a file, and they change only when an
@@ -20,7 +20,7 @@ export const MANUAL_SYNC_EVERY_MS = 30_000;
 export const TOOL_SYNC_TIMEOUT_MS = 20_000;
 
 /** Why the server does not start a Sync now */
-export type ToolSyncRefusal = { outcome: 'busy' } | { outcome: 'too-soon'; retryAfterSeconds: number };
+export type ToolSyncRefusal = Extract<ToolSyncOutcome, { outcome: 'busy' | 'too-soon' }>;
 
 /**
  * True when the machine runs no program. Without a run state from the control (an older control, or a status

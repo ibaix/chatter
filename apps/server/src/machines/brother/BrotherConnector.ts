@@ -3,7 +3,7 @@ import { BaseMachineConnector } from '../BaseMachineConnector.js';
 import { PollTimingRecorder } from '../pollTimings.js';
 import { tuneMachineSocket } from '../machineSocket.js';
 import { createLogger } from '../../logging/logger.js';
-import { TOOL_SYNC_TIMEOUT_MS, ToolSyncTracker, isIdle, type ToolSyncRefusal } from './toolSync.js';
+import { TOOL_SYNC_TIMEOUT_MS, ToolSyncTracker, isIdle } from './toolSync.js';
 import type {
   BrotherMachineConfig,
   BrotherMachineStatus,
@@ -16,7 +16,7 @@ import type {
   MachineType,
   MacroConfig,
   MachineDataSnapshot,
-  ToolSyncState,
+  ToolSyncOutcome,
 } from '../../types/index.js';
 
 const log = createLogger('brother');
@@ -178,11 +178,8 @@ const MAX_TOOL_NUMBER = 99;
 /** The position of each value in a row of the tool data reply */
 const TOOL_DATA_COLUMN = { length: 0, lengthWear: 1, diameter: 2, diameterWear: 3, name: 8 } as const;
 
-/** What a Sync request gives. 'address-changed': the address changed during the read, so Chatter did not keep its result. */
-export type ToolSyncResult =
-  | { outcome: 'synced' | 'failed'; toolSync: ToolSyncState }
-  | ToolSyncRefusal
-  | { outcome: 'not-connected' | 'address-changed' };
+/** What a Sync request of a Brother gives: each outcome of a Sync, except the ones of the poller */
+export type ToolSyncResult = Exclude<ToolSyncOutcome, { outcome: 'not-supported' | 'not-found' }>;
 
 /** The address changed during a tool read. The reply came from the old control, so Chatter does not keep it. */
 class OldAddressError extends Error {

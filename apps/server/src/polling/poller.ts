@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import type Database from 'better-sqlite3';
-import { BrotherConnector, type ToolSyncResult } from '../machines/brother/BrotherConnector.js';
+import { BrotherConnector } from '../machines/brother/BrotherConnector.js';
 import { HaasConnector } from '../machines/haas/HaasConnector.js';
 import { MTConnectConnector } from '../machines/mtconnect/MTConnectConnector.js';
 import { FanucConnector } from '../machines/fanuc/FanucConnector.js';
@@ -48,6 +48,7 @@ import type {
   SiemensMachineConfig,
   SiemensMachineStatus,
   SiemensMachineUpdate,
+  ToolSyncOutcome,
   UpdateMachineRequest,
 } from '../types/index.js';
 import { createLogger } from '../logging/logger.js';
@@ -254,7 +255,7 @@ export class HardwarePoller extends EventEmitter {
    * Read the tool table of a machine now (the Sync button). Only a Brother reads its tools apart from the state polls.
    * After the read, the screens get the new status at once.
    */
-  async syncTools(id: string): Promise<ToolSyncResult | { outcome: 'not-found' | 'not-supported' }> {
+  async syncTools(id: string): Promise<ToolSyncOutcome> {
     const connector = this.registry.get(id);
     if (!connector) return { outcome: 'not-found' };
     if (!(connector instanceof BrotherConnector)) return { outcome: 'not-supported' };

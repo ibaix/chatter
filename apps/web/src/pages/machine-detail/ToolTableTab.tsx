@@ -1,6 +1,6 @@
 import { cn } from '@toolpath/ui';
 import { useEffect, useState } from 'react';
-import { ToolSyncError, syncTools, type SyncRefusal } from '../../api/toolSync';
+import { SYNC_FAILURE_TEXT, ToolSyncError, syncTools, type SyncProblem } from '../../api/toolSync';
 import { Button } from '../../components/ui/Button';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
 import type { ToolInfo, ToolSyncState, ToolTable } from '../../types';
@@ -33,7 +33,7 @@ function newerState(fromStatus: ToolSyncState, fromSync: ToolSyncState | null): 
 /** The error of a Sync that the server refused before it read the tools */
 interface RefusalError {
   text: string;
-  refusal: Exclude<SyncRefusal, { outcome: 'failed' }>;
+  refusal: Exclude<SyncProblem, { outcome: 'failed' }>;
   /** The last read of the server when the Sync started */
   serverAttemptAt: string | null;
   /** True after the screen showed the cause of the refusal: the machine offline, or a read that runs */
@@ -95,7 +95,7 @@ function ToolSyncBar({ machineId, connected, toolSync }: { machineId: string; co
       setFromSync(await syncTools(machineId));
     } catch (err) {
       // A read that failed has its error in its state, as an automatic read does, so the screen shows one text for it
-      if (err instanceof ToolSyncError && err.refusal.outcome === 'failed') setFromSync(err.refusal.toolSync);
+      if (err instanceof ToolSyncError && err.problem.outcome === 'failed') setFromSync(err.problem.toolSync);
       else setError(refusalErrorOf(err, toolSync, connected));
     } finally {
       setSyncing(false);
@@ -115,9 +115,9 @@ function ToolSyncBar({ machineId, connected, toolSync }: { machineId: string; co
 
 /** The error of a refused Sync. The time of the last read and `connected` are the ones when the Sync started. */
 function refusalErrorOf(err: unknown, toolSync: ToolSyncState, connected: boolean): RefusalError {
-  const refusal = err instanceof ToolSyncError && err.refusal.outcome !== 'failed' ? err.refusal : { outcome: 'other' as const };
+  const refusal = err instanceof ToolSyncError && err.problem.outcome !== 'failed' ? err.problem : { outcome: 'other' as const };
   return {
-    text: errorMessageOf(err, 'Could not read the tool table'),
+    text: errorMessageOf(err, SYNC_FAILURE_TEXT),
     refusal,
     serverAttemptAt: toolSync.lastAttemptAt,
     causeSeen: causeShows(refusal, connected, toolSync),
