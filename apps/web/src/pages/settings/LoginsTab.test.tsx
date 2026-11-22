@@ -103,6 +103,32 @@ describe('LoginsTab', () => {
     expect(await screen.findByText(`Could not unlock ${ATTACKER}`)).toBeInTheDocument();
   });
 
+  it('shows the reason when the unlock of a user fails', async () => {
+    await renderTab(report({ lockedUsers: [{ username: 'admin', until: inMinutes(12) }] }));
+    vi.mocked(unlockUser).mockRejectedValue(new Error('Could not unlock the user admin'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock user admin' }));
+
+    expect(await screen.findByText('Could not unlock the user admin')).toBeInTheDocument();
+  });
+
+  it('turns off each Unlock button while an unlock runs, so a second click cannot send it again', async () => {
+    await renderTab(report({ lockedUsers: [{ username: 'admin', until: inMinutes(12) }] }));
+    let finish: (loaded: LoginsReport) => void = () => {};
+    vi.mocked(unlockUser).mockReturnValue(new Promise(resolve => {
+      finish = resolve;
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock user admin' }));
+
+    expect(await screen.findByRole('button', { name: 'Unlock user admin' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: `Unlock ${ATTACKER}` })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock user admin' }));
+    expect(unlockUser).toHaveBeenCalledTimes(1);
+    finish(report({ lockedUsers: [] }));
+    expect(await screen.findByRole('button', { name: `Unlock ${ATTACKER}` })).toBeEnabled();
+  });
+
   it('loads the list again on Refresh', async () => {
     await renderTab(report({ tries: [] }));
     expect(screen.getByText('No one has tried to log in yet.')).toBeInTheDocument();
