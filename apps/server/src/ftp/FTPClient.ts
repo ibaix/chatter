@@ -18,11 +18,14 @@ const RAW_LIST_TRANSFER_WAIT_MS = 1_000;
 
 /**
  * "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)": four address bytes, then the port as two bytes.
- * Some servers send no parentheses. Only the port is used: the data connection goes to the host of the
- * control connection. The match starts only at the start of a number, so a long number costs no backtracking.
+ * Some servers send no parentheses, and some send a byte as a signed number (for example -17 for 239).
+ * Only the port is used: the data connection goes to the host of the control connection.
+ * The match starts only at the start of a number, so a long number costs no backtracking.
  */
-const PASV_REPLY_PATTERN = /(?<!\d)(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)/;
+const PASV_REPLY_PATTERN = /(?<![-\d])(-?\d+),(-?\d+),(-?\d+),(-?\d+),(-?\d+),(-?\d+)/;
 const BYTE_SIZE = 256;
+/** As basic-ftp does, keep the low 8 bits of each port byte. So -17 gives 239, and 300 gives 44. */
+const BYTE_MASK = 0xff;
 
 const ALREADY_EXISTS_MARKER = 'already exists';
 
@@ -176,16 +179,22 @@ async function trySetBinaryMode(client: ftp.Client): Promise<void> {
  */
 async function requestPassiveAddress(ftpContext: ftp.FTPContext): Promise<PassiveAddress> {
   const reply = await ftpContext.request('PASV');
-  const match = reply.message.match(PASV_REPLY_PATTERN);
+  const port = passivePort(reply.message);
+  return { host: controlConnectionHost(ftpContext), port, reply };
+}
+
+/** The data port in a PASV reply. Port 0 is not a port that a client can connect to. */
+function passivePort(message: string): number {
+  const match = message.match(PASV_REPLY_PATTERN);
   if (!match) {
-    throw new Error('Could not parse PASV response');
+    throw new Error(`Chatter cannot read the port in the PASV reply: ${JSON.stringify(message)}`);
   }
-  const [portHigh, portLow] = match.slice(5);
-  return {
-    host: controlConnectionHost(ftpContext),
-    port: parseInt(portHigh) * BYTE_SIZE + parseInt(portLow),
-    reply
-  };
+  const [portHigh, portLow] = match.slice(5).map(byte => parseInt(byte, 10) & BYTE_MASK);
+  const port = portHigh * BYTE_SIZE + portLow;
+  if (port === 0) {
+    throw new Error('The PASV reply gives port 0. Chatter cannot open a data connection to port 0.');
+  }
+  return port;
 }
 
 /** The address that the control connection is connected to, as an IPv4 address when the socket is dual-stack */
