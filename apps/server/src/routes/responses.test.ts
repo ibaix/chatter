@@ -25,6 +25,8 @@ describe('errorReply', () => {
 
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: UNEXPECTED_ERROR_TEXT });
+    // The user gets a next step: an admin reads the log in the web app
+    expect(UNEXPECTED_ERROR_TEXT).toContain('Settings > Diagnostics');
     const errors = log.text('error');
     expect(errors).toContain('SQLITE_CORRUPT at /app/data/chatter.db');
     expect(errors).toContain('method=POST');

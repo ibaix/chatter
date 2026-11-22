@@ -21,7 +21,7 @@ export function historyUnavailable(c: Context, logTag: string, error: unknown) {
 }
 
 /** The reply text for an error that no route expected. The text of the error can show details of the server, so it stays in the log. */
-export const UNEXPECTED_ERROR_TEXT = 'An unexpected error occurred in Chatter. The log of Chatter tells more.';
+export const UNEXPECTED_ERROR_TEXT = 'Chatter had an unexpected error. An admin can see the details in Settings > Diagnostics.';
 
 /**
  * The log line of an error that a route did not catch, with its stack, the method and the path.
