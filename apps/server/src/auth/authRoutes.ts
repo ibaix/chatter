@@ -83,7 +83,9 @@ function replyLoggedIn(c: Context, origin: RequestOrigin, token: string) {
 
 export const logInFirst = (c: Context) => c.json({ error: 'Log in first' }, 401);
 const tooManyTries = (c: Context) =>
-  c.json({ error: `Too many wrong passwords. Wait ${LOCK_MINUTES} minutes, then try again.` }, 429);
+  c.json({
+    error: `Too many wrong passwords. Try again in up to ${LOCK_MINUTES} minutes, or ask an Admin to unlock you in Settings > Logins.`,
+  }, 429);
 const wrongLogin = (c: Context) => c.json({ error: 'Wrong username or password' }, 401);
 
 type Checked<Value> = { ok: true; value: Value } | { ok: false; reply: Response };

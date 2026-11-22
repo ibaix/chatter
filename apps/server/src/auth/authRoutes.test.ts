@@ -130,6 +130,9 @@ describe('auth routes', () => {
 
     const res = await post('/api/auth/login', ADMIN);
     expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({
+      error: 'Too many wrong passwords. Try again in up to 15 minutes, or ask an Admin to unlock you in Settings > Logins.',
+    });
   });
 
   it('does not lock a user after 30 good logins', async () => {
