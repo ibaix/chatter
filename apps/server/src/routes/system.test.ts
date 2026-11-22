@@ -136,5 +136,12 @@ describe('system routes', () => {
     it('gives 404 with an older helper', async () => {
       expect((await request('/api/updates/helper-log')).status).toBe(404);
     });
+
+    it('only a user who can manage updates can read it', async () => {
+      writeFileSync(path.join(root, 'helper.log'), '2026-11-21T10:00:00Z [request] Step: copying.\n');
+      const res = await request('/api/updates/helper-log', 'GET', operatorCookie);
+      expect(res.status).toBe(403);
+      expect(await res.text()).not.toContain('Step: copying');
+    });
   });
 });

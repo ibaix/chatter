@@ -177,5 +177,14 @@ describe('log routes', () => {
       expect(await turnOff.json()).toEqual({ debugUntil: null });
       expect(currentLogLevel()).toBe('info');
     });
+
+    it('an operator cannot turn it on', async () => {
+      const res = await app().request('/api/logs/debug', {
+        method: 'PUT', headers: { Cookie: operatorCookie, 'Content-Type': 'application/json' }, body: '{"on":true}',
+      });
+      expect(res.status).toBe(403);
+      expect(currentLogLevel()).toBe('info');
+      expect(serverLog.debug.state).toEqual({ debugUntil: null });
+    });
   });
 });
