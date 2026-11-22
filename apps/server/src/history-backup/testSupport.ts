@@ -81,6 +81,10 @@ export class FakeVictoria implements HistoryStore, HistorySource {
     this.importDoneCount += 1;
   }
 
+  async hasSamples(machineId: string, from: number, to: number): Promise<boolean> {
+    return [...this.series.values()].some(series => series.labels.machine === machineId && [...series.samples.keys()].some(time => time >= from && time <= to));
+  }
+
   async windowAverages({ metric, machineId, from, to, windowMs }: WindowQuery): Promise<HistoryPoint[]> {
     const points: HistoryPoint[] = [];
     for (let start = from; start < to; start += windowMs) {

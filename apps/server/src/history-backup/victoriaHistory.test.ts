@@ -15,6 +15,7 @@ describe('VictoriaHistory', () => {
   let url: string;
   const requests: { method: string; url: string; body: string }[] = [];
   let status = 200;
+  let seriesFound: unknown[] = [];
 
   beforeAll(async () => {
     server = createServer(async (request: IncomingMessage, response) => {
@@ -22,7 +23,9 @@ describe('VictoriaHistory', () => {
       for await (const part of request) parts.push(part as Buffer);
       requests.push({ method: request.method!, url: request.url!, body: Buffer.concat(parts).toString() });
       response.statusCode = status;
-      response.end(status === 200 ? '{"metric":{"__name__":"chatter_running"},"values":[1],"timestamps":[5]}\n' : 'bad request');
+      if (status !== 200) response.end('bad request');
+      else if (request.url!.startsWith('/api/v1/series')) response.end(JSON.stringify({ status: 'success', data: seriesFound }));
+      else response.end('{"metric":{"__name__":"chatter_running"},"values":[1],"timestamps":[5]}\n');
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -60,6 +63,21 @@ describe('VictoriaHistory', () => {
       'POST /api/v1/import {"a":1}\n',
       'GET /internal/resetRollupResultCache ',
     ]);
+  });
+
+  it('finds if a machine has a Chatter series with samples in a time', async () => {
+    requests.length = 0;
+    const history = new VictoriaHistory(url);
+    seriesFound = [];
+    expect(await history.hasSamples('m"1', 1000, 5500)).toBe(false);
+    seriesFound = [{ __name__: 'chatter_running', machine: 'm"1' }];
+    expect(await history.hasSamples('m"1', 1000, 5500)).toBe(true);
+    const asked = new URL(requests[0].url, url);
+    expect(asked.pathname).toBe('/api/v1/series');
+    expect(asked.searchParams.get('match[]')).toBe('{__name__=~"chatter_[a-z0-9_]+(:avg1[mh])?",machine="m\\"1"}');
+    expect(asked.searchParams.get('start')).toBe('1.000');
+    expect(asked.searchParams.get('end')).toBe('5.500');
+    expect(asked.searchParams.get('limit')).toBe('1');
   });
 
   it('tells the answer of VictoriaMetrics when it refuses', async () => {

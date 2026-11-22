@@ -5,6 +5,7 @@ import { EXPORT_ROWS_PER_LINE } from './archive.js';
 
 const EXPORT_PATH = '/api/v1/export';
 const IMPORT_PATH = '/api/v1/import';
+const SERIES_PATH = '/api/v1/series';
 /** VictoriaMetrics keeps the answers of queries. A restore adds old samples, so the kept answers must go. */
 const RESET_CACHE_PATH = '/internal/resetRollupResultCache';
 const IMPORT_TIMEOUT_MS = 60_000;
@@ -16,6 +17,8 @@ export class HistoryUnavailableError extends Error {}
 /** The raw values of the history (metricLines.ts), and the averages that vmalert saves (vmalert/rules.yml) */
 export const RAW_SERIES = 'chatter_[a-z0-9_]+';
 export const AVERAGE_SERIES = 'chatter_[a-z0-9_]+:avg1[mh]';
+/** Both: each series that a restore can write */
+const CHATTER_SERIES = 'chatter_[a-z0-9_]+(:avg1[mh])?';
 
 export interface ExportRange {
   /** Null for all the history */
@@ -31,6 +34,8 @@ export interface HistoryStore {
   importLines(body: string): Promise<void>;
   /** Call after an import, so the charts show the new samples at once */
   importDone(): Promise<void>;
+  /** True when the machine has a Chatter series with samples from `from` to `to` (milliseconds) */
+  hasSamples(machineId: string, from: number, to: number): Promise<boolean>;
 }
 
 /** The machine history in VictoriaMetrics */
@@ -68,6 +73,16 @@ export class VictoriaHistory implements HistoryStore {
 
   async importDone(): Promise<void> {
     await answerOf(new URL(RESET_CACHE_PATH, this.url), { signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS) });
+  }
+
+  async hasSamples(machineId: string, from: number, to: number): Promise<boolean> {
+    // The series index of VictoriaMetrics has days, so a series with samples on the same day can count too
+    const params = new URLSearchParams({
+      'match[]': `{__name__=~"${CHATTER_SERIES}",machine="${escapeLabelValue(machineId)}"}`, start: seconds(from), end: seconds(to), limit: '1',
+    });
+    const response = await answerOf(new URL(`${SERIES_PATH}?${params}`, this.url), { signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS) });
+    const reply = await response.json() as { data?: unknown };
+    return Array.isArray(reply.data) && reply.data.length > 0;
   }
 }
 

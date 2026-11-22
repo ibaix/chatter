@@ -497,6 +497,24 @@ describe('HistoryBackup', () => {
       expect(victoria.samplesOf(target.id)).toHaveLength(14400 + AVERAGES);
     });
 
+    it('tells in the preview if the machine has history in the time of the file already', async () => {
+      const archive = await backUp();
+      expect((await receive(archive)).targetHasHistory).toBe(false);
+
+      // A sample of the machine in the time of the file
+      victoria.add({ __name__: 'chatter_running', machine: target.id, type: 'brother' }, NOW - 2 * HOUR, 1);
+      expect((await receive(archive)).targetHasHistory).toBe(true);
+      victoria.removeMachine(target.id);
+      // A sample after the time of the file does not count
+      victoria.add({ __name__: 'chatter_running', machine: target.id, type: 'brother' }, NOW - HOUR / 2, 1);
+      expect((await receive(archive)).targetHasHistory).toBe(false);
+
+      // A state period in the time of the file
+      periods.open(target.id, 'program', 'O5', NOW - 2 * HOUR);
+      periods.close(target.id, 'program', NOW - 2 * HOUR + 1000);
+      expect((await receive(archive)).targetHasHistory).toBe(true);
+    });
+
     it('refuses a file of another machine type', async () => {
       const error = await refusalOf(await backUp(), { ...target, type: 'haas' });
       expect(error.message).toMatch(/type brother.*type haas/);

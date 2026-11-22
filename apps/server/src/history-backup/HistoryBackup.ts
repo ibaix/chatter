@@ -105,6 +105,11 @@ export interface RestorePreview {
   tooOld: { samples: number; periods: number };
   /** The file comes from this machine (the same id) */
   sameMachine: boolean;
+  /**
+   * The machine has values or state periods in the time of the file (data.first to data.last) already.
+   * A restore adds the file to them, and nothing can undo it.
+   */
+  targetHasHistory: boolean;
 }
 
 export interface RestoreResult {
@@ -287,6 +292,7 @@ export class HistoryBackup {
         counts: checked.counts,
         tooOld: checked.tooOld,
         sameMachine: manifest.machine.id === target.id,
+        targetHasHistory: await this.hasHistoryIn(target.id, manifest.data),
       };
       const timer = setTimeout(() => void this.dropPending(id), WAIT_FOR_NEXT_STEP_MS);
       timer.unref();
@@ -374,6 +380,12 @@ export class HistoryBackup {
       machineId: target.id, sourceMachineId: manifest.machine.id, machineType: target.type,
       notBefore: now - KEEP_PERIODS_MS, notAfter: now + CLOCK_SKEW_MS,
     };
+  }
+
+  private async hasHistoryIn(machineId: string, { first, last }: Manifest['data']): Promise<boolean> {
+    if (first === null || last === null) return false;
+    if (this.statePeriods.read({ machineId, from: first, to: last + 1, limit: 1 }).length > 0) return true;
+    return this.history.hasSamples(machineId, first, last);
   }
 
   private async writeBackupParts(
