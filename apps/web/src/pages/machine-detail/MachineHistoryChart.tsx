@@ -121,7 +121,7 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, view: keptVie
         onMove={moveBy}
         onZoom={zoomTo}
         onClearZoom={zoomed ? clearZoom : undefined}
-        onAcceptZoom={zoomed && range.ms < view.overview.ms ? acceptZoom : undefined}
+        onAcceptZoom={zoomed ? acceptZoom : undefined}
       />
     </section>
   );
