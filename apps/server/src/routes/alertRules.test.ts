@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import type { AlertRule, NewAlertRule } from '@local-chatter/shared';
+import { MAX_ALERT_NAME_LENGTH, MAX_ALERT_QUERY_LENGTH, MAX_ALERT_RULES_PER_MACHINE, type AlertRule, type NewAlertRule } from '@local-chatter/shared';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { AlertRuleService } from '../alert-rules/AlertRuleService.js';
 import { AlertRuleStore } from '../alert-rules/AlertRuleStore.js';
@@ -99,6 +99,20 @@ describe('alert rule routes', () => {
 
     expect(res.status).toBe(403);
     expect(await rulesOf(haasId)).toHaveLength(3);
+  });
+
+  it('saves the largest list of rules, though its body is larger than the normal 64 KB limit of JSON', async () => {
+    // A letter with an accent takes 2 bytes, so each query is almost 2000 bytes
+    const query = SLOW_SPINDLE_QUERY.padEnd(MAX_ALERT_QUERY_LENGTH - 1, 'ü') + '1';
+    const longRule: NewAlertRule = { ...slowSpindle, name: 'ü'.repeat(MAX_ALERT_NAME_LENGTH), query };
+    const rules = Array.from({ length: MAX_ALERT_RULES_PER_MACHINE }, () => longRule);
+    expect(JSON.stringify({ rules }).length).toBeLessThan(64 * 1024);
+    expect(Buffer.byteLength(JSON.stringify({ rules }))).toBeGreaterThan(64 * 1024);
+
+    const res = await asAdmin('PUT', `/machine/${haasId}/alert-rules`, { rules });
+
+    expect(res.status).toBe(200);
+    expect(await rulesOf(haasId)).toHaveLength(MAX_ALERT_RULES_PER_MACHINE);
   });
 
   it('refuses a rule with a bad shape', async () => {
