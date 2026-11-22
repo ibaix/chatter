@@ -156,8 +156,16 @@ async function jsonOf(response: Response): Promise<JsonObject | undefined> {
   }
 }
 
-/** The text of the answer, or undefined when it is larger than maxBytes or stops before its end */
+/**
+ * The text of the answer, or undefined when it is larger than maxBytes or stops before its end.
+ * It reads the body in parts and stops at the limit, so a large or endless answer does not fill the memory of the Pi.
+ * A longer Content-Length stops it at once.
+ */
 export async function textUpTo(response: Response, maxBytes: number): Promise<string | undefined> {
+  if (Number(response.headers.get('content-length')) > maxBytes) {
+    await response.body?.cancel().catch(() => {});
+    return undefined;
+  }
   if (!response.body) return '';
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];

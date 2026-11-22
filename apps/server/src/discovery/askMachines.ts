@@ -3,6 +3,7 @@ import { parseStringPromise } from 'xml2js';
 import { brotherCommand } from '../machines/brother/brotherProtocol.js';
 import { buildCommandString } from '../machines/haas/HaasConnector.js';
 import { DEFAULT_DATA_PORTS, DEFAULT_HAAS_QUERY_PORT } from '../polling/machinePorts.js';
+import { textUpTo } from '../notifications/channels/http.js';
 import { askOverTcp } from './tcp.js';
 
 /**
@@ -160,38 +161,12 @@ export async function askMTConnect(host: string, port: number, timeoutMs = ANSWE
     const response = await fetch(`http://${host}:${port}/probe`, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
     if (!response.ok) return null;
     const xml = await textUpTo(response, MAX_PROBE_REPLY);
-    if (xml === null || !xml.includes(MTCONNECT_PROBE_TAG)) return null;
+    if (xml === undefined || !xml.includes(MTCONNECT_PROBE_TAG)) return null;
     return foundMTConnectMachine(host, port, await devicesOfProbe(xml));
   } catch {
     // No answer, a time-out, or a reply that is not XML: there is no MTConnect agent on this port
     return null;
   }
-}
-
-/**
- * The text of a reply, or null when it is longer than `maxBytes`. It reads the body in parts and stops at the limit,
- * so a device with a large or endless reply does not fill the memory of the Pi. A longer Content-Length stops it at once.
- */
-async function textUpTo(response: Response, maxBytes: number): Promise<string | null> {
-  if (Number(response.headers.get('content-length')) > maxBytes) {
-    await response.body?.cancel().catch(() => {});
-    return null;
-  }
-  if (!response.body) return '';
-  const reader = response.body.getReader();
-  const parts: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > maxBytes) {
-      await reader.cancel().catch(() => {});
-      return null;
-    }
-    parts.push(value);
-  }
-  return Buffer.concat(parts).toString('utf8');
 }
 
 /** A version as /api/health gives it: "1.2.0", "edge-1a2b3c4" or "development" */
@@ -211,7 +186,7 @@ export async function askChatter(
     const response = await fetch(`http://${host}:${port}/api/health`, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
     if (!response.ok) return null;
     const text = await textUpTo(response, MAX_HEALTH_REPLY);
-    if (text === null) return null;
+    if (text === undefined) return null;
     const body = JSON.parse(text) as { status?: unknown; version?: unknown; instance?: unknown };
     if (body.status !== 'ok') return null;
     const version = typeof body.version === 'string' && VERSION_TEXT.test(body.version) ? body.version : 'unknown';
