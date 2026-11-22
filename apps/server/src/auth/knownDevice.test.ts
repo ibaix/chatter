@@ -5,6 +5,7 @@ import { HardwarePoller } from '../polling/poller.js';
 import { noHistory } from '../recording/testSupport.js';
 import { DEVICE_COOKIE, SESSION_COOKIE } from './authRoutes.js';
 import { ProxySettings } from './proxySettings.js';
+import { SESSION_LIFETIME_SECONDS } from './sessionStore.js';
 import { authParts } from './testSupport.js';
 import type { UserAccounts } from './userAccounts.js';
 
@@ -16,7 +17,7 @@ const ADMIN = { username: 'admin', password: 'first-password' };
 const BOB = { username: 'bob', password: 'bob-password' };
 const WRONG = { ...ADMIN, password: 'wrong-password' };
 const ADMIN_COMPUTER = '192.168.1.20';
-const ONE_YEAR_SECONDS = 365 * 24 * 60 * 60;
+const DAY_SECONDS = 24 * 60 * 60;
 
 describe('known device cookie', () => {
   let app: ReturnType<typeof createApp>;
@@ -69,18 +70,26 @@ describe('known device cookie', () => {
     expect((await send('192.168.3.1', '/api/auth/login', login)).status).toBe(429);
   }
 
-  it('gives a device cookie after a good login: HttpOnly, SameSite=Strict, only for /api/auth, for 1 year', async () => {
+  it('gives a device cookie after a good login: HttpOnly, SameSite=Strict, only for /api/auth, for 400 days', async () => {
     const res = await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN);
     const line = setCookieLine(res, DEVICE_COOKIE)!;
 
     expect(line).toContain('HttpOnly');
     expect(line).toContain('SameSite=Strict');
     expect(line).toContain('Path=/api/auth');
-    expect(line).toContain(`Max-Age=${ONE_YEAR_SECONDS}`);
+    expect(line).toContain(`Max-Age=${400 * DAY_SECONDS}`);
     expect(line).not.toContain('Secure');
     expect(line).not.toContain(ADMIN.password);
     // The session cookie stays a separate cookie for the whole site
     expect(setCookieLine(res, SESSION_COOKIE)).toContain('Path=/;');
+  });
+
+  it('keeps the device cookie longer than the session, so the browser is still known when the session ends', async () => {
+    const res = await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN);
+    const maxAgeOf = (name: string) => Number(/Max-Age=(\d+)/.exec(setCookieLine(res, name)!)?.[1]);
+
+    expect(maxAgeOf(SESSION_COOKIE)).toBe(SESSION_LIFETIME_SECONDS);
+    expect(maxAgeOf(DEVICE_COOKIE)).toBeGreaterThan(SESSION_LIFETIME_SECONDS);
   });
 
   it('makes the device cookie HTTPS-only when the browser used HTTPS', async () => {

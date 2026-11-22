@@ -29,6 +29,12 @@ const SESSION_COOKIE_PATH = '/';
 export const DEVICE_COOKIE = 'chatterbox_device';
 /** Only the login routes read the device cookie, so the browser sends it nowhere else */
 const DEVICE_COOKIE_PATH = '/api/auth';
+/**
+ * 400 days: longer than the session (1 year), so the browser is still known when its session ends and the user
+ * must log in again. Each login gives a new cookie. Browsers keep a cookie for at most 400 days (RFC 6265bis),
+ * so a longer value has no effect.
+ */
+const DEVICE_COOKIE_LIFETIME_SECONDS = 400 * 24 * 60 * 60;
 // The scheme name ignores case (RFC 7235)
 const BASIC = /^basic\s+([A-Za-z0-9+/=]+)\s*$/i;
 /** Longer than any username and password that the setup allows */
@@ -94,7 +100,7 @@ function setDeviceCookie(c: Context, auth: Auth, origin: RequestOrigin, username
     sameSite: 'Strict',
     secure: origin.isHttps,
     path: DEVICE_COOKIE_PATH,
-    maxAge: SESSION_LIFETIME_SECONDS,
+    maxAge: DEVICE_COOKIE_LIFETIME_SECONDS,
   });
 }
 
