@@ -79,7 +79,7 @@ The scan finds only machines that are not added yet. To add a found machine, sen
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/machine/:id/files` | List files. Query: `path` (default `.`) and `depth` (default `2`) |
-| GET | `/api/machine/:id/files/download` | Download a file (Operator or Admin). Query: `path` |
+| GET | `/api/machine/:id/files/download` | Download a file (Operator or Admin). Query: `path`. When the client closes the connection, Chatter stops the transfer from the machine and frees its FTP connection |
 | POST | `/api/machine/:id/files/upload` | Upload a single file (Operator or Admin). Form fields: `file`, `path`, `overwrite`, `targetName`. `409` when the file exists and `overwrite` is not `true` |
 | POST | `/api/machine/:id/files/upload-batch` | Upload multiple files (Operator or Admin). Form fields: `files`, `basePath`, `overwrite`, `targetNames`. The reply is `{ success, failed }` |
 | DELETE | `/api/machine/:id/files` | Delete a file (Operator or Admin). Query: `path` |
