@@ -677,7 +677,6 @@ async function until(condition: () => boolean): Promise<void> {
 describe('FTPClient raw RETR that stops in the middle of a file', () => {
   const timeoutMs = 200;
   const firstPart = PROGRAM_TEXT.slice(0, 8);
-  const secondPart = PROGRAM_TEXT.slice(8);
   let machine: FakeMachine | undefined;
 
   beforeEach(() => {
@@ -749,9 +748,21 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('fails when the data connection closes but the machine sends no 226', async () => {
-    const { text, outcome } = await downloadFrom(({ data }) => data.end(firstPart));
+  /** Send the first part, wait until the user has it, then close the data connection and wait for the close */
+  async function sendPartAndClose(text: () => string, transfer: FileTransfer): Promise<void> {
+    transfer.data.write(firstPart);
     await until(() => text() === firstPart);
+    let isClosed = false;
+    transfer.data.on('close', () => { isClosed = true; });
+    transfer.data.end();
+    await until(() => isClosed);
+  }
+
+  it('fails when the data connection closes but the machine sends no 226', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => { transfer = started; });
+    await until(() => transfer !== undefined);
+    if (transfer) await sendPartAndClose(text, transfer);
 
     vi.advanceTimersByTime(timeoutMs);
 
@@ -764,7 +775,12 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
     { code: 426, reply: '426 Connection closed; transfer aborted' },
     { code: 451, reply: '451 Local error in processing' },
   ])('fails when the data connection closes and the machine sends $code', async ({ reply }) => {
-    const { text, outcome } = await downloadFrom(({ control, data }) => data.end(firstPart, () => control.write(`${reply}\r\n`)));
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => { transfer = started; });
+    await until(() => transfer !== undefined);
+    if (transfer) await sendPartAndClose(text, transfer);
+
+    transfer?.control.write(`${reply}\r\n`);
 
     expect(await outcome).toBe(`FTP download error: ${reply}`);
     expect(text()).toBe(firstPart);
