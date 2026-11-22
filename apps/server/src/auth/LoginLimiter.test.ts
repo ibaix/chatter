@@ -143,6 +143,20 @@ describe('LoginLimiter', () => {
     expect(limiter.isBlocked('address-0', 'user-0')).toBe(false);
   });
 
+  it('removes the old entries first when the list is full, so a new count does not push out a live one', () => {
+    let now = 0;
+    const limiter = new LoginLimiter(() => now);
+    // 999 old entries with 2 tries each: more than the live entry below
+    for (let i = 0; i < 999; i++) failTimes(limiter, `address-${i}`, 2, `user-${i}`);
+    now = 10 * 60 * 1000;
+    limiter.recordAttempt('10.0.0.5', 'admin');
+
+    now = FIFTEEN_MINUTES + 1;
+    limiter.recordAttempt('10.0.0.9', 'new-user');
+    failTimes(limiter, '10.0.0.5', MAX_FAILURES - 1);
+    expect(limiter.isBlocked('10.0.0.5', 'admin')).toBe(true);
+  });
+
   it('keeps the count of a guessed user when many new usernames fill the list', () => {
     const limiter = new LoginLimiter();
     failTimes(limiter, '10.0.0.5', 9);

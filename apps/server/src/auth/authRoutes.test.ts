@@ -139,6 +139,16 @@ describe('auth routes', () => {
     expect((await post('/api/auth/login', ADMIN)).status).toBe(200);
   });
 
+  it('counts the wrong passwords of a program (HTTP Basic) and of the login form together', async () => {
+    await setUp();
+    for (let i = 0; i < 5; i++) await app.request('/api/machines', basic(ADMIN.username, 'wrong-password'));
+    await sendWrongPasswords(4);
+    expect((await post('/api/auth/login', { ...ADMIN, password: 'wrong-password' })).status).toBe(401);
+
+    expect((await post('/api/auth/login', ADMIN)).status).toBe(429);
+    expect((await app.request('/api/machines', basic(ADMIN.username, 'wrong-password'))).status).toBe(429);
+  });
+
   it('reads the Basic header in any case, with a colon in the password', async () => {
     const login = { username: 'admin', password: 'pass:word:1' };
     await post('/api/auth/setup', login);
@@ -402,6 +412,23 @@ describe('auth routes behind a reverse proxy', () => {
 
     expect((await postFor('192.168.1.20', '/api/auth/login', ADMIN)).status).toBe(429);
     expect((await postFor('192.168.1.20', '/api/auth/login', BOB)).status).toBe(200);
+  });
+
+  it('lets only 10 of many tries sent at the same time from one address check the password', async () => {
+    const replies = await Promise.all(Array.from({ length: 40 }, () => wrongAdminPassword('192.168.1.66')));
+    const statuses = replies.map(reply => reply.status);
+
+    expect(statuses.filter(status => status === 401)).toHaveLength(10);
+    expect(statuses.filter(status => status === 429)).toHaveLength(30);
+  });
+
+  it('lets only 30 of many tries sent at the same time from many addresses check the password', async () => {
+    const replies = await Promise.all(Array.from({ length: 60 }, (_, i) => wrongAdminPassword(`192.168.2.${i % 12}`)));
+    const statuses = replies.map(reply => reply.status);
+
+    expect(statuses.filter(status => status === 401)).toHaveLength(30);
+    expect(statuses.filter(status => status === 429)).toHaveLength(30);
+    expect((await postFor('192.168.1.20', '/api/auth/login', ADMIN)).status).toBe(429);
   });
 
   it('makes the cookie HTTPS-only when the browser used HTTPS', async () => {
