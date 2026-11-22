@@ -1,6 +1,6 @@
 import net from 'net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startRequestReplyServer, type SlowStart } from './tcp.js';
+import { slowStartOf, startRequestReplyServer, type SlowStart } from './tcp.js';
 
 /** Each message ends with a new line, and the reply is the message in capitals */
 const LINE_PATTERN = /([^\n]*)\n/g;
@@ -74,5 +74,15 @@ describe('startRequestReplyServer with a slow start', () => {
     const [reply] = await talk(port, [{ text: 'mem', afterMs: 0 }]);
 
     expect(reply.atMs).toBeLessThan(600);
+  });
+});
+
+describe('slowStartOf', () => {
+  it('gives the slow time and the delay of each reply after it in milliseconds, from the seconds of the options', () => {
+    expect(slowStartOf(6, 1.5)).toEqual({ forMs: 6000, replyDelayMs: 700, replyDelayAfterMs: 1500 });
+  });
+
+  it('answers at once after the slow time when no reply delay is given', () => {
+    expect(slowStartOf(0)).toEqual({ forMs: 0, replyDelayMs: 700, replyDelayAfterMs: 0 });
   });
 });
