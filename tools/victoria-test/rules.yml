@@ -1,0 +1,8 @@
+# A recording rule as the minute averages of vmalert/rules.yml, but fast, for the tests with a real VictoriaMetrics.
+# When the raw series stops, vmalert writes a staleness marker (a null value in /api/v1/export) to the average.
+groups:
+  - name: test-averages
+    interval: 2s
+    rules:
+      - record: chatter_running:avg1m
+        expr: avg_over_time(chatter_running[10s])

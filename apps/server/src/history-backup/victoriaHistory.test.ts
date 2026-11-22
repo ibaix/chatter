@@ -1,6 +1,12 @@
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { AlertRuleService } from '../alert-rules/AlertRuleService.js';
+import { StatePeriodStore } from '../recording/StatePeriodStore.js';
+import { HistoryBackup } from './HistoryBackup.js';
 import { textLines } from './relabel.js';
 import { AVERAGE_SERIES, HistoryUnavailableError, RAW_SERIES, VictoriaHistory } from './victoriaHistory.js';
 
@@ -101,9 +107,10 @@ describe('VictoriaHistory', () => {
 });
 
 /**
- * With a real VictoriaMetrics v1.155.0, started as in docker-compose.yml:
- *   docker run --rm -p 127.0.0.1:18429:8428 victoriametrics/victoria-metrics:v1.155.0 -dedup.minScrapeInterval=1ms
+ * With a real VictoriaMetrics and vmalert v1.155.0, as in docker-compose.yml (the CI runs these too):
+ *   tools/victoria-test/start.sh
  *   CHATTER_TEST_VICTORIA_URL=http://127.0.0.1:18429 npm run test:run -w apps/server -- victoriaHistory
+ *   tools/victoria-test/stop.sh
  */
 const REAL_URL = process.env.CHATTER_TEST_VICTORIA_URL;
 
@@ -135,4 +142,42 @@ describe.skipIf(!REAL_URL)('VictoriaHistory with a real VictoriaMetrics', () => 
     expect(await query(`count_over_time(chatter_running{machine="${copy}"}[60m])`)).toBe('300');
     expect(await query(`sum_over_time(chatter_running{machine="${copy}"}[60m])`)).toBe('150');
   });
+
+  it('backs up and restores averages with the staleness markers of vmalert (tools/victoria-test/rules.yml)', async () => {
+    const history = new VictoriaHistory(REAL_URL!);
+    const stopped = `${machine}-stopped`;
+    const restored = `${machine}-restored`;
+    // 10 seconds of values until now. vmalert saves averages, and a staleness marker when the values stop.
+    const now = Date.now();
+    const lines = Array.from({ length: 10 }, (_, index) => `chatter_running{machine="${stopped}",type="brother"} ${index % 2} ${now - 9000 + index * 1000}`);
+    await fetch(`${REAL_URL}/api/v1/import/prometheus`, { method: 'POST', body: lines.join('\n') });
+    const exportedAverages = async () => {
+      await fetch(`${REAL_URL}/internal/force_flush`);
+      return (await textOf(await history.exportSeries(stopped, AVERAGE_SERIES, { from: null, to: Date.now() }, new AbortController().signal))).join('\n');
+    };
+    await vi.waitFor(async () => expect(await exportedAverages()).toContain('null'), { timeout: 90_000, interval: 1000 });
+    const averages = (await exportedAverages()).split('\n').map(line => JSON.parse(line) as { values: (number | null)[] });
+    const samples = averages.flatMap(line => line.values).filter(value => value !== null).length;
+    expect(samples).toBeGreaterThan(0);
+
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'history-real-'));
+    try {
+      const backups = new HistoryBackup({
+        folder, history, statePeriods: StatePeriodStore.inMemory(), alertRules: AlertRuleService.inMemory(), version: 'test',
+      });
+      const prepared = await backups.prepareBackup({ id: stopped, name: 'Stopped', type: 'brother' }, { from: null, to: Date.now(), averagesOnly: true }, 'admin');
+      expect(prepared.manifest.parts['history/averages.jsonl.gz']!.count).toBe(samples);
+      const archive = Buffer.from(await new Response(backups.download(prepared.id, stopped, 'admin').stream).arrayBuffer());
+      await new Promise(resolve => setTimeout(resolve, 20));
+      const target = { id: restored, name: 'Restored', type: 'brother' };
+      const preview = await backups.receiveRestore(new Response(archive).body!, archive.length, target, 'admin');
+      expect(preview.counts.averageSamples).toBe(samples);
+      expect(await backups.restore(preview.id, target, { alertRules: false }, 'admin')).toMatchObject({ samples });
+      await fetch(`${REAL_URL}/internal/force_flush`);
+      await history.importDone();
+      expect(await query(`count_over_time(chatter_running:avg1m{machine="${restored}"}[10m])`)).toBe(String(samples));
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
