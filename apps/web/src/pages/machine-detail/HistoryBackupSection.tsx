@@ -206,6 +206,12 @@ function RestorePreviewPanel({ machine, preview, onDone, onCancel }: RestorePrev
   return (
     <section aria-label="Restore preview" className="flex flex-col gap-3 rounded-lg border border-zinc-700 p-3">
       <PreviewFacts machine={machine} preview={preview} />
+      {preview.targetHasHistory && !preview.sameMachine && (
+        <Notice tone="info" title="This machine has history in the time of the file">
+          The restore adds the history of the file to the history of this machine. The charts and the report then show the two
+          together. You cannot undo a restore.
+        </Notice>
+      )}
       {(preview.tooOld.samples > 0 || preview.tooOld.periods > 0) && (
         <Notice tone="info" title="Some of the history is older than 1 year">
           Chatter keeps the history for 1 year. It does not restore {preview.tooOld.samples.toLocaleString()} values and{' '}

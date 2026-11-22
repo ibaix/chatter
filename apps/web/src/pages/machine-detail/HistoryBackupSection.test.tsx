@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   backupDownloadUrl,
@@ -133,6 +133,37 @@ describe('HistoryBackupSection', () => {
     expect(await screen.findByText(/The history is restored: .* \(5 were there already\)\. The alert rules of the file \(3\) replace/)).toBeInTheDocument();
     expect(confirmRestore).toHaveBeenCalledWith(machine.id, 'r1', true);
     expect(screen.queryByRole('region', { name: 'Restore preview' })).toBeNull();
+  });
+
+  it('shows the reason when the restore fails, and keeps the preview for another try', async () => {
+    vi.mocked(confirmRestore).mockRejectedValueOnce(new Error('The history database (VictoriaMetrics) does not answer now. Try again later.'));
+    render(<HistoryBackupSection machine={machine} canRestore />);
+    chooseFile();
+    fireEvent.click(await screen.findByRole('button', { name: `Restore into ${machine.name}` }));
+
+    const preview = await screen.findByRole('region', { name: 'Restore preview' });
+    expect(await within(preview).findByText(/does not answer now/)).toBeInTheDocument();
+    expect(screen.queryByText(/The history is restored/)).toBeNull();
+
+    fireEvent.click(within(preview).getByRole('button', { name: `Restore into ${machine.name}` }));
+    expect(await screen.findByText(/The history is restored/)).toBeInTheDocument();
+    expect(confirmRestore).toHaveBeenCalledTimes(2);
+  });
+
+  it('warns when the machine has history in the time of the file already', async () => {
+    vi.mocked(uploadRestoreFile).mockResolvedValue({ ...PREVIEW, targetHasHistory: true });
+    render(<HistoryBackupSection machine={machine} canRestore />);
+    chooseFile();
+    expect(await screen.findByText('This machine has history in the time of the file')).toBeInTheDocument();
+    expect(screen.getByText(/You cannot undo a restore/)).toBeInTheDocument();
+  });
+
+  it('does not warn when the machine has no history in the time of the file, or when the file is from this machine', async () => {
+    vi.mocked(uploadRestoreFile).mockResolvedValue({ ...PREVIEW, targetHasHistory: true, sameMachine: true });
+    render(<HistoryBackupSection machine={machine} canRestore />);
+    chooseFile();
+    await screen.findByRole('region', { name: 'Restore preview' });
+    expect(screen.queryByText('This machine has history in the time of the file')).toBeNull();
   });
 
   it('keeps the alert rules of the machine when the user clears the box', async () => {
