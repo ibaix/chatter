@@ -1,6 +1,8 @@
 import net from 'net';
 import { Readable, Writable } from 'stream';
 import * as ftp from 'basic-ftp';
+// Not in the index of basic-ftp. It opens the data socket exactly as basic-ftp's own PASV and EPSV do.
+import { connectForPassiveTransfer } from 'basic-ftp/dist/transfer.js';
 import { ftpErrorMessage } from './ftpErrorMessage.js';
 import type { FTPConfig, FTPFileInfo, FTPTreeNode, FTPUploadFile, FTPUploadResult } from '../types/index.js';
 
@@ -16,9 +18,10 @@ const RAW_LIST_TRANSFER_WAIT_MS = 1_000;
 
 /**
  * "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)": four address bytes, then the port as two bytes.
- * Only the port is used: the data connection goes to the host of the control connection.
+ * Some servers send no parentheses. Only the port is used: the data connection goes to the host of the
+ * control connection. The match starts only at the start of a number, so a long number costs no backtracking.
  */
-const PASV_REPLY_PATTERN = /\((\d+),(\d+),(\d+),(\d+),(\d+),(\d+)\)/;
+const PASV_REPLY_PATTERN = /(?<!\d)(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)/;
 const BYTE_SIZE = 256;
 
 const ALREADY_EXISTS_MARKER = 'already exists';
@@ -41,6 +44,7 @@ type BatchFileOutcome = FTPUploadResult['success'][number] | FTPUploadResult['fa
 interface PassiveAddress {
   host: string;
   port: number;
+  reply: ftp.FTPResponse;
 }
 
 /**
@@ -170,26 +174,56 @@ async function trySetBinaryMode(client: ftp.Client): Promise<void> {
  * so Chatter would connect to a host of its choice. So the host is always the address of the control
  * connection (the machine), and only the port comes from the reply. EPSV in basic-ftp does the same.
  */
-async function requestPassiveAddress(client: ftp.Client): Promise<PassiveAddress> {
-  const reply = await client.send('PASV');
+async function requestPassiveAddress(ftpContext: ftp.FTPContext): Promise<PassiveAddress> {
+  const reply = await ftpContext.request('PASV');
   const match = reply.message.match(PASV_REPLY_PATTERN);
   if (!match) {
     throw new Error('Could not parse PASV response');
   }
   const [portHigh, portLow] = match.slice(5);
   return {
-    host: controlConnectionHost(client),
-    port: parseInt(portHigh) * BYTE_SIZE + parseInt(portLow)
+    host: controlConnectionHost(ftpContext),
+    port: parseInt(portHigh) * BYTE_SIZE + parseInt(portLow),
+    reply
   };
 }
 
 /** The address that the control connection is connected to, as an IPv4 address when the socket is dual-stack */
-function controlConnectionHost(client: ftp.Client): string {
-  const host = client.ftp.socket.remoteAddress;
+function controlConnectionHost(ftpContext: ftp.FTPContext): string {
+  const host = ftpContext.socket.remoteAddress;
   if (host === undefined) {
     throw new Error('The control connection is closed, so the data connection cannot open');
   }
   return host.replace(/^::ffff:/i, '');
+}
+
+/** The PASV transfer strategy of basic-ftp, with the data connection to the machine host */
+async function enterPassiveModeOnControlHost(ftpContext: ftp.FTPContext): Promise<ftp.FTPResponse> {
+  const { host, port, reply } = await requestPassiveAddress(ftpContext);
+  await connectForPassiveTransfer(host, port, ftpContext);
+  return reply;
+}
+
+/**
+ * Make basic-ftp accept a PASV reply that names another host, as a machine behind NAT can send. The data
+ * connection goes to the machine host, as the raw PASV code of FTPClient does. The default of basic-ftp
+ * refuses such a reply, so the upload fails. EPSV stays first. As in basic-ftp, the client keeps the first
+ * strategy that works for the next transfers.
+ */
+function useMachineHostForTransfers(client: ftp.Client): void {
+  client.prepareTransfer = async ftpContext => {
+    let lastError: unknown;
+    for (const strategy of [ftp.enterPassiveModeIPv6, enterPassiveModeOnControlHost]) {
+      try {
+        const reply = await strategy(ftpContext);
+        client.prepareTransfer = strategy;
+        return reply;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError;
+  };
 }
 
 /**
@@ -324,6 +358,7 @@ export class FTPClient {
     work: (client: ftp.Client) => Promise<T>
   ): Promise<T> {
     const client = new ftp.Client();
+    useMachineHostForTransfers(client);
     client.ftp.verbose = verbose;
     try {
       await client.access({
@@ -376,7 +411,7 @@ export class FTPClient {
     // The RETR below goes straight to the socket, so basic-ftp does not check it
     assertSafeFtpArgument(filePath);
     await trySetBinaryMode(client);
-    const { host, port } = await requestPassiveAddress(client);
+    const { host, port } = await requestPassiveAddress(client.ftp);
 
     return new Promise((resolve, reject) => {
       const dataSocket = new net.Socket();
@@ -408,7 +443,7 @@ export class FTPClient {
    * basic-ftp sends "LIST -a", which some limited FTP servers do not support.
    */
   private async rawListCurrentDirectory(client: ftp.Client): Promise<string> {
-    const { host, port } = await requestPassiveAddress(client);
+    const { host, port } = await requestPassiveAddress(client.ftp);
 
     return new Promise((resolve, reject) => {
       const dataSocket = new net.Socket();
