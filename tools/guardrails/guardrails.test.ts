@@ -136,6 +136,34 @@ describe('docs links', () => {
   });
 });
 
+describe('workflow permissions', () => {
+  // The token of a workflow can change the repo, the releases and the images on ghcr.io.
+  // Each workflow reads only by default. A job that must write gets the permission in its own block.
+  interface Workflow {
+    permissions?: unknown;
+    jobs: Record<string, { if?: string }>;
+  }
+  const workflowFiles = readdirSync(join(ROOT, '.github/workflows')).filter(file => /\.ya?ml$/.test(file));
+  const workflow = (file: string) => parse(read(join('.github/workflows', file))) as Workflow;
+
+  it('finds the workflows', () => {
+    expect(workflowFiles).toContain('ci.yml');
+  });
+
+  it.each(workflowFiles)('gives only read permissions at the top of %s', file => {
+    const { permissions } = workflow(file);
+    expect(permissions, 'a top-level permissions block').toBeTypeOf('object');
+    const notRead = Object.entries(permissions as Record<string, string>).filter(([, level]) => level !== 'read');
+    expect(notRead).toEqual([]);
+  });
+
+  // A run by hand from a branch would use the build scripts of that branch, with a token that can change a release
+  it('runs the Pi card job only from main or a release tag', () => {
+    const { card } = workflow('card.yml').jobs;
+    expect(card.if?.replace(/\s+/g, ' ')).toBe("github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')");
+  });
+});
+
 describe('test runs', () => {
   // npm test runs each tools folder with test:tools. npm run coverage runs the projects of vitest.config.ts.
   // A tools folder with tests must be in both, or one of the two runs skips it.
