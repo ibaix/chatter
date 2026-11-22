@@ -23,6 +23,8 @@ const LISTING = '-rw-r--r-- 1 cnc cnc 20 Jan 01 12:00 O1000\r\n-rw-r--r-- 1 cnc 
 
 interface FakeMachine {
   controlPort: number;
+  /** The port of the data listener at the control host */
+  dataPort: number;
   /** Data connections that arrived at the control host */
   dataConnections: number;
   /** Data connections that arrived at the host of the PASV reply */
@@ -192,6 +194,7 @@ async function startFakeMachine({
 
   return {
     controlPort,
+    dataPort,
     get dataConnections() { return machine.dataConnections; },
     get decoyConnections() { return machine.decoyConnections; },
     get uploadedText() { return machine.uploadedText; },
@@ -224,6 +227,26 @@ function recordConnectHosts(): () => string[] {
   const connect = vi.spyOn(net.Socket.prototype, 'connect');
   return () => connect.mock.calls.map(([options, host]) =>
     typeof options === 'object' ? String((options as net.TcpNetConnectOpts).host) : String(host));
+}
+
+const realConnect = net.Socket.prototype.connect;
+
+/** A connection to this port never opens, as when a firewall drops it. The other connections open as usual. */
+function neverConnectTo(port: number): void {
+  vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket, ...args: unknown[]) {
+    const [options] = args;
+    const target = typeof options === 'object' ? (options as net.TcpNetConnectOpts).port : options;
+    if (Number(target) === port) return this;
+    return (realConnect as (...connectArgs: unknown[]) => net.Socket).apply(this, args);
+  });
+}
+
+/** A port on this computer where nothing listens */
+async function closedPort(): Promise<number> {
+  const server = net.createServer();
+  const port = await listen(server, 0, NAT_CONTROL_HOST);
+  await closeServer(server);
+  return port;
 }
 
 function collectText(stream: PassThrough): () => string {
@@ -362,6 +385,43 @@ describe('basic-ftp data connection with a PASV reply that names another host (a
     expect(machine.dataConnections).toBe(1);
     expect(machine.decoyConnections).toBe(0);
     expect(new Set(connectHosts())).toEqual(new Set([NAT_CONTROL_HOST]));
+  });
+
+  // The data connection of basic-ftp uses the timeout of the FTP client, so a dropped connection does not wait forever
+  it('stops a basic-ftp data connection that does not open in the FTP timeout', async () => {
+    const timeoutMs = 200;
+    ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs });
+    neverConnectTo(machine.dataPort);
+    const started = Date.now();
+
+    await expect(ftpClient.listFiles('/')).rejects.toThrow('did not answer');
+
+    expect(Date.now() - started).toBeLessThan(timeoutMs * 10);
+    expect(machine.dataConnections).toBe(0);
+  });
+
+  it('gives the socket error when the basic-ftp data connection is refused', async () => {
+    const port = await closedPort();
+    await machine.close();
+    machine = await startFakeMachine({
+      controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST,
+      pasvReplyFor: () => `227 Entering Passive Mode (192,0,2,1,${Math.floor(port / 256)},${port % 256})`
+    });
+    ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort });
+
+    const failure = await ftpClient.listFiles('/').catch((err: unknown) => err);
+
+    expect((failure as Error).cause).toMatchObject({ code: 'ECONNREFUSED', message: expect.stringContaining(`${NAT_CONTROL_HOST}:${port}`) });
+    expect(connectHosts()).not.toContain(NAT_PASV_REPLY_HOST);
+  });
+
+  // Chatter never turns on FTP over TLS. The data connection of this file cannot use TLS, so it must not open as plain text.
+  it('refuses to open a plain data connection when the control connection uses TLS', async () => {
+    vi.spyOn(ftp.FTPContext.prototype, 'hasTLS', 'get').mockReturnValue(true);
+
+    await expect(ftpClient.listFiles('/')).rejects.toThrow('Chatter does not support FTP over TLS');
+
+    expect(machine.dataConnections).toBe(0);
   });
 
   // A dual-stack socket tells an IPv4 address as ::ffff:127.0.0.1. The data connection must use the plain IPv4 text.
