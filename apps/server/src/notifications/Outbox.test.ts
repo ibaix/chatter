@@ -616,6 +616,18 @@ describe('Outbox', () => {
       expect(outbox.takeDue(NOW + MINUTE + EVENT_REPEAT_MS).map(entry => entry.id)).toEqual([next]);
     });
 
+    it('makes a repeated event due when the hold ends early, also when the service refused the first event', () => {
+      const first = queueEvent('phones', 1, NOW);
+      outbox.takeDue(NOW);
+      outbox.markRetry(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      const next = queueEvent('phones', 2, NOW + MINUTE);
+      expect(outbox.takeDue(NOW + MINUTE)).toEqual([]);
+
+      outbox.endHold('phones', NOW + 2 * MINUTE);
+
+      expect(outbox.takeDue(NOW + 2 * MINUTE).map(entry => entry.id)).toEqual([next]);
+    });
+
     it('does not hold the other messages of the channel behind an event that waits', () => {
       sendEvent(1, NOW);
       queueEvent('phones', 2, NOW + MINUTE);

@@ -189,14 +189,22 @@ export class Outbox implements MachineRemovalListener {
       const repeats = { count: waiting.repeats + 1, since: waiting.repeat_since ?? waiting.created_at };
       const { message } = item;
       const text = repeatedEventText(message.text, message.link, repeats.count, repeats.since, this.textOptions());
-      return this.insert({ ...item, message: { ...message, text } }, now, { repeats, nextTryAt: waiting.next_try_at });
+      // A message that the service refused waits for the hold of the channel, not for its own time.
+      // The new message does not take that time, so it becomes due when the hold ends, also when the hold ends early (see endHold).
+      const nextTryAt = waiting.attempts > 0 ? this.repeatTime(sameEventWhere, sameEvent) : waiting.next_try_at;
+      return this.insert({ ...item, message: { ...message, text } }, now, { repeats, nextTryAt });
     }
+    return this.insert(item, now, { nextTryAt: this.repeatTime(sameEventWhere, sameEvent) });
+  }
+
+  /** The time when the next message about the event can go: EVENT_REPEAT_MS after the last one went, or now */
+  private repeatTime(sameEventWhere: string, sameEvent: { now: number }): number {
     // A message that is being sent now counts as sent now
     const { lastSent } = this.db.prepare(`
       SELECT MAX(CASE WHEN status = 'sent' THEN sent_at ELSE @now END) AS lastSent FROM notification_messages
       WHERE ${sameEventWhere} AND (status = 'sent' OR (status = 'waiting' AND sending = 1))
     `).get(sameEvent) as { lastSent: number | null };
-    return this.insert(item, now, { nextTryAt: lastSent === null ? now : Math.max(now, lastSent + EVENT_REPEAT_MS) });
+    return lastSent === null ? sameEvent.now : Math.max(sameEvent.now, lastSent + EVENT_REPEAT_MS);
   }
 
   /**
