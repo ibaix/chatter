@@ -119,7 +119,7 @@ A check (`update-chatter.sh check`) does these steps, in this order. Each step m
 | Step | What the helper does |
 | --- | --- |
 | `copying` | Moves the update file out of the inbox, and copies it into `/var/lib/chatter-update/` (root only). |
-| `listing` | Lists the tar one time. Each entry must be a regular file with an allowed name. Each name comes one time only. There are 7 entries or fewer, and the manifest and its signature are small. Nothing is extracted before this. |
+| `listing` | The file must end with the two blocks of zeros that end a tar, so a file that is cut short is refused. Then the helper lists the tar one time. Each entry must be a regular file with an allowed name. Each name comes one time only. There are 7 entries or fewer, and the manifest and its signature are small. Nothing is extracted before this. |
 | `signature` | Extracts only `manifest.txt` and `manifest.txt.sig` (tar stops after them). Checks the signature. Then reads the manifest, and makes sure that the tar holds the same files as the signed manifest. Checks the version and the processor type. |
 | `space` | Measures the Chatter data and the free space. |
 | `files` | Extracts the other files, and compares the size and the sha256 of each file with the signed manifest. |
@@ -166,6 +166,7 @@ All paths are in `tools/pi-image/`.
 - `test/imager-list.test.sh`: tests for `imager-list.sh` (needs python3). Run it with `tools/pi-image/test/imager-list.test.sh`.
 - `test/update-chatter-check.test.sh`, `test/update-chatter-install.test.sh`, `test/update-chatter-recover.test.sh`: tests for `in-pi/update-chatter.sh`, with a fake Docker. They run in a Debian 13 container (`test/in-linux.sh`), because they need Linux tools and OpenSSL 3 for Ed25519 signatures. macOS does not have these. Each test makes its own throwaway keys.
 - `test/update-file-round-trip.test.sh`: makes an update file with the real `tools/release/make-update-file.sh`, and checks that the real `in-pi/update-chatter.sh check` says ready, and refuses the file when one byte of an image changes. It runs in the Debian 13 container, with a fake Docker and a throwaway key.
+- The CI runs the three helper tests and the round trip in the workflow `.github/workflows/pi-image-tests.yml`, when a pull request changes the helper, its tests, the release script, or `packages/shared/src/updates.ts`.
 - `test/customize-update.test.sh`: tests for the update folders, owners, and keys that `customize.sh` puts on the card. It also runs in the Debian 13 container.
 - `test/build-version.test.sh`: tests for `CHATTER_VERSION`, `CHATTER_USE_RELEASE_IMAGE`, and the key warning in `build.sh`.
 - `test/update-mounts.test.sh`: tests that the Chatter container can write only into the inbox (needs Docker).
