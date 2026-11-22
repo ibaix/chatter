@@ -113,6 +113,17 @@ function isRealEntry(name: string): boolean {
   return name !== '' && name !== '.' && name !== '..';
 }
 
+/**
+ * FTP sends a path in a command line, so a line break would start a second command, for example DELE.
+ * The routes refuse such a path first. This check is for each other caller, and for the raw RETR write,
+ * which does not go through the check of basic-ftp. \p{Cc} is each control character, CR, LF and NUL included.
+ */
+function assertSafeFtpArgument(argument: string): void {
+  if (/\p{Cc}/u.test(argument)) {
+    throw new Error(`The path ${JSON.stringify(argument)} cannot have a line break or another control character`);
+  }
+}
+
 /** basic-ftp wants paths without a leading "./" or "/" */
 function toRelativeRemotePath(remotePath: string): string {
   if (remotePath.startsWith('./')) return remotePath.substring(2);
@@ -191,6 +202,7 @@ export class FTPClient {
   }
 
   async listFiles(path = ROOT_PATH): Promise<FTPFileInfo[]> {
+    assertSafeFtpArgument(path);
     try {
       const list = await this.withConnection({ verbose: false }, client => client.list(path));
       return list.map(item => ({
@@ -206,6 +218,7 @@ export class FTPClient {
   }
 
   async getFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FTPTreeNode[]> {
+    assertSafeFtpArgument(path);
     if (depth <= 0) {
       return [];
     }
@@ -219,6 +232,7 @@ export class FTPClient {
   async downloadFile(filePath: string, writableStream: Writable): Promise<void> {
     const remotePath = toRelativeRemotePath(filePath);
     try {
+      assertSafeFtpArgument(remotePath);
       await this.withConnection({ verbose: true }, async client => {
         try {
           await this.downloadOverPassiveSocket(client, remotePath, writableStream);
@@ -241,6 +255,7 @@ export class FTPClient {
     const content = await toBuffer(source);
 
     try {
+      assertSafeFtpArgument(relativePath);
       await this.withConnection({ verbose: true }, async client => {
         if (!allowOverwrite && await this.fileExists(client, relativePath)) {
           throw new Error(alreadyExistsMessage(relativePath));
@@ -279,6 +294,7 @@ export class FTPClient {
   async deleteFile(remotePath: string): Promise<void> {
     const relativePath = toRelativeRemotePath(remotePath);
     try {
+      assertSafeFtpArgument(relativePath);
       await this.withConnection({ verbose: true }, client => client.remove(relativePath));
     } catch (err) {
       throw new Error(`FTP delete error: ${errorText(err)}`, { cause: err });
@@ -313,6 +329,7 @@ export class FTPClient {
   ): Promise<BatchFileOutcome> {
     const remotePath = toRelativeRemotePath(file.remotePath);
     try {
+      assertSafeFtpArgument(remotePath);
       if (!allowOverwrite && await this.fileExists(client, remotePath)) {
         return { remotePath, error: alreadyExistsMessage(remotePath) };
       }
@@ -339,6 +356,8 @@ export class FTPClient {
    * connection first, then send RETR. More compatible with limited FTP servers like Speedio.
    */
   private async downloadOverPassiveSocket(client: ftp.Client, filePath: string, destination: Writable): Promise<void> {
+    // The RETR below goes straight to the socket, so basic-ftp does not check it
+    assertSafeFtpArgument(filePath);
     await trySetBinaryMode(client);
     const { host, port } = await requestPassiveAddress(client);
 
