@@ -50,6 +50,17 @@ describe('ToolSyncTracker', () => {
     expect(tracker.autoSyncDue(START + MANUAL_SYNC_EVERY_MS)).toBe(true);
   });
 
+  it('keeps no result of an abandoned read: only the read stops running', () => {
+    const tracker = new ToolSyncTracker();
+    tracker.started(START, 'auto');
+    tracker.ended(START, null);
+    tracker.started(START + 20 * MINUTE, 'auto');
+
+    tracker.abandoned();
+
+    expect(tracker.state()).toEqual({ lastSyncAt: new Date(START).toISOString(), lastAttemptAt: new Date(START).toISOString(), error: null, running: false });
+  });
+
   it('is not due while a read runs', () => {
     const tracker = new ToolSyncTracker();
     tracker.started(START, 'auto');

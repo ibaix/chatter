@@ -55,6 +55,11 @@ export class ToolSyncTracker {
     if (error === null) this.lastSyncAt = now;
   }
 
+  /** The read ended, but its result is not kept (the address changed during it). Only `running` changes. */
+  abandoned(): void {
+    this.running = false;
+  }
+
   /**
    * Forget the last read, so the next idle poll reads the tools at once. A read that runs now and the Sync limit
    * of 30 seconds stay.

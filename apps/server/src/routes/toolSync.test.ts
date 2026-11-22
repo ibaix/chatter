@@ -72,6 +72,15 @@ describe('POST /api/machine/:id/tools/sync', () => {
     expect(await errorOf(offline)).toContain('not connected');
   });
 
+  it('tells when the address changed during the read', async () => {
+    vi.spyOn(poller, 'syncTools').mockResolvedValue({ outcome: 'address-changed' });
+
+    const res = await sync();
+
+    expect(res.status).toBe(409);
+    expect(await errorOf(res)).toContain('address of the machine changed');
+  });
+
   it('gives 404 for a machine that is not there, and 400 with the reason for a machine type with no tool table', async () => {
     vi.spyOn(poller, 'syncTools').mockResolvedValueOnce({ outcome: 'not-found' }).mockResolvedValueOnce({ outcome: 'not-supported' });
 

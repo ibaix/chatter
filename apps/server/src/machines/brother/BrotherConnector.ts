@@ -178,11 +178,18 @@ const MAX_TOOL_NUMBER = 99;
 /** The position of each value in a row of the tool data reply */
 const TOOL_DATA_COLUMN = { length: 0, lengthWear: 1, diameter: 2, diameterWear: 3, name: 8 } as const;
 
-/** What a Sync request gives */
+/** What a Sync request gives. 'address-changed': the address changed during the read, so Chatter did not keep its result. */
 export type ToolSyncResult =
   | { outcome: 'synced' | 'failed'; toolSync: ToolSyncState }
   | ToolSyncRefusal
-  | { outcome: 'not-connected' };
+  | { outcome: 'not-connected' | 'address-changed' };
+
+/** The address changed during a tool read. The reply came from the old control, so Chatter does not keep it. */
+class OldAddressError extends Error {
+  constructor() {
+    super('The address changed during the tool read');
+  }
+}
 
 /** The key of the reply status in a parsed reply. No data key of a Brother starts with @. */
 export const REPLY_STATUS_KEY = '@status';
@@ -227,6 +234,11 @@ export class BrotherConnector extends BaseMachineConnector {
    * connector, also after a reconnect, so Chatter never sends a command that the control does not know again.
    */
   private unknownAtcCommands = new Set<AtcCommand>();
+  /**
+   * Each forgetControl() starts a new generation. A tool read keeps no result of an older generation: no tool table,
+   * no ATC command, no error and no time of the read, because those are about the control at the old address.
+   */
+  private controlGeneration = 0;
   private toolDataCommand: string;
   private macroCommand: string;
   private dataItems: DataItem[];
@@ -412,10 +424,10 @@ export class BrotherConnector extends BaseMachineConnector {
    * again. Chatter does not ask a command again when the control did not know it: an unknown command adds a CM
    * entry to its alarm list.
    */
-  private async detectControlType(): Promise<ParsedResponse | null> {
+  private async detectControlType(generation: number): Promise<ParsedResponse | null> {
     for (const { command, controlType } of ATC_COMMANDS) {
       if (this.unknownAtcCommands.has(command)) continue;
-      const response = await this.send(command);
+      const response = await this.sendForToolRead(command, generation);
       if (isKnownAtcReply(response)) {
         this.atcCommand = command;
         this.controlType = controlType;
@@ -431,6 +443,7 @@ export class BrotherConnector extends BaseMachineConnector {
    * idle poll reads the tools again. Use it when the address changes, because a different control can be there.
    */
   forgetControl(): void {
+    this.controlGeneration++;
     this.atcCommand = null;
     this.controlType = null;
     this.unknownAtcCommands.clear();
@@ -532,6 +545,7 @@ export class BrotherConnector extends BaseMachineConnector {
    * wait for that poll, so a poll that does not end cannot keep the tool read, and with it each later poll, waiting.
    */
   private async syncTools(trigger: 'auto' | 'manual'): Promise<ToolSyncResult> {
+    const generation = this.controlGeneration;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
     const timeout = new Promise<never>((_, reject) => {
@@ -547,7 +561,7 @@ export class BrotherConnector extends BaseMachineConnector {
       const read = (async () => {
         await this.runningPoll?.catch(() => {});
         // After the time limit, a later state poll can use the connection, so the read must not start
-        if (!timedOut) await this.readTools();
+        if (!timedOut) await this.readTools(generation);
       })();
       await Promise.race([read, timeout]);
     } catch (err) {
@@ -555,16 +569,23 @@ export class BrotherConnector extends BaseMachineConnector {
     } finally {
       clearTimeout(timer);
     }
+    if (generation !== this.controlGeneration) {
+      this.toolSync.abandoned();
+      log.debug('Tool read of the old address ignored', { machine: this.id, trigger });
+      return { outcome: 'address-changed' };
+    }
     this.toolSync.ended(Date.now(), error);
     log.debug('Tool read', { machine: this.id, trigger, error: error ?? undefined });
     return { outcome: error === null ? 'synced' : 'failed', toolSync: this.toolSync.state() };
   }
 
   /** Read the tool table and the tool data. The first time, find the control type: its reply is also the tool table. */
-  private async readTools(): Promise<void> {
-    const atcResponse = this.atcCommand ? await this.send(this.atcCommand) : this.atcDetectionDone ? null : await this.detectControlType();
+  private async readTools(generation: number): Promise<void> {
+    const atcResponse = this.atcCommand
+      ? await this.sendForToolRead(this.atcCommand, generation)
+      : this.atcDetectionDone ? null : await this.detectControlType(generation);
     if (atcResponse && this.atcCommand) this.updatePotTools(atcResponse);
-    const toolDataResponse = await this.send(this.toolDataCommand);
+    const toolDataResponse = await this.sendForToolRead(this.toolDataCommand, generation);
     this.updateToolOffsets(toolDataResponse);
     this.updateToolTable();
   }
@@ -610,6 +631,13 @@ export class BrotherConnector extends BaseMachineConnector {
   /** True when the poll must connect first: there is no connection, or the planned reconnect is due */
   private mustConnect(): boolean {
     return !this.socket || !this.connected || this.plannedReconnectDue();
+  }
+
+  /** Send a command of a tool read. Throws OldAddressError when the address changed while it waited for the reply. */
+  private async sendForToolRead(command: string, generation: number): Promise<ParsedResponse> {
+    const response = await this.send(command);
+    if (generation !== this.controlGeneration) throw new OldAddressError();
+    return response;
   }
 
   /** Send a command, and record how long the machine took to answer */
