@@ -57,8 +57,9 @@ export async function postJson(
 /**
  * The wait of the service goes on a failure that Chatter tries again, and in its text.
  * A channel type that gives its own wait also gives its own text, so Chatter keeps both.
+ * A channel type that reads a wait in the body of the answer gives it here (see telegram.ts).
  */
-function withWait(result: SendResult, retryAfterMs: number | undefined): SendResult {
+export function withWait(result: SendResult, retryAfterMs: number | undefined): SendResult {
   if (result.ok || !result.retry || retryAfterMs === undefined || result.retryAfterMs !== undefined) return result;
   return { ...result, retryAfterMs, error: `${result.error} The service asks Chatter to wait ${durationText(retryAfterMs)}.` };
 }
@@ -83,6 +84,11 @@ function retryAfterOf(response: Response, now: number): number | undefined {
  * JavaScript also reads other texts as dates, for example "1.5" or "12/31/2099", so Chatter checks the form first.
  */
 const HTTP_DATE = /^[A-Z][a-z]{2,8}, .+ GMT$/;
+
+/** A wait in seconds in the body of an answer, for example `retry_after` of Telegram. undefined when it is not a number. */
+export function waitOfSeconds(seconds: unknown): number | undefined {
+  return typeof seconds === 'number' ? cappedWait(seconds * 1000) : undefined;
+}
 
 /** A wait of a service, at most MAX_HOLD_MS, so the text tells the real wait. undefined when it is not a time in the future. */
 function cappedWait(milliseconds: number): number | undefined {

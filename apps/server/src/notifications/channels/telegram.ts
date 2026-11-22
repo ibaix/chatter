@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { ChannelDefinition, SendResult } from './ChannelType.js';
-import { type Answer, cutText, type JsonObject, postJson, serviceReason, statusResult } from './http.js';
+import {
+  type Answer, cutText, type JsonObject, postJson, serviceReason, statusResult, waitOfSeconds, withWait,
+} from './http.js';
 import { soundField, soundSetting } from './sound.js';
 
 const TELEGRAM_API = 'https://api.telegram.org';
@@ -56,17 +58,27 @@ export const telegramChannel: ChannelDefinition<TelegramSettings> = {
 /** The error answer of the Bot API: https://core.telegram.org/bots/api#making-requests */
 interface TelegramError extends JsonObject {
   description?: unknown;
-  parameters?: { migrate_to_chat_id?: unknown };
+  parameters?: { migrate_to_chat_id?: unknown; retry_after?: unknown };
 }
 
-function resultOf({ status, json }: Answer, token: string): SendResult {
+function resultOf({ status, json, retryAfterMs }: Answer, token: string): SendResult {
   const answer: TelegramError = json ?? {};
-  return statusResult(status, {
+  const result = statusResult(status, {
     answered: `Telegram answered ${status}`,
     sent: 'Telegram sent it',
     moved: 'A proxy of the shop network can cause this.',
     refused: () => refusalOf(status, answer, token),
   });
+  return withWait(result, longerWait(retryAfterMs, waitOfSeconds(answer.parameters?.retry_after)));
+}
+
+/**
+ * Telegram gives the wait of a 429 in the answer, in `parameters.retry_after`. A proxy can give a Retry-After header.
+ * When both give a wait, Chatter uses the longer one, so it does not send before the service is ready.
+ */
+function longerWait(header: number | undefined, body: number | undefined): number | undefined {
+  if (header === undefined) return body;
+  return body === undefined ? header : Math.max(header, body);
 }
 
 function refusalOf(status: number, answer: TelegramError, token: string): string {
