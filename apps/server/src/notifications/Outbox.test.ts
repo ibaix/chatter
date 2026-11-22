@@ -301,6 +301,34 @@ describe('Outbox', () => {
       ]);
     });
 
+    describe('when the service refuses the summary message too', () => {
+      /** Holds the channel with 6 messages, takes the summary, and holds the channel again for the summary */
+      function refusedSummary(): OutboxEntry {
+        holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M'), named('E', 'M')]);
+        const [summary] = outbox.takeDue(NOW + 60 * MINUTE);
+        expect(summary.message.text).toMatch(/^Chatter could not send 3 alerts /);
+        outbox.markRetry(summary.id, 'ntfy answered 429: too many requests.', NOW + 90 * MINUTE);
+        return summary;
+      }
+
+      it('sends the summary first, before the newest messages', () => {
+        const summary = refusedSummary();
+
+        expect(sendAll(NOW + 90 * MINUTE)).toEqual([summary.message.text, 'started C', 'started D', 'started E']);
+      });
+
+      it('puts the summary and the oldest messages in a new summary, when more messages came, and counts each alert one time', () => {
+        refusedSummary();
+        queue('phones', 30, named('F', 'M'), NOW + 70 * MINUTE);
+        queue('phones', 31, named('G', 'M'), NOW + 71 * MINUTE);
+
+        expect(sendAll(NOW + 90 * MINUTE)).toEqual([
+          'Chatter could not send 5 alerts while the channel was blocked: C on M (1), D on M (1), other alerts (3). Open Chatter to see them.',
+          'started E', 'started F', 'started G',
+        ]);
+      });
+    });
+
     it('makes no summary for the messages that came after the hold ended, also when the message of the hold failed for good', () => {
       const first = holdWith([]);
       outbox.takeDue(NOW + 60 * MINUTE);

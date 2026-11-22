@@ -374,11 +374,18 @@ export class Outbox implements MachineRemovalListener {
    * The first due waiting message of each channel that has no message being sent and is not held.
    * A message that is not due yet is an event message that waits for EVENT_REPEAT_MS, so the next messages go past it.
    * A message that failed holds its whole channel (see markRetry), so no message goes past it.
+   * A summary or a "more" message goes first. It tells about older messages, but Chatter made it after the messages
+   * that still wait, so it has a larger id. For example, the service refused the summary after a hold.
    */
   private dueHeads(now: number): MessageRow[] {
     return this.db.prepare(`
       SELECT * FROM notification_messages
-      WHERE id IN (SELECT MIN(id) FROM notification_messages WHERE status = 'waiting' AND next_try_at <= @now GROUP BY channel_id)
+      WHERE id IN (
+          SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY channel_id ORDER BY kind = 'more' DESC, id) AS place
+            FROM notification_messages WHERE status = 'waiting' AND next_try_at <= @now
+          ) WHERE place = 1
+        )
         AND channel_id NOT IN (SELECT channel_id FROM notification_messages WHERE sending = 1)
         AND channel_id NOT IN (SELECT channel_id FROM notification_channel_holds WHERE until > @now)
       ORDER BY id
@@ -405,6 +412,7 @@ export class Outbox implements MachineRemovalListener {
    * dueHeads gives only a channel whose hold ended. The hold row stays until a queued message goes, so a summary waits for it too.
    * Only a message that Chatter queued before the end of the hold waited. A row can stay after the hold ended, for example
    * when the message of the hold failed for good. So the messages that came later get no summary.
+   * A summary or a "more" message that waits tells about older messages, so it always goes into the new summary.
    */
   private summaryAfterHold(channelId: string, now: number): OutboxEntry | null {
     const hold = this.db.prepare('SELECT until FROM notification_channel_holds WHERE channel_id = ?').get(channelId) as
@@ -413,7 +421,7 @@ export class Outbox implements MachineRemovalListener {
     const waiting = this.db.prepare(`
       SELECT * FROM notification_messages
       WHERE channel_id = ? AND status = 'waiting' AND sending = 0 AND kind != 'test' AND created_at < ?
-      ORDER BY id DESC
+      ORDER BY kind = 'more', id DESC
     `).all(channelId, hold.until) as MessageRow[];
     if (waiting.length <= BACKLOG_SEND + 1) return null;
     const merged = waiting.slice(BACKLOG_SEND);
