@@ -248,7 +248,7 @@ describe('MTConnect redirects', () => {
       expect(result.targetRequests).toBe(0);
       expect(result.connected).toBe(false);
       expect(result.errors).toEqual([
-        `Connection failed: The agent sent a redirect (HTTP ${status}). Chatter does not follow redirects.`,
+        `Connection failed: The agent sent a redirect (HTTP ${status}). Chatter does not follow redirects. Set the address and port of the agent itself.`,
       ]);
     },
   );
@@ -260,7 +260,7 @@ describe('MTConnect redirects', () => {
     expect(result.targetRequests).toBe(0);
     expect(result.connected).toBe(false);
     expect(result.errors).toEqual([
-      'Connection failed: The agent sent a redirect (HTTP 304). Chatter does not follow redirects.',
+      'Connection failed: The agent sent a redirect (HTTP 304). Chatter does not follow redirects. Set the address and port of the agent itself.',
     ]);
   });
 
@@ -285,7 +285,7 @@ describe('MTConnect redirects', () => {
 
     expect(connector.connected).toBe(false);
     expect(connector.getStatus().errors).toEqual([
-      'Connection failed: The agent sent a redirect (HTTP 302). Chatter does not follow redirects.',
+      'Connection failed: The agent sent a redirect (HTTP 302). Chatter does not follow redirects. Set the address and port of the agent itself.',
     ]);
   });
 

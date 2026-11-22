@@ -184,7 +184,7 @@ async function getText(url: string, timeoutMs: number): Promise<string> {
     if (response.status >= 300 && response.status < 400) {
       // Do not wait for the cancel: a body that breaks must not hide the redirect error
       response.body?.cancel().catch(() => {});
-      throw new Error(`The agent sent a redirect (HTTP ${response.status}). Chatter does not follow redirects.`);
+      throw new Error(`The agent sent a redirect (HTTP ${response.status}). Chatter does not follow redirects. Set the address and port of the agent itself.`);
     }
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
