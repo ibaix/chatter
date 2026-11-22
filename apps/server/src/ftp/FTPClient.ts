@@ -24,6 +24,12 @@ const ROOT_PATH = '/';
 const DOWNLOAD_NO_DATA_TIMEOUT_MS = 30_000;
 /** The raw LIST does not wait for the server to close the data connection, so it waits this long for the listing */
 const RAW_LIST_TRANSFER_WAIT_MS = 1_000;
+/**
+ * The raw RETR and the raw LIST stop when their data connection does not open in this time, and use the
+ * fallback of basic-ftp. On a shop network a connection opens in a few milliseconds. The FTP timeout (30 s)
+ * would come for each folder of a tree walk, so this time is shorter.
+ */
+const RAW_DATA_CONNECT_TIMEOUT_MS = 5_000;
 
 /**
  * "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)": four address bytes, then the port as two bytes.
@@ -225,15 +231,12 @@ function controlConnectionHost(ftpContext: ftp.FTPContext): string {
 }
 
 /**
- * Open the data connection of a basic-ftp transfer, as basic-ftp does for its own PASV and EPSV.
- * The connection attempt stops after the FTP timeout. When the connection opens, basic-ftp takes it,
- * and from then on basic-ftp handles its errors and its timeout.
+ * Open a data connection to the machine. The attempt stops after `timeoutMs` (0 means no limit),
+ * and then the socket is destroyed. A socket error keeps its code.
  */
-function connectDataSocket(ftpContext: ftp.FTPContext, { host, port }: { host: string; port: number }): Promise<void> {
-  // Chatter always connects with "secure: false". This code opens a plain socket, so it must not run over TLS.
-  if (ftpContext.hasTLS) {
-    return Promise.reject(new Error('Chatter does not support FTP over TLS for the PASV data connection'));
-  }
+function openDataSocket({ host, port, timeoutMs, family }: {
+  host: string; port: number; timeoutMs: number; family?: number;
+}): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const socket = new net.Socket();
     const onError = (err: Error) => {
@@ -244,17 +247,30 @@ function connectDataSocket(ftpContext: ftp.FTPContext, { host, port }: { host: s
       socket.destroy();
       reject(new Error(`Timeout: the passive data connection to ${host}:${port} did not open`));
     };
-    socket.setTimeout(ftpContext.timeout);
+    socket.setTimeout(timeoutMs);
     socket.on('error', onError);
     socket.on('timeout', onTimeout);
-    socket.connect({ port, host, family: ftpContext.ipFamily }, () => {
+    socket.connect({ port, host, family }, () => {
+      socket.setTimeout(0);
       socket.removeListener('error', onError);
       socket.removeListener('timeout', onTimeout);
-      // The setter stops the connect timeout and adds the error handlers of basic-ftp
-      ftpContext.dataSocket = socket;
-      resolve();
+      resolve(socket);
     });
   });
+}
+
+/**
+ * Open the data connection of a basic-ftp transfer, as basic-ftp does for its own PASV and EPSV.
+ * The connection attempt stops after the FTP timeout. When the connection opens, basic-ftp takes it,
+ * and from then on basic-ftp handles its errors and its timeout.
+ */
+async function connectDataSocket(ftpContext: ftp.FTPContext, { host, port }: { host: string; port: number }): Promise<void> {
+  // Chatter always connects with "secure: false". This code opens a plain socket, so it must not run over TLS.
+  if (ftpContext.hasTLS) {
+    throw new Error('Chatter does not support FTP over TLS for the PASV data connection');
+  }
+  // The setter adds the error handlers of basic-ftp
+  ftpContext.dataSocket = await openDataSocket({ host, port, timeoutMs: ftpContext.timeout, family: ftpContext.ipFamily });
 }
 
 /** The PASV transfer strategy of basic-ftp, with the data connection to the machine host */
@@ -486,9 +502,9 @@ export class FTPClient {
     assertSafeFtpArgument(filePath);
     await trySetBinaryMode(client);
     const { host, port } = await requestPassiveAddress(client.ftp);
+    const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
 
     return new Promise((resolve, reject) => {
-      const dataSocket = new net.Socket();
       let bytesReceived = 0;
 
       dataSocket.on('data', chunk => {
@@ -498,10 +514,8 @@ export class FTPClient {
       dataSocket.on('close', () => resolve());
       dataSocket.on('error', reject);
 
-      dataSocket.connect(port, host, () => {
-        // Written straight to the control socket without waiting for the reply, so data can flow on the data socket
-        client.ftp.socket.write(`RETR ${filePath}\r\n`);
-      });
+      // Written straight to the control socket without waiting for the reply, so data can flow on the data socket
+      client.ftp.socket.write(`RETR ${filePath}\r\n`);
 
       setTimeout(() => {
         if (bytesReceived === 0) {
@@ -518,29 +532,38 @@ export class FTPClient {
    */
   private async rawListCurrentDirectory(client: ftp.Client): Promise<string> {
     const { host, port } = await requestPassiveAddress(client.ftp);
+    const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
 
     return new Promise((resolve, reject) => {
-      const dataSocket = new net.Socket();
       let listing = '';
 
       dataSocket.on('data', chunk => {
         listing += chunk.toString();
       });
       dataSocket.on('error', reject);
+      // Until the reply to LIST comes, an idle data connection is destroyed, so the walk goes on with the fallback.
+      // After the reply, the wait for the listing has its own short limit, and a folder can be empty.
+      dataSocket.setTimeout(this.timeoutMs, () => {
+        dataSocket.destroy();
+        reject(new Error('Timeout: the raw LIST data connection is idle'));
+      });
 
-      dataSocket.connect(port, host, async () => {
-        try {
-          await client.send('LIST');
-          setTimeout(() => {
-            dataSocket.end();
-            resolve(listing);
-          }, RAW_LIST_TRANSFER_WAIT_MS);
-        } catch (err) {
+      client.send('LIST').then(() => {
+        dataSocket.setTimeout(0);
+        setTimeout(() => {
           dataSocket.end();
-          reject(err);
-        }
+          resolve(listing);
+        }, RAW_LIST_TRANSFER_WAIT_MS);
+      }, (err: unknown) => {
+        dataSocket.end();
+        reject(err);
       });
     });
+  }
+
+  /** The connect timeout of the raw data connections. It is never longer than the FTP timeout. */
+  private rawDataConnectTimeoutMs(): number {
+    return Math.min(this.timeoutMs, RAW_DATA_CONNECT_TIMEOUT_MS);
   }
 
   /** List the current folder: bare LIST first, then basic-ftp's list. An empty list when both fail. */
