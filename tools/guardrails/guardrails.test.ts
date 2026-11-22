@@ -161,11 +161,27 @@ describe('workflow permissions', () => {
     expect(workflowFiles).toContain('ci.yml');
   });
 
+  // A top level with no permissions block gives the default token, which can write. So the block must be there.
+  // "read-all", {} and the levels read and none are read only.
+  function isReadOnlyTop(permissions: unknown) {
+    if (permissions === undefined || permissions === null) return false;
+    return writeScopes(permissions).length === 0;
+  }
+
   it.each(workflowFiles)('gives only read permissions at the top of %s', file => {
-    const { permissions } = workflow(file);
-    expect(permissions, 'a top-level permissions block').toBeTypeOf('object');
-    const notRead = Object.entries(permissions as Record<string, string>).filter(([, level]) => level !== 'read');
-    expect(notRead).toEqual([]);
+    expect(isReadOnlyTop(workflow(file).permissions), JSON.stringify(workflow(file).permissions)).toBe(true);
+  });
+
+  it.each([
+    [{ contents: 'read' }, true],
+    [{}, true],
+    ['read-all', true],
+    [undefined, false],
+    [null, false],
+    ['write-all', false],
+    [{ contents: 'write' }, false],
+  ])('reads a top level of %j as read only: %s', (permissions, expected) => {
+    expect(isReadOnlyTop(permissions)).toBe(expected);
   });
 
   // Only these jobs can write, each with exactly these scopes. A new job that writes must be added here in review.
