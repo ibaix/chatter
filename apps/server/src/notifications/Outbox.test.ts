@@ -292,6 +292,15 @@ describe('Outbox', () => {
       ]);
     });
 
+    it(`sends a summary of 2 alerts and the newest ${BACKLOG_SEND}, when exactly ${BACKLOG_SEND + 2} messages wait`, () => {
+      holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M')]);
+
+      expect(sendAll(NOW + 60 * MINUTE)).toEqual([
+        'Chatter could not send 2 alerts while the channel was blocked: A on M (1), In alarm on Haas VF-2 (1). Open Chatter to see them.',
+        'started B', 'started C', 'started D',
+      ]);
+    });
+
     it('makes no summary for the messages that came after the hold ended, also when the message of the hold failed for good', () => {
       const first = holdWith([]);
       outbox.takeDue(NOW + 60 * MINUTE);
@@ -567,6 +576,16 @@ describe('Outbox', () => {
 
       expect(outbox.takeDue(NOW + EVENT_REPEAT_MS - 1)).toEqual([]);
       expect(outbox.takeDue(NOW + EVENT_REPEAT_MS).map(entry => entry.id)).toEqual([next]);
+    });
+
+    it(`holds an event that comes while the same event is being sent, until ${EVENT_REPEAT_MS / MINUTE} minutes after that time`, () => {
+      const first = queueEvent('phones', 1, NOW);
+      expect(outbox.takeDue(NOW).map(entry => entry.id)).toEqual([first]);
+      const next = queueEvent('phones', 2, NOW + MINUTE);
+      outbox.markSent(first, 'Sent', NOW + 2 * MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE + EVENT_REPEAT_MS - 1)).toEqual([]);
+      expect(outbox.takeDue(NOW + MINUTE + EVENT_REPEAT_MS).map(entry => entry.id)).toEqual([next]);
     });
 
     it('does not hold the other messages of the channel behind an event that waits', () => {
