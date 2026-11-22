@@ -11,7 +11,8 @@ name: Release image tags
 on:
   release:
     types: [released]
-  # To give the tags again by hand: Actions > Release image tags > Run workflow
+  # To give the tags again by hand: Actions > Release image tags > Run workflow. Pick main or a release tag
+  # in "Use workflow from". The job does not run from another branch.
   workflow_dispatch:
     inputs:
       tag:
@@ -24,6 +25,9 @@ permissions:
 
 jobs:
   tags:
+    # Only from main or a release tag. A run from another branch would use the scripts of that branch,
+    # with a token that can move the image tags. A release event has the ref of its tag.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     # contents: read lets gh read the releases. packages: write moves the image tags.
     permissions:
