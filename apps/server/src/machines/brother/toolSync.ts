@@ -8,10 +8,11 @@ import type { ToolSyncOutcome, ToolSyncState } from '../../types/index.js';
 export const TOOL_SYNC_MIN_AGE_MS = 10 * 60_000;
 
 /**
- * At most one Sync request in 30 seconds for each machine, so many clicks do not keep the one connection of
- * the control busy. After a failed automatic read, the next automatic read also waits this long.
+ * The shortest time between two tool reads that Chatter starts for the same reason: at most one Sync request in
+ * 30 seconds for each machine, so many clicks do not keep the one connection of the control busy, and after a failed
+ * automatic read, the next automatic read waits this long too.
  */
-export const MANUAL_SYNC_EVERY_MS = 30_000;
+export const TOOL_SYNC_MIN_GAP_MS = 30_000;
 
 /**
  * The time limit of a tool read. The read sends 2 or 3 commands with big replies. On a slow Brother, each reply can
@@ -82,15 +83,15 @@ export class ToolSyncTracker {
 
   autoSyncDue(now: number): boolean {
     if (this.running) return false;
-    if (this.lastAttemptAt !== null && now - this.lastAttemptAt < MANUAL_SYNC_EVERY_MS) return false;
+    if (this.lastAttemptAt !== null && now - this.lastAttemptAt < TOOL_SYNC_MIN_GAP_MS) return false;
     return this.lastSyncAt === null || now - this.lastSyncAt > TOOL_SYNC_MIN_AGE_MS;
   }
 
   /** Null when a Sync request can start now */
   manualRefusal(now: number): ToolSyncRefusal | null {
     if (this.running) return { outcome: 'busy' };
-    if (this.lastManualAt !== null && now - this.lastManualAt < MANUAL_SYNC_EVERY_MS) {
-      return { outcome: 'too-soon', retryAfterSeconds: Math.ceil((MANUAL_SYNC_EVERY_MS - (now - this.lastManualAt)) / 1000) };
+    if (this.lastManualAt !== null && now - this.lastManualAt < TOOL_SYNC_MIN_GAP_MS) {
+      return { outcome: 'too-soon', retryAfterSeconds: Math.ceil((TOOL_SYNC_MIN_GAP_MS - (now - this.lastManualAt)) / 1000) };
     }
     return null;
   }
