@@ -316,12 +316,44 @@ describe('HistoryBackup', () => {
       await reader.cancel();
     });
 
-    it('logs who made and downloaded it', async () => {
+    it('logs who made and downloaded it, at the end of the download', async () => {
       const log = captureLog();
-      await backUp();
-      log.restore();
+      const prepared = await backups.prepareBackup(source, ALL, 'admin');
+      const reader = backups.download(prepared.id, source.id, 'admin').stream.getReader();
+      await reader.read();
       expect(log.text('info')).toMatch(/History backup made.*machine=brother_1.*user=admin/);
+      expect(log.text('info')).not.toMatch(/History backup downloaded/);
+      while (!(await reader.read()).done);
+      log.restore();
       expect(log.text('info')).toMatch(/History backup downloaded.*user=admin/);
+    });
+
+    it('logs a download that the browser stops as stopped, not as downloaded', async () => {
+      const log = captureLog();
+      const prepared = await backups.prepareBackup(source, ALL, 'admin');
+      const reader = backups.download(prepared.id, source.id, 'admin').stream.getReader();
+      await reader.read();
+      await reader.cancel();
+      log.restore();
+      expect(log.text('warn')).toMatch(/History backup download stopped.*user=admin/);
+      expect(log.text('info')).not.toMatch(/History backup downloaded/);
+    });
+
+    it('stops a download when the browser takes no bytes for 5 minutes, deletes its files and frees the place', async () => {
+      addManyValues(victoria, source);
+      const prepared = await backups.prepareBackup(source, ALL, 'admin');
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const reader = backups.download(prepared.id, source.id, 'admin').stream.getReader();
+        await reader.read();
+        vi.advanceTimersByTime(4 * 60_000);
+        expect(filesLeft()).toHaveLength(1);
+        vi.advanceTimersByTime(60_000 + 1);
+      } finally {
+        vi.useRealTimers();
+      }
+      await vi.waitFor(() => expect(filesLeft()).toEqual([]));
+      await backups.prepareBackup(source, ALL, 'admin');
     });
   });
 

@@ -243,11 +243,12 @@ export class HistoryBackup {
     pipelineOf(Readable.from(tarBytes(entries, new Date(this.now()))), createGzip(), watch, () => {});
     const source = watch;
     restartIdle();
-    log.info('History backup downloaded', { machine: machineId, user });
-    const stream = webStreamOf(source, () => {
+    const stream = webStreamOf(source, complete => {
       clearTimeout(idleTimer);
       void rm(prepared.folder, { recursive: true, force: true });
       this.running = null;
+      if (complete) log.info('History backup downloaded', { machine: machineId, user });
+      else log.warn('History backup download stopped before its end. Chatter deleted the file.', { machine: machineId, user });
     });
     return { fileName: prepared.fileName, stream };
   }
