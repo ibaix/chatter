@@ -1389,6 +1389,8 @@ describe('API Routes', () => {
     ];
 
     const getAs = (role: keyof typeof roleCookies, path: string) => app.request(path, { headers: { Cookie: roleCookies[role] } });
+    /** The header of a program that logs in as the Viewer, with no cookie */
+    const basicViewer = { Authorization: `Basic ${Buffer.from('viewer:test-password').toString('base64')}` };
 
     it('refuses the content of a program to a Viewer', async () => {
       const id = await machineWithFile();
@@ -1415,6 +1417,22 @@ describe('API Routes', () => {
       for (const path of listPaths(id)) {
         expect((await getAs(role, path)).status, path).toBe(200);
       }
+    });
+
+    // A program logs in with HTTP Basic on each request. The role of its user applies the same as for a browser.
+    it('refuses the content of a program to a Viewer that logs in with HTTP Basic, but gives the names', async () => {
+      const id = await machineWithFile();
+      const getAsBasicViewer = (path: string) => app.request(path, { headers: basicViewer });
+      for (const path of contentPaths(id)) {
+        const res = await getAsBasicViewer(path);
+        expect(res.status, path).toBe(403);
+        expect(await res.text(), path).not.toContain('G00 X0');
+      }
+      for (const path of listPaths(id)) {
+        expect((await getAsBasicViewer(path)).status, path).toBe(200);
+      }
+      expect(poller.getConnector(id)!.downloadFile).not.toHaveBeenCalled();
+      expect(getUploadEventById).not.toHaveBeenCalled();
     });
   });
 });
