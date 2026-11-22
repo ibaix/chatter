@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import indexHtml from '../../index.html?raw';
+import themeStartScript from '../../public/theme-start.js?raw';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyTheme, PAGE_COLORS, readThemeChoice, saveThemeChoice, THEME_STORAGE_KEY, themeOf } from './theme';
 
@@ -94,13 +95,28 @@ describe('applyTheme', () => {
 });
 
 describe('index.html', () => {
+  it('has no script in the page, so the Content-Security-Policy of the server can block such scripts', () => {
+    expect(indexHtml).not.toMatch(/<script>/);
+  });
+
+  it('runs the theme start script before the page draws', () => {
+    // A plain script in <head>, not a module, so the browser runs it before it draws the page
+    expect(indexHtml).toContain('<script src="/theme-start.js"></script>');
+    expect(indexHtml.indexOf('/theme-start.js')).toBeLessThan(indexHtml.indexOf('</head>'));
+  });
+
+  it('gives the browser bar the dark page color', () => {
+    expect(indexHtml).toContain(`<meta name="theme-color" content="${PAGE_COLORS.dark}" />`);
+  });
+});
+
+describe('public/theme-start.js', () => {
   it('reads the same saved choice before the page draws, so a light page does not flash dark', () => {
-    expect(indexHtml).toContain(`localStorage.getItem('${THEME_STORAGE_KEY}')`);
+    expect(themeStartScript).toContain(`localStorage.getItem('${THEME_STORAGE_KEY}')`);
   });
 
   it('gives the browser bar the light page color before the page draws', () => {
-    expect(indexHtml).toContain(`setAttribute('content', '${PAGE_COLORS.light}')`);
-    expect(indexHtml).toContain(`<meta name="theme-color" content="${PAGE_COLORS.dark}" />`);
+    expect(themeStartScript).toContain(`setAttribute('content', '${PAGE_COLORS.light}')`);
   });
 });
 
