@@ -101,6 +101,24 @@ describe('SiemensConnector', () => {
     });
   });
 
+  describe('a connect that ends after a disconnect', () => {
+    it('closes the late session, stays disconnected and keeps the reason of the poll timeout', async () => {
+      let openNow: (session: SinumerikSession) => void = () => {};
+      openSession.mockImplementationOnce(() => new Promise(resolve => { openNow = resolve; }));
+      const connecting = connector.connect();
+      // What the scheduler does at the poll timeout, while the session still opens
+      connector.disconnect();
+      connector.reportPollTimeout(10000);
+
+      openNow(session);
+
+      await expect(connecting).rejects.toThrow('Disconnected while connecting');
+      expect(session.closed).toBe(true);
+      expect(connector.connected).toBe(false);
+      expect(connector.getStatus().errors[0]).toContain('did not answer all requests');
+    });
+  });
+
   describe('poll', () => {
     it('gives the values of a running machine in the shared names', async () => {
       const status = await connector.poll();
