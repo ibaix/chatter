@@ -1,5 +1,6 @@
 /**
- * When an alert from vmalert counts as ended. The server (the API and the messages) and the web app use the same rule.
+ * When an alert from vmalert counts as ended. The server uses this rule for the API and the messages.
+ * The web app does not use it: it shows the `firing` flag that the server sends.
  *
  * vmalert sends a firing alert again at each check (every 15 seconds), with an end time about 1 minute ahead.
  * When the alert ends, vmalert sends it one more time with its real end time: Chatter keeps that as `resolved`.
@@ -16,7 +17,7 @@ export const ALERT_END_GRACE_MS = 3 * 60_000;
 export interface AlertEndFields {
   /** In milliseconds since 1970. While the alert fires, the time until vmalert sends it again. */
   endsAt: number;
-  /** True when vmalert said that the alert ended */
+  /** True when the alert ended for sure: vmalert said that it ended, or the server reported its end after the grace time */
   resolved: boolean;
 }
 
