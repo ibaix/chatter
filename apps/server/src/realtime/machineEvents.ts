@@ -1,9 +1,10 @@
 import { Hono, type Context } from 'hono';
-import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
+import type { SSEStreamingApi } from 'hono/streaming';
 import { MACHINE_EVENTS, type MachineRemovedEvent } from '@local-chatter/shared';
 import type { MachineChangeFeed, MachineChanges } from './MachineChangeFeed.js';
 import type { LoggedInEnv } from '../auth/authRoutes.js';
 import { StreamsPerLogin } from './StreamsPerLogin.js';
+import { streamSSEWithLog } from '../routes/streamReplies.js';
 
 /**
  * Some proxies close a connection that is quiet for too long.
@@ -44,7 +45,7 @@ function sendChanges(stream: SSEStreamingApi, changes: MachineChanges): void {
  */
 export function machineEventRoutes(feed: MachineChangeFeed, loginOf: (c: Context<LoggedInEnv>) => string) {
   const openStreams = new StreamsPerLogin(MAX_STREAMS_PER_LOGIN);
-  return new Hono<LoggedInEnv>().get('/events', c => streamSSE(c, async stream => {
+  return new Hono<LoggedInEnv>().get('/events', c => streamSSEWithLog(c, 'The live machine events', async stream => {
     let stopped = false;
     let stop!: () => void;
     const whenStopped = new Promise<void>(resolve => {
