@@ -20,6 +20,7 @@ const HEALTH = {
     { time: '2026-11-21T09:00:00.000Z', tone: 'good' as const, text: 'Machine connected' },
   ],
   lastPollTime: null,
+  serverTime: '2026-11-21T10:05:00.000Z',
 };
 
 function renderSection(role: Role = 'admin') {

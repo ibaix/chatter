@@ -33,7 +33,9 @@ export function machineHealthRoutes(
       const id = c.req.param('id');
       const machine = poller.getMachine(id);
       if (!machine) return notFound(c);
-      const health: MachineHealth = { ...connections.health(id), lastPollTime: machine.lastPollTime };
+      const health: MachineHealth = {
+        ...connections.health(id), lastPollTime: machine.lastPollTime, serverTime: new Date().toISOString(),
+      };
       return c.json(health);
     })
 

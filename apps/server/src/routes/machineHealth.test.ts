@@ -55,7 +55,14 @@ describe('machine health routes', () => {
     it('tells each logged-in user the health of a machine', async () => {
       const res = await request(`/api/machine/${machineId}/health`, 'GET', viewerCookie);
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ offlineSince: null, lastError: null, events: [], lastPollTime: null });
+      expect(await res.json()).toEqual({ offlineSince: null, lastError: null, events: [], lastPollTime: null, serverTime: expect.any(String) });
+    });
+
+    it('tells the server time, so the page can count "N min ago" on the server clock', async () => {
+      const before = Date.now();
+      const health = await (await request(`/api/machine/${machineId}/health`)).json() as MachineHealth;
+      expect(Date.parse(health.serverTime)).toBeGreaterThanOrEqual(before);
+      expect(Date.parse(health.serverTime)).toBeLessThanOrEqual(Date.now());
     });
 
     it('tells the last error and the changes of a polled machine', async () => {

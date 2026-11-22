@@ -52,6 +52,8 @@ export interface MachineHealth {
   events: ConnectionEvent[];
   /** The time of the last good poll (ISO text), or null */
   lastPollTime: string | null;
+  /** The time of the server when it sent this reply (ISO text). The clock of the browser can be different. */
+  serverTime: string;
 }
 
 // ============================================
