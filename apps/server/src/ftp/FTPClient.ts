@@ -4,11 +4,19 @@ import * as ftp from 'basic-ftp';
 // Not in the index of basic-ftp. It opens the data socket exactly as basic-ftp's own PASV and EPSV do.
 import { connectForPassiveTransfer } from 'basic-ftp/dist/transfer.js';
 import { ftpErrorMessage } from './ftpErrorMessage.js';
+import { createLogger } from '../logging/logger.js';
 import type { FTPConfig, FTPFileInfo, FTPTreeNode, FTPUploadFile, FTPUploadResult } from '../types/index.js';
 
 const DEFAULT_FTP_PORT = 21;
 const DEFAULT_FTP_USER = 'anonymous';
 const DEFAULT_TREE_DEPTH = 2;
+/**
+ * The most folder levels that one tree request walks. Each level costs a LIST on the machine.
+ * The web app asks for 3 levels, and CNC program folders are not deeper than this.
+ */
+export const MAX_TREE_DEPTH = 5;
+/** The most entries (files and folders) in one tree, so a very large or rogue FTP server cannot fill the memory */
+export const MAX_TREE_ENTRIES = 5000;
 const ROOT_PATH = '/';
 
 /** The manual download gives up when no byte arrives in this time */
@@ -37,6 +45,13 @@ export interface RawListEntry {
   name: string;
   isDir: boolean;
   size: number;
+}
+
+/** The entries that one tree walk can still add */
+interface TreeWalk {
+  entriesLeft: number;
+  /** True when the walk left out an entry or a folder */
+  isCut: boolean;
 }
 
 type BatchFileOutcome = FTPUploadResult['success'][number] | FTPUploadResult['failed'][number];
@@ -141,6 +156,8 @@ function toRelativeRemotePath(remotePath: string): string {
 function joinRemotePath(dirPath: string, name: string): string {
   return dirPath === ROOT_PATH ? `/${name}` : `${dirPath}/${name}`;
 }
+
+const log = createLogger('ftp');
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error';
@@ -273,8 +290,13 @@ export class FTPClient {
     if (depth <= 0) {
       return [];
     }
+    const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, isCut: false };
     try {
-      return await this.withConnection({ verbose: false }, client => this.buildTree(client, path, depth));
+      const tree = await this.withConnection({ verbose: false }, client => this.buildTree(client, { path, depth: Math.min(depth, MAX_TREE_DEPTH), walk }));
+      if (walk.isCut) {
+        log.warn(`The file tree on ${this.host} is too large. Chatter shows only the first ${MAX_TREE_ENTRIES} entries.`, { path });
+      }
+      return tree;
     } catch (err) {
       throw new Error(ftpErrorMessage(err, this.host, this.port), { cause: err });
     }
@@ -486,9 +508,17 @@ export class FTPClient {
   /**
    * Build the tree below `path`, `depth` levels deep. A folder that cannot be
    * opened gives an empty list, so one bad folder does not hide the rest of the tree.
+   * The walk stops when it has no entries left, and then it opens no more folders.
    */
-  private async buildTree(client: ftp.Client, path: string, depth: number): Promise<FTPTreeNode[]> {
+  private async buildTree(
+    client: ftp.Client,
+    { path, depth, walk }: { path: string; depth: number; walk: TreeWalk }
+  ): Promise<FTPTreeNode[]> {
     if (depth <= 0) {
+      return [];
+    }
+    if (walk.entriesLeft <= 0) {
+      walk.isCut = true;
       return [];
     }
     try {
@@ -496,9 +526,13 @@ export class FTPClient {
       await client.pwd();
       const entries = await this.listCurrentDirectory(client);
 
+      // Count the whole folder before a walk into its subfolders, so the upper levels stay complete
+      const kept = entries.slice(0, walk.entriesLeft);
+      walk.entriesLeft -= kept.length;
+      if (kept.length < entries.length) walk.isCut = true;
       const nodes: FTPTreeNode[] = [];
-      for (const entry of entries) {
-        nodes.push(await this.treeNodeFor(client, { entry, parentPath: path, depth }));
+      for (const entry of kept) {
+        nodes.push(await this.treeNodeFor(client, { entry, parentPath: path, depth, walk }));
       }
       return nodes;
     } catch {
@@ -508,7 +542,7 @@ export class FTPClient {
 
   private async treeNodeFor(
     client: ftp.Client,
-    { entry, parentPath, depth }: { entry: RawListEntry; parentPath: string; depth: number }
+    { entry, parentPath, depth, walk }: { entry: RawListEntry; parentPath: string; depth: number; walk: TreeWalk }
   ): Promise<FTPTreeNode> {
     const fullPath = joinRemotePath(parentPath, entry.name);
     const node: FTPTreeNode = {
@@ -518,7 +552,7 @@ export class FTPClient {
       path: fullPath
     };
     if (entry.isDir && depth > 1) {
-      node.children = await this.buildTree(client, fullPath, depth - 1);
+      node.children = await this.buildTree(client, { path: fullPath, depth: depth - 1, walk });
     }
     return node;
   }

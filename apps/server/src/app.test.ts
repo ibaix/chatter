@@ -814,6 +814,28 @@ describe('API Routes', () => {
       expect(res.status).toBe(404);
       expect(res.body.error).toContain('not found');
     });
+
+    // Each folder level is a LIST on the machine, so a deep tree can keep the machine and Chatter busy for a long time
+    it.each(['0', '6', '50', '99999999999', 'abc', '-1', '1.5'])('refuses depth=%s and sends nothing to the machine', async depth => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const getFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'getFileTree');
+
+      const res = await call('GET', `/api/machine/${machine.id}/files?depth=${depth}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('depth must be a whole number from 1 to 5');
+      expect(getFileTree).not.toHaveBeenCalled();
+    });
+
+    it.each([['1', 1], ['3', 3], ['5', 5]])('lists the tree for depth=%s', async (depth, expectedDepth) => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const getFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'getFileTree').mockResolvedValue([]);
+
+      const res = await call('GET', `/api/machine/${machine.id}/files?path=/PRG&depth=${depth}`);
+
+      expect(res.status).toBe(200);
+      expect(getFileTree).toHaveBeenCalledWith('/PRG', expectedDepth);
+    });
   });
 
   describe('GET /api/machine/:id/files/download', () => {
