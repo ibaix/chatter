@@ -63,7 +63,8 @@ function endlessExport(victoria: FakeVictoria) {
   const startedPromise = new Promise<void>(resolve => {
     started = resolve;
   });
-  victoria.exportSeries = async (machineId, _pattern, _range, signal) => {
+  victoria.exportSeries = async (machineId, _pattern, _range, given) => {
+    const signal = given ?? new AbortController().signal;
     signals.push(signal);
     return (async function* () {
       for (let time = 0; !signal.aborted; time += 1000) {

@@ -46,7 +46,7 @@ export class FakeVictoria implements HistoryStore, HistorySource {
    */
   unmergedExport = false;
 
-  async exportSeries(machineId: string, namePattern: string, { from, to }: ExportRange): Promise<AsyncIterable<Uint8Array>> {
+  async exportSeries(machineId: string, namePattern: string, { from, to }: ExportRange, _signal?: AbortSignal): Promise<AsyncIterable<Uint8Array>> {
     const name = new RegExp(`^(?:${namePattern})$`);
     const lines: string[] = [];
     for (const { labels, samples } of this.series.values()) {

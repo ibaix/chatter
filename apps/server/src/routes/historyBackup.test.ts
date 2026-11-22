@@ -424,7 +424,7 @@ describe.each(BACKENDS)('history backup routes (%s VictoriaMetrics)', (_name, ma
     });
     await exportStarted;
     stop.abort(new Error('The proxy stopped waiting'));
-    await first.catch(() => null);
+    await Promise.resolve(first).catch(() => null);
     backend.store.exportSeries = exportSeries;
     const other = poller.getMachines().find(machine => machine.id !== machineId)!;
     expect((await request('POST', `/machine/${other.id}/history-backup`, 'admin', {})).status).toBe(200);
