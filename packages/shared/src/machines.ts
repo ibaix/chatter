@@ -32,6 +32,30 @@ export interface BaseMachine {
   pollTimings?: PollTimings;
 }
 
+/** One change of the connection of a machine, as the server log tells it */
+export interface ConnectionEvent {
+  /** ISO text */
+  time: string;
+  /** "Machine went offline: connect ECONNREFUSED 10.0.0.5:10000" */
+  text: string;
+  /** good: connected or back online. bad: offline or a problem. */
+  tone: 'good' | 'bad';
+}
+
+/** GET /api/machine/:id/health: why a machine is offline, and since when */
+export interface MachineHealth {
+  /** When the machine went offline (ISO text), or null while it is online or before its first result */
+  offlineSince: string | null;
+  /** The last error of the machine and when it first came (ISO text), or null */
+  lastError: { text: string; time: string } | null;
+  /** The last 10 connection changes, newest first */
+  events: ConnectionEvent[];
+  /** The time of the last good poll (ISO text), or null */
+  lastPollTime: string | null;
+  /** The time of the server when it sent this reply (ISO text). The clock of the browser can be different. */
+  serverTime: string;
+}
+
 // ============================================
 // Brother Machine Types
 // ============================================

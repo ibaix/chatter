@@ -70,6 +70,8 @@ test_the_update_files_are_copied() {
   check "the compose override is next to docker-compose.yml" test -f "$ROOT/opt/chatter/docker-compose.override.yml"
   check "the path unit is on the card" test -f "$ROOT/etc/systemd/system/chatter-update.path"
   check "the helper service is on the card" test -f "$ROOT/etc/systemd/system/chatter-update.service"
+  check "the facts timer and its service are on the card" test -f "$ROOT/etc/systemd/system/chatter-facts.timer" \
+    -a -f "$ROOT/etc/systemd/system/chatter-facts.service"
 }
 
 test_the_public_keys_are_copied() {

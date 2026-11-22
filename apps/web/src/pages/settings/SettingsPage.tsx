@@ -6,6 +6,7 @@ import { useCurrentUser } from '../../components/CurrentUser';
 import { tabPanelProps } from '../../components/ui/tabPanel';
 import { UnderlineTabs, type TabItem } from '../../components/ui/UnderlineTabs';
 import { AccountTab } from './AccountTab';
+import { DiagnosticsTab } from './DiagnosticsTab';
 import { FocasLibraryTab } from './FocasLibrary';
 import { LoginsTab } from './LoginsTab';
 import type { MachineName } from './notificationLabels';
@@ -14,7 +15,7 @@ import { ProxyTab } from './ProxyTab';
 import { UpdatesTab } from './UpdatesTab';
 import { UsersTab } from './UsersTab';
 
-type SettingsTab = 'account' | 'users' | 'proxy' | 'logins' | 'fanuc' | 'notifications' | 'updates';
+type SettingsTab = 'account' | 'users' | 'proxy' | 'logins' | 'fanuc' | 'notifications' | 'updates' | 'diagnostics';
 
 interface TabContentProps {
   /** The machines of the shop, for the tabs that name them */
@@ -35,6 +36,7 @@ const TABS: SettingsTabItem[] = [
   { id: 'fanuc', label: 'FANUC library', content: FocasLibraryTab, needs: 'manage-machines' },
   { id: 'notifications', label: 'Notifications', content: NotificationsTab, needs: 'manage-chatter' },
   { id: 'updates', label: 'Updates', content: UpdatesTab, needs: 'manage-updates' },
+  { id: 'diagnostics', label: 'Diagnostics', content: DiagnosticsTab, needs: 'manage-chatter' },
 ];
 const ID_PREFIX = 'settings';
 /** The address keeps the open tab (for example /settings?tab=proxy), so a reload or a link opens the same tab */

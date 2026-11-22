@@ -1,8 +1,9 @@
-import type { FoundMachine } from '@local-chatter/shared';
+import type { FoundChatter, FoundMachine } from '@local-chatter/shared';
 import { parseStringPromise } from 'xml2js';
 import { brotherCommand } from '../machines/brother/brotherProtocol.js';
 import { buildCommandString } from '../machines/haas/HaasConnector.js';
 import { DEFAULT_DATA_PORTS, DEFAULT_HAAS_QUERY_PORT } from '../polling/machinePorts.js';
+import { textUpTo } from '../notifications/channels/http.js';
 import { askOverTcp } from './tcp.js';
 
 /**
@@ -21,6 +22,9 @@ export const MACHINE_PORTS = {
   siemens: DEFAULT_DATA_PORTS.siemens,
 } as const;
 
+/** The port of Chatter itself. Another Chatter server on the network takes the connection of each machine that it polls. */
+export const CHATTER_PORT = 3001;
+
 /** The time limit for a machine to answer the question on an open port */
 export const ANSWER_TIMEOUT_MS = 2000;
 
@@ -30,16 +34,17 @@ const BROTHER_PROGRAM_PATTERN = /%[^%]*%/;
 const HAAS_SERIAL_PATTERN = /SERIAL NUMBER,\s*(\S+)/;
 /** Every MTConnect probe reply has this root tag */
 const MTCONNECT_PROBE_TAG = 'MTConnectDevices';
+/** A probe reply of an agent with many machines is some hundred KB. A longer reply is not read, so the Pi keeps its memory. */
+const MAX_PROBE_REPLY = 1024 * 1024;
 
 /** Brother: the "MEM" request gives the program in memory, between % signs */
-export async function askBrother(host: string): Promise<FoundMachine | null> {
-  const port = MACHINE_PORTS.brother;
+export async function askBrother(host: string, port: number = MACHINE_PORTS.brother, timeoutMs = ANSWER_TIMEOUT_MS): Promise<FoundMachine | null> {
   const reply = await askOverTcp({
     host,
     port,
     request: brotherCommand('MEM'),
     isComplete: text => BROTHER_PROGRAM_PATTERN.test(text),
-    timeoutMs: ANSWER_TIMEOUT_MS,
+    timeoutMs,
   });
   if (!reply) return null;
   return {
@@ -55,19 +60,19 @@ export function haasSerialOf(reply: string): string | null {
 }
 
 /** Haas: Q100 on the query port gives the serial number */
-export async function askHaas(host: string): Promise<FoundMachine | null> {
+export async function askHaas(host: string, port: number = MACHINE_PORTS.haasQuery, timeoutMs = ANSWER_TIMEOUT_MS): Promise<FoundMachine | null> {
   const request = buildCommandString({ queryStart: 'Q100', label: 'Serial number' });
   const reply = await askOverTcp({
     host,
-    port: MACHINE_PORTS.haasQuery,
+    port,
     request,
     isComplete: text => text.includes('\n'),
-    timeoutMs: ANSWER_TIMEOUT_MS,
+    timeoutMs,
   });
   const serial = reply && haasSerialOf(reply);
   if (!serial) return null;
   return {
-    machine: { type: 'haas', name: `Haas ${serial}`, host, dataPort: MACHINE_PORTS.haasData, queryPort: MACHINE_PORTS.haasQuery },
+    machine: { type: 'haas', name: `Haas ${serial}`, host, dataPort: MACHINE_PORTS.haasData, queryPort: port },
     isConfirmed: true,
     detail: `Serial number ${serial}`,
   };
@@ -150,16 +155,44 @@ export function foundMTConnectMachine(host: string, port: number, devices: Probe
 }
 
 /** MTConnect: the agent's /probe page lists its machines */
-export async function askMTConnect(host: string, port: number): Promise<FoundMachine | null> {
+export async function askMTConnect(host: string, port: number, timeoutMs = ANSWER_TIMEOUT_MS): Promise<FoundMachine | null> {
   try {
     // No redirects: the scan must never follow a device to an address outside the shop network
-    const response = await fetch(`http://${host}:${port}/probe`, { signal: AbortSignal.timeout(ANSWER_TIMEOUT_MS), redirect: 'error' });
+    const response = await fetch(`http://${host}:${port}/probe`, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
     if (!response.ok) return null;
-    const xml = await response.text();
-    if (!xml.includes(MTCONNECT_PROBE_TAG)) return null;
+    const xml = await textUpTo(response, MAX_PROBE_REPLY);
+    if (xml === undefined || !xml.includes(MTCONNECT_PROBE_TAG)) return null;
     return foundMTConnectMachine(host, port, await devicesOfProbe(xml));
   } catch {
     // No answer, a time-out, or a reply that is not XML: there is no MTConnect agent on this port
+    return null;
+  }
+}
+
+/** A version as /api/health gives it: "1.2.0", "edge-1a2b3c4" or "development" */
+const VERSION_TEXT = /^[A-Za-z0-9.+-]{1,64}$/;
+/** A health reply is a short JSON object (bytes). A longer reply is not Chatter. */
+const MAX_HEALTH_REPLY = 1024;
+
+/**
+ * Chatter: /api/health on port 3001 gives the version, and the random instance name of the server.
+ * The instance name tells this Chatter from another. The version is shown only when it has the shape of a version.
+ */
+export async function askChatter(
+  host: string, port = CHATTER_PORT, timeoutMs = ANSWER_TIMEOUT_MS,
+): Promise<(FoundChatter & { instance?: string }) | null> {
+  try {
+    // No redirects: the scan must never follow a device to an address outside the shop network
+    const response = await fetch(`http://${host}:${port}/api/health`, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error' });
+    if (!response.ok) return null;
+    const text = await textUpTo(response, MAX_HEALTH_REPLY);
+    if (text === undefined) return null;
+    const body = JSON.parse(text) as { status?: unknown; version?: unknown; instance?: unknown };
+    if (body.status !== 'ok') return null;
+    const version = typeof body.version === 'string' && VERSION_TEXT.test(body.version) ? body.version : 'unknown';
+    const instance = typeof body.instance === 'string' && /^[0-9a-f]{16}$/.test(body.instance) ? body.instance : undefined;
+    return { host, version, ...(instance && { instance }) };
+  } catch {
     return null;
   }
 }

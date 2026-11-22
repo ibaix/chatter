@@ -16,3 +16,4 @@ export * from './ignorePatterns.js';
 export * from './pollTimings.js';
 export * from './toolSync.js';
 export * from './alerts.js';
+export * from './diagnostics.js';

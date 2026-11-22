@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
-import type { AddMachineRequest } from '@local-chatter/shared';
+import type { AddMachineRequest, FoundChatter } from '@local-chatter/shared';
+import { INSTANCE_ID } from '../diagnostics/instance.js';
 import { Hono } from 'hono';
 import { guessRanges, hostWithoutPort } from '../discovery/addressRange.js';
 import { NetworkScanner, ScanAlreadyRunningError } from '../discovery/NetworkScanner.js';
@@ -40,8 +41,14 @@ export function discoveryRoutes(poller: HardwarePoller, scanner = new NetworkSca
 
     .post('/discovery/scan', canManageMachines, checkedJson(scanNetworkSchema), async c => {
       const { range } = c.req.valid('json');
+      // This server is not "another Chatter": its own instance name, and the address of this page
+      const pageHost = hostWithoutPort(c.req.header('host'));
+      const isThisChatter = (chatter: FoundChatter & { instance?: string }) =>
+        chatter.instance === INSTANCE_ID || chatter.host === pageHost || serverAddresses().includes(chatter.host);
       try {
-        return c.json({ range, found: await scanner.scan(range, isAdded) });
+        const { machines, chatters } = await scanner.scan(range, isAdded, isThisChatter);
+        const otherChatters: FoundChatter[] = chatters.map(({ host, version }) => ({ host, version }));
+        return c.json({ range, found: machines, otherChatters });
       } catch (error) {
         if (error instanceof ScanAlreadyRunningError) return c.json({ error: error.message }, 409);
         throw error;

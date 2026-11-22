@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchRangeGuesses, scanRange } from '../../api/discovery';
-import type { FoundMachine } from '../../types';
+import type { FoundChatter, FoundMachine } from '../../types';
 import { errorMessageOf } from '../../utils/errorMessage';
 import { mergeFound } from './foundMachines';
 
@@ -17,6 +17,7 @@ export function useNetworkScan(autoStart: boolean) {
   const [scanningRange, setScanningRange] = useState<string | null>(null);
   const [scannedRanges, setScannedRanges] = useState<string[]>([]);
   const [found, setFound] = useState<FoundMachine[]>([]);
+  const [otherChatters, setOtherChatters] = useState<FoundChatter[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Changes when the panel closes, so a scan from before stops before its next range
   const runId = useRef(0);
@@ -28,8 +29,9 @@ export function useNetworkScan(autoStart: boolean) {
       for (const nextRange of ranges) {
         if (runId.current !== startedRunId) return;
         setScanningRange(nextRange);
-        const foundInRange = await scanRange(nextRange);
-        setFound(known => mergeFound(known, foundInRange));
+        const result = await scanRange(nextRange);
+        setFound(known => mergeFound(known, result.found));
+        setOtherChatters(known => [...known.filter(chatter => !result.otherChatters.some(item => item.host === chatter.host)), ...result.otherChatters]);
         setScannedRanges(scanned => (scanned.includes(nextRange) ? scanned : [...scanned, nextRange]));
       }
     } catch (err) {
@@ -54,7 +56,7 @@ export function useNetworkScan(autoStart: boolean) {
     // Guess only once, when the panel opens
   }, []);
 
-  return { guesses, range, setRange, scanningRange, scannedRanges, found, error, scan };
+  return { guesses, range, setRange, scanningRange, scannedRanges, found, otherChatters, error, scan };
 }
 
 export type NetworkScan = ReturnType<typeof useNetworkScan>;

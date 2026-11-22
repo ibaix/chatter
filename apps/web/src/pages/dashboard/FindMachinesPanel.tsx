@@ -80,6 +80,7 @@ function ScanResults({ scan, machines, onAdd }: ScanResultsProps) {
     <div className="flex flex-col gap-3 px-5 py-4">
       <p role="status" className="m-0 text-zinc-200">{scanMessage(scan)}</p>
       {error && <Notice tone="error" title={error} />}
+      {scan.otherChatters.length > 0 && <OtherChattersNotice chatters={scan.otherChatters} />}
       {found.length > 0 && (
         <ul className="m-0 flex list-none flex-col divide-y divide-zinc-800 rounded-lg border border-zinc-800 p-0">
           {found.map(foundMachine => (
@@ -96,6 +97,20 @@ function ScanResults({ scan, machines, onAdd }: ScanResultsProps) {
         <p className="m-0 text-zinc-300">Check that the machines are on. Or close this box, and click Add machine to type an IP address.</p>
       )}
     </div>
+  );
+}
+
+/** Another Chatter that polls the same machine takes its connection: a Brother control serves only one */
+function OtherChattersNotice({ chatters }: { chatters: NetworkScan['otherChatters'] }) {
+  const title = chatters.length === 1 ? 'Another Chatter is on the network' : `${chatters.length} other Chatter servers are on the network`;
+  return (
+    <Notice tone="info" title={title}>
+      <ul className="m-0 mb-1 list-none p-0">
+        {chatters.map(chatter => <li key={chatter.host}>Chatter {chatter.version} at <span className="font-mono">{chatter.host}</span></li>)}
+      </ul>
+      If another Chatter polls the same machine, it takes the connection of the machine. A Brother control serves only one
+      connection. Then one of the two Chatter servers shows the machine as offline.
+    </Notice>
   );
 }
 

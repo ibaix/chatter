@@ -3,13 +3,14 @@ import { useLocation } from 'react-router';
 import { useCan } from '../../components/CurrentUser';
 import type { Machine, MachineUpdate } from '../../types';
 import { AlertRulesSection } from './AlertRulesSection';
+import { ConnectionSection } from './ConnectionSection';
 import { DeleteMachineSection } from './DeleteMachineSection';
 import { MachineSettingsSection } from './MachineSettingsSection';
 import type { AlertRules } from './useAlertRules';
 
 /** The id of each section. A link to `?tab=settings#<id>` opens the Settings tab at that section. */
 export const SETTINGS_SECTION_IDS = {
-  machine: 'settings-machine', alertRules: 'settings-alert-rules', deleteMachine: 'settings-delete-machine',
+  machine: 'settings-machine', connection: 'settings-connection', alertRules: 'settings-alert-rules', deleteMachine: 'settings-delete-machine',
 } as const;
 
 interface SettingsTabProps {
@@ -22,8 +23,8 @@ interface SettingsTabProps {
 }
 
 /**
- * Three panels, one under the other: the machine settings, the alert rules, and Delete machine.
- * A user who is not an admin sees only the alert rules, read only.
+ * Four panels, one under the other: the machine settings, the connection, the alert rules, and Delete machine.
+ * A user who is not an admin sees only the connection and the alert rules, read only.
  */
 export function SettingsTab({ machine, machines, rules, onUpdate, onRemove }: SettingsTabProps) {
   const canManageMachines = useCan('manage-machines');
@@ -34,13 +35,26 @@ export function SettingsTab({ machine, machines, rules, onUpdate, onRemove }: Se
       <AlertRulesSection machineId={machine.id} otherMachines={machines.filter(other => other.id !== machine.id)} rules={rules} />
     </SettingsSection>
   );
-  if (!canManageMachines) return alertRules;
+  const connection = (
+    <SettingsSection id={SETTINGS_SECTION_IDS.connection} title="Connection">
+      <ConnectionSection machine={machine} />
+    </SettingsSection>
+  );
+  if (!canManageMachines) {
+    return (
+      <div className="flex flex-col gap-5">
+        {connection}
+        {alertRules}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-5">
       <SettingsSection id={SETTINGS_SECTION_IDS.machine} title="Machine">
         <MachineSettingsSection machine={machine} onUpdate={onUpdate} />
       </SettingsSection>
+      {connection}
       {alertRules}
       <SettingsSection id={SETTINGS_SECTION_IDS.deleteMachine} title="Delete machine">
         <DeleteMachineSection machine={machine} onRemove={onRemove} />

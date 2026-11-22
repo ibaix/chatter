@@ -7,7 +7,7 @@ import { FanucConnector } from '../machines/fanuc/FanucConnector.js';
 import { SiemensConnector } from '../machines/siemens/SiemensConnector.js';
 import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
 import { MachineRegistry, type ConnectorClass } from './MachineRegistry.js';
-import { PollScheduler } from './PollScheduler.js';
+import { PollScheduler, type ReconnectResult } from './PollScheduler.js';
 import {
   MachineRepository,
   isStoredMachineType,
@@ -431,6 +431,37 @@ export class HardwarePoller extends EventEmitter {
   /** The status of the machine, and whether Chatter still tries to reach it for the first time */
   private statusOf<Status extends BaseMachineStatus>(connector: { id: string; getStatus(): Status }): Status {
     return { ...connector.getStatus(), connecting: this.scheduler.isConnecting(connector.id) };
+  }
+
+  /** Disconnect the machine and poll it now. Null for an unknown machine. */
+  reconnectMachine(id: string): ReconnectResult | null {
+    const connector = this.registry.get(id);
+    if (!connector) return null;
+    const result = this.scheduler.reconnect(connector);
+    log.info('Machine reconnect', { machine: id, result });
+    return result;
+  }
+
+  /**
+   * Stop the polls of one machine for a short time and disconnect it, for example during a connection test:
+   * a Brother control serves only one connection. False for an unknown machine.
+   */
+  pauseMachine(id: string): boolean {
+    const connector = this.registry.get(id);
+    if (!connector) return false;
+    this.scheduler.stop(id);
+    try {
+      connector.disconnect();
+    } catch {
+      // A connector in a bad state counts as disconnected
+    }
+    return true;
+  }
+
+  /** Poll the machine again after pauseMachine(), when the poller runs and the machine was not removed */
+  resumeMachine(id: string): void {
+    const connector = this.registry.get(id);
+    if (connector && this.running) this.scheduler.start(connector);
   }
 
   /** True while the machine has had no good poll yet, for at most the connecting time */

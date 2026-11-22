@@ -51,6 +51,7 @@ export default defineConfig({
           { text: 'Notifications', link: '/guide/notifications' },
           { text: 'Update Chatter', link: '/guide/update' },
           { text: 'Server logs', link: '/guide/logs' },
+          { text: 'Diagnostics', link: '/guide/diagnostics' },
           { text: 'Use HTTPS', link: '/guide/https' },
           { text: 'Security', link: '/security' },
         ],

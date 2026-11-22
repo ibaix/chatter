@@ -51,7 +51,7 @@ test_recover_writes_helper_json() {
     FAKE_ARCH="$dpkg_arch" run_helper recover
     case "$dpkg_arch" in armhf) arch=armv7 ;; *) arch="$dpkg_arch" ;; esac
     check "dpkg says $dpkg_arch: helper.json says $arch" \
-      test "$(cat "$root/opt/chatter/update/helper.json")" = "{\"arch\":\"$arch\"}"
+      test "$(cat "$root/opt/chatter/update/helper.json")" = "{\"arch\":\"$arch\",\"capabilities\":[\"reboot\",\"network\",\"log\"]}"
   done
   check "Chatter can read helper.json" test "$(stat --format %a "$root/opt/chatter/update/helper.json")" = 644
 

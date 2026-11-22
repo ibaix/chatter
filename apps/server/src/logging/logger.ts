@@ -8,6 +8,8 @@
  * Docker keeps what the server writes: `docker logs chatterbox`. docker-compose.yml limits its size.
  */
 
+import { redactContext, redactText } from './redact.js';
+
 export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 export type LogLevel = typeof LOG_LEVELS[number];
 export type LogFormat = 'text' | 'json';
@@ -39,6 +41,31 @@ const consoleSink: LogSink = (level, text) => {
   if (level === 'warn' || level === 'error') process.stderr.write(`${text}\n`);
   else process.stdout.write(`${text}\n`);
 };
+
+/** One written line, for a listener such as the log buffer of Settings > Diagnostics. The secrets are already hidden. */
+export interface LogEntry {
+  time: Date;
+  level: LogLevel;
+  component: string;
+  /** The machine ID of the line, when it has one */
+  machine?: string;
+  /** The line as the sink got it */
+  text: string;
+}
+
+export type LogListener = (entry: LogEntry) => void;
+const listeners = new Set<LogListener>();
+
+/** Give each written line also to `listener`. Returns a function that stops it. */
+export function addLogListener(listener: LogListener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/** The level that is in use now */
+export function currentLogLevel(): LogLevel {
+  return settings.level;
+}
 
 interface LogSettings {
   level: LogLevel;
@@ -75,8 +102,18 @@ export function configureLogging(changes: Partial<LogSettings>): LogSettings {
 export function createLogger(component: string, context: LogContext = {}): Logger {
   const write = (level: LogLevel, message: string, extra?: LogContext) => {
     if (LOG_LEVELS.indexOf(level) < LOG_LEVELS.indexOf(settings.level)) return;
-    const line: LogLine = { time: settings.now(), level, component, message, context: { ...context, ...extra } };
-    settings.sink(level, settings.format === 'json' ? jsonLine(line) : textLine(line));
+    // The secrets are hidden first, so no copy of the line (console, buffer, file) holds them
+    const line: LogLine = { time: settings.now(), level, component, message, context: redactContext({ ...context, ...extra }) };
+    const text = redactText(settings.format === 'json' ? jsonLine(line) : textLine(line));
+    settings.sink(level, text);
+    const machine = typeof line.context.machine === 'string' ? line.context.machine : undefined;
+    for (const listener of listeners) {
+      try {
+        listener({ time: line.time, level, component, machine, text });
+      } catch {
+        // A listener that fails must not stop the log
+      }
+    }
   };
   return {
     debug: (message, extra) => write('debug', message, extra),

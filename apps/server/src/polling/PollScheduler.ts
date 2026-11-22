@@ -32,6 +32,16 @@ const CONNECTING_TIME_MS = 30000;
  * Each connector ends its requests on a timeout or a closed socket, so a working poll is never this slow.
  */
 const STUCK_POLL_MS = 60000;
+/**
+ * After a start of the Pi, the network can need some time. Until the server has run this long,
+ * a machine that is "unreachable" (no route to it yet) stays connecting, so the log does not call it offline.
+ */
+export const NETWORK_WAIT_MS = 2 * 60_000;
+/** The errors of a network that is not ready yet: no route, no network, or no DNS answer yet */
+const NETWORK_NOT_READY = /EHOSTUNREACH|ENETUNREACH|ENETDOWN|EAI_AGAIN/;
+
+/** What a reconnect did: a new poll started, or a poll that has not ended stops a new one, or the machine is not polled */
+export type ReconnectResult = 'started' | 'poll-in-progress' | 'not-polled';
 
 /**
  * A machine that fails often is polled less often, so it does not slow the server.
@@ -42,6 +52,16 @@ const BACKOFF_STEPS = [
   { minFailures: 6, intervalMs: 30000 },   // 6-9 failures: 30 seconds
   { minFailures: 10, intervalMs: 60000 },  // 10+ failures: 60 seconds
 ];
+
+/** The last poll failed because the network of this computer is not ready yet, for example just after a start of the Pi */
+function isNetworkNotReady(connector: BaseMachineConnector): boolean {
+  try {
+    return connector.getStatus().errors.some(error => NETWORK_NOT_READY.test(error));
+  } catch {
+    // A connector in a bad state counts as a machine that cannot be reached
+    return false;
+  }
+}
 
 /**
  * Polls each machine on its own timer, so a slow machine does not hold up the others.
@@ -60,14 +80,31 @@ export class PollScheduler {
 
   private readonly pollTimeoutMs: number;
   private readonly stuckPollMs: number;
+  /** How long the server has run */
+  private readonly uptimeMs: () => number;
 
-  /** `limits` is for tests, which need short times */
+  /** `limits` is for tests, which need short times and their own uptime */
   constructor(
     private readonly hooks: PollSchedulerHooks,
-    limits: { pollTimeoutMs?: number; stuckPollMs?: number } = {},
+    limits: { pollTimeoutMs?: number; stuckPollMs?: number; uptimeMs?: () => number } = {},
   ) {
     this.pollTimeoutMs = limits.pollTimeoutMs ?? POLL_TIMEOUT_MS;
     this.stuckPollMs = limits.stuckPollMs ?? STUCK_POLL_MS;
+    this.uptimeMs = limits.uptimeMs ?? (() => process.uptime() * 1000);
+  }
+
+  /**
+   * Disconnect the machine and poll it now, as after a start. A poll that has not ended yet
+   * (for example a machine that never answers) stops a second poll: two polls at once would talk over each other.
+   */
+  reconnect(connector: BaseMachineConnector): ReconnectResult {
+    if (!this.activeIds.has(connector.id)) return 'not-polled';
+    disconnectQuietly(connector);
+    if (this.pollsInProgress.has(connector.id)) return 'poll-in-progress';
+    clearTimeout(this.timers.get(connector.id));
+    this.failureCounts.set(connector.id, 0);
+    void this.pollNow(connector);
+    return 'started';
   }
 
   get intervalMs(): number {
@@ -181,11 +218,16 @@ export class PollScheduler {
     log.warn('A poll did not end, so the next poll starts without it', { machine: connector.id, waitedMs: this.stuckPollMs });
   }
 
-  private startConnecting(connector: BaseMachineConnector): void {
+  private startConnecting(connector: BaseMachineConnector, timeMs = CONNECTING_TIME_MS): void {
     const timer = setTimeout(() => {
+      const networkWaitMs = NETWORK_WAIT_MS - this.uptimeMs();
+      if (networkWaitMs > 0 && isNetworkNotReady(connector)) {
+        this.startConnecting(connector, networkWaitMs);
+        return;
+      }
       this.connectingTimers.delete(connector.id);
       this.hooks.connectingEnded(connector);
-    }, CONNECTING_TIME_MS);
+    }, timeMs);
     this.connectingTimers.set(connector.id, timer);
   }
 

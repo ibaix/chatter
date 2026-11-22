@@ -7,6 +7,15 @@
 /** The only texts that the helper accepts in request.json. It compares the whole text. */
 export const UPDATE_REQUESTS = ['check', 'install'] as const;
 export type UpdateRequest = typeof UPDATE_REQUESTS[number];
+/** Each request that Chatter can write. "reboot" restarts the Pi (only a helper with the "reboot" capability knows it). */
+export type HelperRequest = UpdateRequest | 'reboot';
+
+/**
+ * What a newer helper can do more, in helper.json. A helper from an older card image gives none.
+ * reboot: it restarts the Pi on a "reboot" request. network: it writes network.json. log: it writes helper.log.
+ */
+export const HELPER_CAPABILITIES = ['reboot', 'network', 'log'] as const;
+export type HelperCapability = typeof HELPER_CAPABILITIES[number];
 
 /**
  * checking, installing: the helper works now.
@@ -88,6 +97,32 @@ export interface UpdateStatus {
 export interface HelperInfo {
   /** The processor type of the Pi, so Chatter downloads the right update file */
   arch: UpdateArch;
+  /** What this helper can do more. Only a helper from a newer card image writes it. */
+  capabilities?: HelperCapability[];
+}
+
+/** One address of the Pi in network.json */
+export interface PiAddress {
+  /** "eth0" or "wlan0" */
+  interface: string;
+  /** "192.168.1.20/24" */
+  address: string;
+}
+
+/**
+ * The contents of /opt/chatter/update/network.json. The helper writes it at each start of the Pi and each 10 minutes.
+ * Only a helper from a newer card image writes it.
+ */
+export interface NetworkInfo {
+  hostname?: string;
+  /** "chatter.local" */
+  localName?: string;
+  addresses: PiAddress[];
+  gateway?: string;
+  /** SSH runs on the Pi */
+  ssh: boolean;
+  /** UTC time */
+  updatedAt: string;
 }
 
 /**
@@ -126,19 +161,52 @@ function isPartCount(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= STEP_PARTS_LIMIT;
 }
 
-/** Reads helper.json. Gives null if the text is not what the helper writes. */
+/** Reads helper.json. Gives null if the text is not what the helper writes. An unknown capability is dropped. */
 export function parseHelperInfo(text: string): HelperInfo | null {
   const data = parseObject(text);
   if (!data) return null;
-  const { arch } = data;
-  return isOneOf(arch, UPDATE_ARCHES) ? { arch } : null;
+  const { arch, capabilities } = data;
+  if (!isOneOf(arch, UPDATE_ARCHES)) return null;
+  if (!Array.isArray(capabilities)) return { arch };
+  return { arch, capabilities: capabilities.filter((item): item is HelperCapability => isOneOf(item, HELPER_CAPABILITIES)) };
+}
+
+const HOST_NAME = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+const INTERFACE_NAME = /^[A-Za-z0-9._-]{1,15}$/;
+const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+const ADDRESS_WITH_PREFIX = /^((25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}\/\d{1,2}|[0-9a-fA-F:]{2,39}\/\d{1,3})$/;
+const MAX_ADDRESSES = 8;
+
+/** Reads network.json. Gives null if the text is not what the helper writes. A value with the wrong shape is dropped. */
+export function parseNetworkInfo(text: string): NetworkInfo | null {
+  const data = parseObject(text);
+  if (!data || !isTime(data.updatedAt) || typeof data.ssh !== 'boolean' || !Array.isArray(data.addresses)) return null;
+  const { hostname, localName, gateway } = data;
+  const addresses = data.addresses
+    .filter((item): item is PiAddress => isPiAddress(item))
+    .slice(0, MAX_ADDRESSES)
+    .map(({ interface: name, address }) => ({ interface: name, address }));
+  return {
+    ...(typeof hostname === 'string' && HOST_NAME.test(hostname) && { hostname }),
+    ...(typeof localName === 'string' && HOST_NAME.test(localName.replace(/\.local$/, '')) && localName.endsWith('.local') && { localName }),
+    addresses,
+    ...(typeof gateway === 'string' && IPV4.test(gateway) && { gateway }),
+    ssh: data.ssh,
+    updatedAt: data.updatedAt,
+  };
+}
+
+function isPiAddress(item: unknown): item is PiAddress {
+  if (typeof item !== 'object' || item === null) return false;
+  const { interface: name, address } = item as Record<string, unknown>;
+  return typeof name === 'string' && INTERFACE_NAME.test(name) && typeof address === 'string' && ADDRESS_WITH_PREFIX.test(address);
 }
 
 /** The status to show: a busy helper that is silent for too long has died, so it counts as failed */
 export function shownUpdateStatus(status: UpdateStatus, now: number): UpdateStatus {
   const silentMs = now - Date.parse(status.heartbeat);
   if (isBusy(status.state) && silentMs > HELPER_SILENCE_LIMIT_MS) {
-    return { ...status, state: 'failed', reason: 'The update helper stopped. See the log: journalctl -u chatter-update' };
+    return { ...status, state: 'failed', reason: 'The update helper stopped. See the helper log in Settings > Diagnostics, or run: journalctl -u chatter-update' };
   }
   return status;
 }

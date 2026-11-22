@@ -108,7 +108,20 @@ FANUC owns its FOCAS2 files, and we must not share them in an image. The build s
 
 Later starts skip step 3.
 
-When an Admin checks or installs an update file in Chatter, Chatter writes `request.json` into `/opt/chatter/update/inbox/`. `chatter-update.path` sees it and starts `chatter-update.service`, which runs `update-chatter.sh` as root. To see what the helper did: `journalctl -u chatter-update`.
+When an Admin checks or installs an update file in Chatter, Chatter writes `request.json` into `/opt/chatter/update/inbox/`. `chatter-update.path` sees it and starts `chatter-update.service`, which runs `update-chatter.sh` as root. To see what the helper did: `journalctl -u chatter-update`, or the **Update helper log** in Chatter (a new card image writes `helper.log`).
+
+## The diagnostics of the helper
+
+A card image with this helper adds these. An update of Chatter does not bring them to an older card, because an update file never changes the helper.
+
+| What | How |
+| --- | --- |
+| Request `reboot` | **Restart the Pi** in Settings > Diagnostics writes the text `reboot` into `request.json`. The helper compares the whole text, as for `check` and `install`. It runs `systemctl --no-block reboot` only while it holds the lock (so no check or install runs), when no install is incomplete, and at most once in 15 minutes (`/var/lib/chatter-update/last-reboot`). |
+| `update/helper.json` | Also lists `"capabilities":["reboot","network","log"]`. Chatter shows **Restart the Pi** only when `reboot` is there. An older helper writes only `arch`. |
+| `update/network.json` | The host name (from `/etc/hostname`), the `.local` name, the global addresses (`ip -o addr`, at most 8), the gateway, and if SSH runs. `recover` writes it at each start and after each run. `chatter-facts.timer` runs `update-chatter.sh facts` each 10 minutes, because a DHCP address can change. Each value must have its pattern, or the helper leaves it out. Chatter reads it strictly too (`parseNetworkInfo`). |
+| `update/helper.log` | Each line that the helper writes to the journal, with the UTC time and the command, for example `2026-11-21T10:00:00Z [request] Step: copying.` At 256 KB it becomes `helper.log.1`, so the log takes at most 512 KB. |
+
+The tests are in `test/update-chatter-diagnostics.test.sh`.
 
 ## The steps of the update helper
 
@@ -160,6 +173,7 @@ All paths are in `tools/pi-image/`.
 - `in-pi/`: the files that go onto the Pi, and the Docker install script that runs on the emulated Pi
 - `in-pi/update-chatter.sh`: the update helper. It checks and installs signed update files, and rolls back when an install fails
 - `in-pi/chatter-update.path`, `in-pi/chatter-update.service`: start the update helper when Chatter writes a request
+- `in-pi/chatter-facts.timer`, `in-pi/chatter-facts.service`: write `network.json` again each 10 minutes
 - `in-pi/docker-compose.override.yml`: gives the Chatter container the update folder (card only)
 - `in-pi/update-keys/`: the public keys for update files (`<keyId>.pub`). `chatter-2026.pub` is the release key.
 - `test/load-images.test.sh`: tests for `in-pi/load-images.sh`. Run it with `tools/pi-image/test/load-images.test.sh`.

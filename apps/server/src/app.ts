@@ -35,6 +35,14 @@ import { memoryCheckSettingStore, ReleaseWatcher, releasesRepo } from './updates
 import { updateRoutes } from './routes/updates.js';
 import { Notifications } from './notifications/Notifications.js';
 import { notificationRoutes } from './routes/notifications.js';
+import { ServerLog } from './logging/ServerLog.js';
+import { logRoutes } from './routes/logs.js';
+import { ConnectionLog } from './logging/ConnectionLog.js';
+import { machineHealthRoutes, type ConnectionHealthSource } from './routes/machineHealth.js';
+import { systemRoutes, type SystemOptions } from './routes/system.js';
+import { supportBundleRoutes } from './routes/supportBundle.js';
+import { dataFolder } from './storage/database.js';
+import { INSTANCE_ID } from './diagnostics/instance.js';
 
 /** Every API address starts with this */
 export const API_PREFIX = '/api';
@@ -64,6 +72,14 @@ export interface AppParts {
   updates?: UpdateService;
   /** The messages that go out when an alert starts or ends. Without it, the channels are kept in memory only. */
   notifications?: Notifications;
+  /** The last lines of the server log, for Settings > Diagnostics. Without it, the lines are not kept. */
+  serverLog?: ServerLog;
+  /** The connection changes of each machine, for its health panel. Without it, the panel shows none. */
+  connections?: ConnectionHealthSource;
+  /** How Chatter restarts itself, and if it runs in Docker. Without it, the real process and computer. */
+  system?: Omit<SystemOptions, 'version'>;
+  /** The health addresses of VictoriaMetrics and vmalert, for the support bundle */
+  historyHealthUrls?: Record<string, string>;
 }
 
 /**
@@ -85,11 +101,12 @@ export function createApp({
   version = chatterVersion(),
   updates = new UpdateService(UpdateFolder.fromEnvironment(), version, new ReleaseWatcher({ repo: releasesRepo(), store: memoryCheckSettingStore() })),
   notifications = Notifications.inMemory(),
+  ...diagnostics
 }: AppParts) {
   const loginGuard = { auth, limiter: new LoginLimiter(), loginLog, proxySettings };
   const api = new Hono()
     // The update helper reads the version here, with no login, to see that the new version runs
-    .get('/health', c => c.json({ status: 'ok', uptime: process.uptime(), version }))
+    .get('/health', c => c.json({ status: 'ok', uptime: process.uptime(), version, instance: INSTANCE_ID }))
     .route('/', authRoutes(loginGuard))
     .route('/', sessionRoutes(auth))
     // Every route below needs a login
@@ -109,7 +126,8 @@ export function createApp({
     .route('/', userSettingsRoutes(accounts))
     .route('/', focasLibraryRoutes(focasLibrary))
     .route('/', updateRoutes(updates))
-    .route('/', notificationRoutes(notifications));
+    .route('/', notificationRoutes(notifications))
+    .route('/', diagnosticRoutes({ poller, updates, version, notifications }, diagnostics));
 
   // No CORS headers: only pages from this server can call the API from a browser
   return new Hono()
@@ -117,6 +135,37 @@ export function createApp({
     .notFound(c => c.json({ error: 'Not found' }, 404))
     .route(API_PREFIX, api);
 }
+
+/** Settings > Diagnostics and the health of the machines: the log, the restarts, the connection test */
+function diagnosticRoutes(
+  { poller, updates, version, notifications }: { poller: HardwarePoller; updates: UpdateService; version: string; notifications: Notifications },
+  {
+    serverLog = new ServerLog(), connections = new ConnectionLog(), system = {}, historyHealthUrls = DEFAULT_HISTORY_HEALTH_URLS,
+  }: Pick<AppParts, 'serverLog' | 'connections' | 'system' | 'historyHealthUrls'>,
+) {
+  return new Hono()
+    .route('/', machineHealthRoutes(poller, connections))
+    .route('/', logRoutes(serverLog))
+    .route('/', systemRoutes(updates, { ...system, version }))
+    .route('/', supportBundleRoutes({
+      version, serverLog, connections, updates, historyHealthUrls,
+      // Read at the time of the bundle, from DATABASE_PATH
+      dataFolder: () => dataFolder(),
+      machines: () => poller.getMachines(),
+      channels: () => notifications.channels.list(),
+      messages: () => notifications.outbox.list({ since: Date.now() - BUNDLE_MESSAGE_DAYS * DAY_MS }),
+    }));
+}
+
+/** The support bundle has the newest notification messages of this many days */
+const BUNDLE_MESSAGE_DAYS = 7;
+const DAY_MS = 24 * 60 * 60_000;
+
+/** VictoriaMetrics and vmalert in development. docker-compose.yml gives the addresses on the compose network. */
+const DEFAULT_HISTORY_HEALTH_URLS = {
+  victoriaMetrics: `${process.env.VICTORIA_METRICS_URL || 'http://localhost:8428'}/health`,
+  vmalert: `${process.env.VMALERT_URL || 'http://localhost:8880'}/health`,
+};
 
 /** The routes and their types, for the typed web client (hono/client) */
 export type AppType = ReturnType<typeof createApp>;

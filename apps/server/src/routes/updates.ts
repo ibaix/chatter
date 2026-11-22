@@ -65,6 +65,13 @@ export function updateRoutes(updates: UpdateService) {
 
     .post('/updates/check', canManageUpdates, c => reportOrRefusal(c, () => updates.request('check', c.var.user.username)))
 
+    // The lines of the helper, so nobody needs SSH (journalctl) to see what it did. Only a newer helper writes them.
+    .get('/updates/helper-log', canManageUpdates, async c => {
+      const text = await updates.helperLog();
+      if (text === null) return c.json({ error: 'The update helper of this Pi writes no log that Chatter can read. A new card image is necessary for this.' }, 404);
+      return c.body(text, 200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+    })
+
     // The helper stops Chatter during the install. The page asks for the status again until Chatter is back.
     .post('/updates/install', canManageUpdates, c => reportOrRefusal(c, () => updates.request('install', c.var.user.username)));
 }

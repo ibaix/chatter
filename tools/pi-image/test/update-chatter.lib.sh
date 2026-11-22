@@ -8,6 +8,8 @@
 # - df: gives the free space (FAKE_FREE_BYTES, default 10 GB). It hangs one time when the file FAKE_DF_HANGS_WITHOUT is gone.
 # - cp: the real cp, but it fails when its arguments contain FAKE_CP_FAILS_ON
 # - mv: the real mv. FAKE_SLOW_BUSY_STATUS=1: a status.json that says "checking" takes 0.5 seconds to put in place
+# - ip: gives the addresses and the default route of a Pi (FAKE_IP_ADDRESSES, FAKE_IP6_ADDRESSES, FAKE_GATEWAY)
+# - systemctl: "is-active ssh" says FAKE_SSH (default active). Each other call goes to $FAKE_DIR/systemctl.log.
 # A throwaway signing key is made at each run. No private key is in the repo.
 
 HELPER=/pi-image/in-pi/update-chatter.sh
@@ -61,8 +63,9 @@ set_up() {
   install -d -m 0755 "$root/opt/chatter/vmalert" "$root/opt/chatter/update" "$root/etc/chatter/update-keys"
   install -d -m 0755 -o 1000 -g 1000 "$inbox"
   install -d -m 0700 "$state_dir"
-  mkdir -p "$root/proc/sys/kernel/random"
+  mkdir -p "$root/proc/sys/kernel/random" "$root/etc"
   echo "boot-1" > "$root/proc/sys/kernel/random/boot_id"
+  echo "chatter" > "$root/etc/hostname"
   cp "$keys_dir/$KEY_ID.pub" "$root/etc/chatter/update-keys/"
   echo "$OLD_VERSION" > "$state_dir/installed-version"
   write_compose "$root/opt/chatter/docker-compose.yml" "$OLD_VERSION" "$OLD_VM_TAG"
@@ -138,6 +141,21 @@ if [ "${FAKE_SLOW_BUSY_STATUS:-0}" = 1 ] && [[ ${!#} == */status.json ]] \
   sleep 0.5
 fi
 exec /bin/mv "$@"
+EOF
+  cat > "$sandbox/bin/ip" << 'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "-o -4 addr show scope global")
+    printf '%s\n' "${FAKE_IP_ADDRESSES-2: eth0    inet 192.168.1.20/24 brd 192.168.1.255 scope global dynamic eth0\       valid_lft 86000sec}" ;;
+  "-o -6 addr show scope global") printf '%s\n' "${FAKE_IP6_ADDRESSES:-}" ;;
+  "-4 route show default") echo "default via ${FAKE_GATEWAY:-192.168.1.1} dev eth0 proto dhcp src 192.168.1.20 metric 100" ;;
+  *) exit 1 ;;
+esac
+EOF
+  cat > "$sandbox/bin/systemctl" << 'EOF'
+#!/bin/sh
+if [ "$1" = "is-active" ]; then echo "${FAKE_SSH:-active}"; exit 0; fi
+echo "$*" >> "$FAKE_DIR/systemctl.log"
 EOF
   write_fake_docker "$sandbox/bin/docker"
   chmod +x "$sandbox/bin/"*

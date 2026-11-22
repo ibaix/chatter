@@ -1,0 +1,6 @@
+[Unit]
+Description=Write the network facts of the Pi for Chatter (Settings > Diagnostics)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/chatter/update-chatter.sh facts

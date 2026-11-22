@@ -89,4 +89,17 @@ describe('DashboardPage', () => {
 
     expect(screen.getByText('Looking at 192.168.1.1 to 192.168.1.254. This can take up to 30 seconds.')).toBeInTheDocument();
   });
+
+  it('lists the other Chatter servers that the scan found, and says that they take the connection of a machine', async () => {
+    vi.mocked(scanRange).mockResolvedValue({ found: [], otherChatters: [{ host: '192.168.1.30', version: '1.2.0' }] });
+    await renderDashboard();
+    await click('Find machines');
+
+    fireEvent.change(screen.getByLabelText('Address range'), { target: { value: '192.168.1' } });
+    await click('Scan');
+
+    expect(await screen.findByText('Another Chatter is on the network')).toBeInTheDocument();
+    expect(screen.getByText(/^Chatter 1\.2\.0 at/)).toHaveTextContent('Chatter 1.2.0 at 192.168.1.30');
+    expect(screen.getByText(/A Brother control serves only one connection/)).toBeInTheDocument();
+  });
 });

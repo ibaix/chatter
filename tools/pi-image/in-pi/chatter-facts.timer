@@ -1,0 +1,9 @@
+[Unit]
+Description=Write the network facts of the Pi for Chatter each 10 minutes, because a DHCP address can change
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target

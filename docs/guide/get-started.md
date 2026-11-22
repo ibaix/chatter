@@ -24,6 +24,8 @@ For FANUC machines, see [FANUC machines](./fanuc.md).
 
 When you add a machine, it shows on the **Machines** page. It shows **Connecting** until Chatter reaches it, for at most 30 seconds. If Chatter cannot reach it in that time, it shows **Offline**.
 
+If a machine shows **Offline**, open the machine, then **Settings** > **Connection**, and click **Test connection**. See [If a machine shows Offline](./diagnostics.md#if-a-machine-shows-offline).
+
 ![The Machines page: four machines with their state, program, parts, spindle speed and tool](../images/chatter-machines.png)
 
 ### If a machine shows Offline
