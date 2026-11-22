@@ -89,14 +89,28 @@ export class AlertStore {
   /**
    * Older versions kept no "resolved" flag: an alert ended when its end time passed.
    * The alerts that ended before the update are marked as resolved, so they do not fire again for the grace time.
+   * An alert that fired when the older version stopped is not resolved: its end time passed during the update,
+   * and vmalert sends it again. A resolved alert ends at once after a start, so it would get a wrong "ended" message.
    */
   private addResolvedColumn(now: number): void {
     const columns = this.db.prepare('PRAGMA table_info(alerts)').all() as { name: string }[];
     if (columns.some(column => column.name === 'resolved')) return;
     this.db.transaction(() => {
       this.db.exec('ALTER TABLE alerts ADD COLUMN resolved INTEGER NOT NULL DEFAULT 0');
-      this.db.prepare('UPDATE alerts SET resolved = 1 WHERE ends_at <= ?').run(now);
+      this.db.prepare(`UPDATE alerts SET resolved = 1 WHERE ${this.endedBeforeUpdateSql()}`).run({ now });
     })();
+  }
+
+  /**
+   * With notifications, the older version kept an "ended" note for each alert that it reported as ended
+   * (see AlertChangeFinder). Only these alerts ended: an update can take longer than the grace time.
+   * With no notes, an alert ended when its end time passed by more than the grace time. No channel is set up then,
+   * so no message can be wrong. The update reads the notes only one time, and AlertChangeFinder keeps them.
+   */
+  private endedBeforeUpdateSql(): string {
+    const hasNotes = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'alert_notices'").get();
+    if (hasNotes) return "id IN (SELECT alert_id FROM alert_notices WHERE kind = 'ended')";
+    return `ends_at <= @now - ${ALERT_END_GRACE_MS}`;
   }
 
   /** For tests: the alerts are kept in memory only */

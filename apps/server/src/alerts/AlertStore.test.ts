@@ -116,6 +116,10 @@ describe('AlertStore', () => {
   });
 
   describe('the update that adds the resolved flag', () => {
+    /**
+     * The rows of a version with no notifications. The last send of "Firing" was during the update,
+     * and its end time passed by less than the grace time.
+     */
     function oldDatabase(): Database.Database {
       const db = new Database(':memory:');
       db.exec(`
@@ -124,27 +128,58 @@ describe('AlertStore', () => {
           annotations TEXT NOT NULL, starts_at INTEGER NOT NULL, ends_at INTEGER NOT NULL, UNIQUE (labels, starts_at)
         );
         INSERT INTO alerts (name, labels, annotations, starts_at, ends_at)
-        VALUES ('Ended', '{}', '{}', ${NOW - 5 * MINUTE_MS}, ${NOW - MINUTE_MS}),
-               ('Firing', '{}', '{}', ${NOW - 5 * MINUTE_MS + 1}, ${NOW + MINUTE_MS});
+        VALUES ('Ended', '{}', '{}', ${NOW - 10 * MINUTE_MS}, ${NOW - ALERT_END_GRACE_MS}),
+               ('Firing', '{}', '{}', ${NOW - 10 * MINUTE_MS + 1}, ${NOW - MINUTE_MS});
       `);
       return db;
     }
 
-    it('marks the alerts that ended before the update as resolved, so they do not fire again for the grace time', () => {
+    /** A version with notifications: AlertChangeFinder kept a note of each change that it reported */
+    function oldDatabaseWithNotes(): Database.Database {
+      const db = oldDatabase();
+      db.exec(`
+        INSERT INTO alerts (name, labels, annotations, starts_at, ends_at)
+        VALUES ('Ended a short time ago', '{"a":"1"}', '{}', ${NOW - 5 * MINUTE_MS}, ${NOW - MINUTE_MS}),
+               ('Firing for a long update', '{"a":"2"}', '{}', ${NOW - 20 * MINUTE_MS}, ${NOW - 10 * MINUTE_MS});
+        CREATE TABLE alert_notices (alert_id INTEGER NOT NULL, kind TEXT NOT NULL, PRIMARY KEY (alert_id, kind)) WITHOUT ROWID;
+        INSERT INTO alert_notices (alert_id, kind) SELECT id, 'started' FROM alerts;
+        INSERT INTO alert_notices (alert_id, kind) SELECT id, 'ended' FROM alerts WHERE name IN ('Ended', 'Ended a short time ago');
+      `);
+      return db;
+    }
+
+    const resolvedFlags = (store: AlertStore) => store.read(allAlertsQuery)
+      .map(({ name, resolved }) => ({ name, resolved }))
+      .sort((first, second) => first.name.localeCompare(second.name));
+
+    it('marks the alerts that ended more than the grace time before the update as resolved', () => {
       const updated = new AlertStore(oldDatabase(), NOW);
 
-      expect(updated.read(allAlertsQuery).map(({ name, resolved }) => ({ name, resolved }))).toEqual([
-        { name: 'Firing', resolved: false },
+      expect(resolvedFlags(updated)).toEqual([
         { name: 'Ended', resolved: true },
+        { name: 'Firing', resolved: false },
+      ]);
+    });
+
+    it('marks only the alerts with an "ended" note as resolved when the older version had notifications', () => {
+      // An update can take more than the grace time. An alert with no "ended" note fired when the older version stopped.
+      const updated = new AlertStore(oldDatabaseWithNotes(), NOW);
+
+      expect(resolvedFlags(updated)).toEqual([
+        { name: 'Ended', resolved: true },
+        { name: 'Ended a short time ago', resolved: true },
+        { name: 'Firing', resolved: false },
+        { name: 'Firing for a long update', resolved: false },
       ]);
     });
 
     it('changes nothing at the next start', () => {
       const db = oldDatabase();
       new AlertStore(db, NOW);
+      db.prepare("UPDATE alerts SET resolved = 0 WHERE name = 'Ended'").run();
       new AlertStore(db, NOW + 10 * MINUTE_MS);
 
-      expect(new AlertStore(db, NOW).read(firingAlertsQuery).map(found => found.name)).toEqual(['Firing']);
+      expect(new AlertStore(db, NOW).read(allAlertsQuery).map(found => found.resolved)).toEqual([false, false]);
     });
   });
 

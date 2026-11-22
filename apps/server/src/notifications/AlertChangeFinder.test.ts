@@ -189,6 +189,35 @@ describe('AlertChangeFinder', () => {
     expect(afterUpdate.kinds()).toEqual(['ended SpindleLoadHigh']);
   });
 
+  it('reports no end and no second start of an alert that fired during the update that adds the resolved flag', () => {
+    // The older version had notifications and no "resolved" column. It reported the start of the alert.
+    const olderDb = new Database(':memory:');
+    olderDb.exec(`
+      CREATE TABLE alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, machine_id TEXT, labels TEXT NOT NULL,
+        annotations TEXT NOT NULL, starts_at INTEGER NOT NULL, ends_at INTEGER NOT NULL, UNIQUE (labels, starts_at)
+      );
+      CREATE TABLE alert_notices (alert_id INTEGER NOT NULL, kind TEXT NOT NULL, PRIMARY KEY (alert_id, kind)) WITHOUT ROWID;
+    `);
+    const firing = anAlert({ startsAt: NOW - 10 * MINUTE_MS, endsAt: NOW - MINUTE_MS });
+    olderDb.prepare(`
+      INSERT INTO alerts (name, machine_id, labels, annotations, starts_at, ends_at) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(firing.name, firing.machineId, JSON.stringify(firing.labels), JSON.stringify(firing.annotations), firing.startsAt, firing.endsAt);
+    olderDb.exec("INSERT INTO alert_notices (alert_id, kind) SELECT id, 'started' FROM alerts");
+
+    // The update took 2 minutes, so the end time passed by less than the grace time
+    const updatedAlerts = new AlertStore(olderDb, NOW);
+    const afterUpdate = new ChangeList();
+    const updatedFinder = new AlertChangeFinder(olderDb, afterUpdate, NOW);
+    updatedFinder.findChanges(NOW);
+    // vmalert sends the alert again, with the same start time
+    updatedAlerts.save([anAlert({ startsAt: firing.startsAt, endsAt: NOW + MINUTE_MS })], NOW + 15_000);
+    updatedFinder.findChanges(NOW + 15_000);
+    updatedFinder.findChanges(NOW + STARTUP_WAIT_MS);
+
+    expect(afterUpdate.kinds()).toEqual([]);
+  });
+
   it('marks the old alerts only at the first start, so a restart reports the new alerts', () => {
     alerts.save([anAlert()], NOW);
     const afterRestart = new ChangeList();
