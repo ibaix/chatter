@@ -328,6 +328,20 @@ describe('HistoryBackup', () => {
       expect(log.text('info')).toMatch(/History backup downloaded.*user=admin/);
     });
 
+    it('makes a safe file name from the machine name', async () => {
+      const names: [string, string][] = [
+        ['Fräs/"Halle 2"', 'chatter-history-Fras-Halle-2-2026-11-21.tar.gz'],
+        ['東京 ミル', 'chatter-history-machine-2026-11-21.tar.gz'],
+        ['../../etc', 'chatter-history-etc-2026-11-21.tar.gz'],
+      ];
+      for (const [name, fileName] of names) {
+        const prepared = await backups.prepareBackup({ ...source, name }, ALL, 'admin');
+        expect(prepared.fileName).toBe(fileName);
+        await new Response(backups.download(prepared.id, source.id, 'admin').stream).arrayBuffer();
+        await vi.waitFor(() => expect(filesLeft()).toEqual([]));
+      }
+    });
+
     it('logs a download that the browser stops as stopped, not as downloaded', async () => {
       const log = captureLog();
       const prepared = await backups.prepareBackup(source, ALL, 'admin');

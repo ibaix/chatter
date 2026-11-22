@@ -245,6 +245,17 @@ describe.each(BACKENDS)('history backup routes (%s VictoriaMetrics)', (_name, ma
     expect(notAnArchive.status).toBe(400);
   });
 
+  it('gives the file a safe name in Content-Disposition, also for a machine name with a quote, a slash or other letters', async () => {
+    const added = await request('POST', '/machines', 'admin', { type: 'brother', name: 'Fräs/"Halle" 東京', host: '10.0.0.8' });
+    const id = (await added.json() as { id: string }).id;
+    const prepared = await request('POST', `/machine/${id}/history-backup`, 'admin', {});
+    const { id: backupId, fileName } = await prepared.json() as { id: string; fileName: string };
+    expect(fileName).toMatch(/^chatter-history-Fras-Halle-\d{4}-\d{2}-\d{2}\.tar\.gz$/);
+    const download = await request('GET', `/machine/${id}/history-backup/${backupId}`, 'admin');
+    expect(download.headers.get('Content-Disposition')).toBe(`attachment; filename="${fileName}"`);
+    await download.arrayBuffer();
+  });
+
   it('has no secret of a machine in the file: no address, user, password or macro', async () => {
     const entries = await unpack(await backUp());
     const everything = [...entries].map(([name, data]) => (name.endsWith('.gz') ? gunzipSync(data) : data).toString('utf8')).join('\n');

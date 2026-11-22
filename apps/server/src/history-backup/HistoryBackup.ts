@@ -566,9 +566,9 @@ function localName(part: string): string {
   return part === MANIFEST_NAME ? 'manifest.json' : `part-${PART_NAMES.indexOf(part as PartName)}`;
 }
 
-/** The machine name for the file name: letters, digits and dashes only */
+/** The machine name for the file name: letters A to Z, digits and dashes only. "ä" becomes "a". */
 function fileNamePart(name: string): string {
-  const safe = name.normalize('NFKD').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  const safe = name.normalize('NFKD').replace(/\p{M}+/gu, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
   return safe || FALLBACK_NAME;
 }
 
