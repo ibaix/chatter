@@ -9,6 +9,7 @@ import { allowLongUpload } from '../webServerOptions.js';
 import { checkedJson } from './checks.js';
 import { rawFileUpload } from './rawFileUpload.js';
 import { notFound } from './responses.js';
+import { streamWithoutErrorText } from './streamReplies.js';
 import { historyBackupSchema, historyRestoreSchema } from './schemas.js';
 
 const log = createLogger('history-backup');
@@ -61,7 +62,7 @@ export function historyBackupRoutes(poller: HardwarePoller, backups: HistoryBack
     .get('/machine/:id/history-backup/:backupId', canManageMachines, c => {
       try {
         const { fileName, stream } = backups.download(c.req.param('backupId'), c.req.param('id'), c.var.user.username);
-        return c.body(stream, 200, {
+        return c.body(streamWithoutErrorText(c, stream, 'The history backup download'), 200, {
           'Content-Type': 'application/gzip',
           'Content-Disposition': `attachment; filename="${fileName}"`,
           'Cache-Control': 'no-store',

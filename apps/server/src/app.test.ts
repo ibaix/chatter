@@ -11,6 +11,7 @@ import { SESSION_COOKIE } from './auth/authRoutes.js';
 import { hasLongTimeLimit } from './webServerOptions.js';
 import { captureLog } from './logging/testSupport.js';
 import { UNEXPECTED_ERROR_TEXT } from './routes/responses.js';
+import { STREAM_STOPPED_TEXT } from './routes/streamReplies.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
@@ -1081,6 +1082,24 @@ describe('API Routes', () => {
       expect(res.status).toBe(200);
       expect(res.headers.get('Content-Disposition'))
         .toBe(`attachment; filename="Teil _A_ _.nc"; filename*=UTF-8''Teil%20%22A%22%20%E2%82%AC.nc`);
+    });
+
+    it('logs one line when the download fails in the middle, and stops the file', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'downloadFile').mockImplementation(async (_path, output) => {
+        output.write('G00 X0');
+        throw new Error('FTP download error: connection reset');
+      });
+      const log = captureLog();
+
+      const res = await send(`/api/machine/${machine.id}/files/download?path=/PRG/O1000.NC`);
+      const failure = await res.text().then(() => null, (error: Error) => error);
+      log.restore();
+
+      expect(res.status).toBe(200);
+      expect(failure?.message).toBe(STREAM_STOPPED_TEXT);
+      expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
+      expect(log.text('error')).toContain('connection reset');
     });
 
     it('returns 500 when the machine refuses the download', async () => {
