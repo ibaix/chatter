@@ -168,8 +168,10 @@ export class PollScheduler {
   }
 
   /**
-   * Stop waiting for a poll that never ended, so the next poll can run. The connector is disconnected
-   * (again), so the old poll has no connection to use if it goes on after all, and the next poll connects again.
+   * Stop waiting for a poll that never ended, so the next poll can run. The connector is disconnected again,
+   * so the next poll connects again. The scheduler cannot stop the old poll. If the old poll continues after all,
+   * it can call connect() or disconnect() while the next poll runs. We accept this risk: a stuck poll is a bug
+   * in a connector, and this is better than a machine that stays offline until Chatter restarts.
    */
   private abandonStuckPoll(connector: BaseMachineConnector, token: symbol): void {
     if (this.pollsInProgress.get(connector.id) !== token) return;
