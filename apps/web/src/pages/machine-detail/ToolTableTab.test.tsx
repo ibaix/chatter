@@ -204,6 +204,34 @@ describe('ToolTableTab sync', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
+    it('gives a second "Try again" its full seconds, also when the first one has not gone yet', async () => {
+      vi.useFakeTimers();
+      refuseSync('Try again in 12 seconds.', { outcome: 'too-soon', retryAfterSeconds: 12 });
+      renderTab(SYNCED);
+      await pressSync();
+      act(() => vi.advanceTimersByTime(8000));
+      refuseSync('Try again in 12 seconds again.', { outcome: 'too-soon', retryAfterSeconds: 12 });
+
+      await pressSync();
+      act(() => vi.advanceTimersByTime(11_999));
+      expect(screen.getByRole('alert')).toHaveTextContent('Try again in 12 seconds again.');
+
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('stops the timer of "Try again" when the tab closes', async () => {
+      vi.useFakeTimers();
+      refuseSync('Try again in 12 seconds.', { outcome: 'too-soon', retryAfterSeconds: 12 });
+      const { unmount } = renderTab(SYNCED);
+      await pressSync();
+      expect(vi.getTimerCount()).toBe(1);
+
+      unmount();
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
     it('"not connected" goes when the machine is connected again', async () => {
       refuseSync('The machine is not connected.', { outcome: 'not-connected' });
       const { rerender } = renderTab(SYNCED, TOOLS, false);
@@ -253,7 +281,7 @@ describe('ToolTableTab sync', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
-    it('stays while a program runs and no newer read comes', async () => {
+    it('"not connected" stays while the machine is still offline and no newer read comes', async () => {
       refuseSync('The machine is not connected.', { outcome: 'not-connected' });
       const { rerender } = renderTab(SYNCED, TOOLS, false);
       await pressSync();
