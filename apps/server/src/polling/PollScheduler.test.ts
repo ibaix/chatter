@@ -194,12 +194,27 @@ describe('PollScheduler', () => {
 
     it('stops blocking the machine after 60 seconds, so the next poll runs and connects again', async () => {
       const log = captureLog();
-      // The next poll comes at the next timer, after the interval
-      await vi.advanceTimersByTimeAsync(STUCK_POLL_MS + 2000);
+      try {
+        // The next poll comes at the next timer, after the interval
+        await vi.advanceTimersByTimeAsync(STUCK_POLL_MS + 2000);
 
-      expect(machine.polls).toBe(2);
-      expect(log.text('warn')).toContain('A poll did not end');
-      log.restore();
+        expect(machine.polls).toBe(2);
+        expect(log.text('warn')).toContain('A poll did not end');
+      } finally {
+        log.restore();
+      }
+    });
+
+    it('disconnects the machine when it stops waiting, also when the old poll connected after the timeout', async () => {
+      await vi.advanceTimersByTimeAsync(STUCK_POLL_MS - 1);
+      // For example a connect of the old poll that ended after all
+      machine.connected = true;
+      const disconnectsBefore = machine.disconnects;
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(machine.disconnects).toBe(disconnectsBefore + 1);
+      expect(machine.connected).toBe(false);
     });
 
     it('does not let the late end of the old poll free or disconnect the new poll', async () => {
