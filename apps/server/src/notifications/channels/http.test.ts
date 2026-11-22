@@ -180,11 +180,24 @@ describe('postJson', () => {
       expect(result).toMatchObject({ retryAfterMs: 30_000 });
     });
 
+    it('reads the older HTTP date form too', async () => {
+      vi.useFakeTimers({ now: Date.UTC(2026, 10, 13, 9, 0) });
+
+      const result = await postJson(busy(429, 'Friday, 13-Nov-26 09:00:30 GMT').context(), 'X', { url: 'https://example.com', body: {} }, busyResult);
+
+      expect(result).toMatchObject({ retryAfterMs: 30_000 });
+    });
+
+    // JavaScript reads "1.5" and "12/31/2099" as dates, but Retry-After has only seconds or an HTTP date
     it('gives no wait for a date in the past, a wrong value, or an answer that is not 429 or 503', async () => {
       vi.useFakeTimers({ now: Date.UTC(2026, 10, 13, 9, 0) });
       const request = { url: 'https://example.com', body: {} };
+      const values = [
+        [429, 'Fri, 13 Nov 2026 08:00:00 GMT'], [429, 'soon'], [429, '-5'], [429, '0'], [429, '1.5'], [429, '2099-01-01'],
+        [429, '12/31/2099'], [500, '60'], [400, '60'],
+      ] as const;
 
-      for (const [status, value] of [[429, 'Fri, 13 Nov 2026 08:00:00 GMT'], [429, 'soon'], [429, '-5'], [500, '60'], [400, '60']] as const) {
+      for (const [status, value] of values) {
         const result = await postJson(busy(status, value).context(), 'X', request, busyResult);
         expect(result).not.toHaveProperty('retryAfterMs');
         expect(result.ok ? '' : result.error).not.toContain('wait');

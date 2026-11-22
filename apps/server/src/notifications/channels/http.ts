@@ -74,8 +74,15 @@ function retryAfterOf(response: Response, now: number): number | undefined {
   if (response.status !== 429 && response.status !== 503) return undefined;
   const value = response.headers.get('retry-after')?.trim();
   if (!value) return undefined;
-  return cappedWait(/^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - now);
+  if (/^\d+$/.test(value)) return cappedWait(Number(value) * 1000);
+  return HTTP_DATE.test(value) ? cappedWait(Date.parse(value) - now) : undefined;
 }
+
+/**
+ * An HTTP date: a day name, a comma, and GMT at the end, for example "Fri, 13 Nov 2026 09:00:30 GMT".
+ * JavaScript also reads other texts as dates, for example "1.5" or "12/31/2099", so Chatter checks the form first.
+ */
+const HTTP_DATE = /^[A-Z][a-z]{2,8}, .+ GMT$/;
 
 /** A wait of a service, at most MAX_HOLD_MS, so the text tells the real wait. undefined when it is not a time in the future. */
 function cappedWait(milliseconds: number): number | undefined {
