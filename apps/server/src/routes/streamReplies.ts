@@ -27,10 +27,13 @@ const requestOf = (c: Context) => ({ method: c.req.method, path: c.req.path });
  */
 export function streamWithoutErrorText(c: Context, source: ReadableStream<Uint8Array>, what: string): ReadableStream<Uint8Array> {
   const reader = source.getReader();
+  // The browser cancelled the download. Then the wrapper is closed already, and a read that waited ends with done.
+  let cancelled = false;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const { done, value } = await reader.read();
+        if (cancelled) return;
         if (done) controller.close();
         else controller.enqueue(value);
       } catch (error) {
@@ -45,6 +48,8 @@ export function streamWithoutErrorText(c: Context, source: ReadableStream<Uint8A
       }
     },
     cancel(reason) {
+      cancelled = true;
+      log.debug(`${what} stopped because the browser cancelled it`, requestOf(c));
       return reader.cancel(reason);
     },
   });
