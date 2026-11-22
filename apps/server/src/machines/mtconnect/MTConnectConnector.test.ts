@@ -271,6 +271,22 @@ describe('MTConnect redirects', () => {
     expect(result.connected).toBe(false);
     expect(result.errors).toEqual(['Connection failed: HTTP 400: Bad Request']);
   });
+
+  it('does not find an agent on a port that sends a redirect, and does not follow it', async () => {
+    const target = await localServer(response => response.end(PROBE));
+    const agent = await localServer(response => {
+      response.writeHead(302, { Location: `http://127.0.0.1:${target.port}/probe` });
+      response.end();
+    });
+
+    try {
+      expect(await MTConnectConnector.probePort('127.0.0.1', agent.port)).toBe(false);
+      expect(agent.requests()).toBe(1);
+      expect(target.requests()).toBe(0);
+    } finally {
+      await Promise.all([agent.close(), target.close()]);
+    }
+  });
 });
 
 describe('MTConnect port scan', () => {
