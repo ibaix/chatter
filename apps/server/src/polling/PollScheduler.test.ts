@@ -140,7 +140,7 @@ describe('PollScheduler', () => {
     expect(machine.disconnects).toBe(0);
   });
 
-  it('tells the machine its poll time limit before the first poll, so the machine can plan its poll', async () => {
+  it('tells the machine its poll time limit before the first poll, so the machine can report its poll times against it', async () => {
     const shortLimit = new PollScheduler({ afterPoll, connectingEnded }, { pollTimeoutMs: 4000 });
     const limits: number[] = [];
     vi.spyOn(machine, 'poll').mockImplementation(() => {

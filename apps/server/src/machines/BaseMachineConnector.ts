@@ -40,7 +40,10 @@ export abstract class BaseMachineConnector extends EventEmitter {
   public ftpUser: string;
   public ftpPassword: string;
   public connected: boolean;
-  /** The time limit of one poll. The PollScheduler sets it, so a connector can plan its poll in that time. */
+  /**
+   * The time limit of one poll. The PollScheduler sets it. A connector uses it only to report its poll times: the
+   * warning at 60 % of the limit, and `limitMs` in PollTimings.
+   */
   public pollTimeLimitMs = DEFAULT_POLL_TIME_LIMIT_MS;
 
   protected timeout: number;
