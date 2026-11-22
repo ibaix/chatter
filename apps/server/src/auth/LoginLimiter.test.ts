@@ -32,6 +32,7 @@ describe('LoginLimiter', () => {
   it('forgets the failures of the user after a good password', () => {
     const limiter = new LoginLimiter();
     failTimes(limiter, '10.0.0.5', 9);
+    limiter.recordAttempt('10.0.0.5', 'admin');
     limiter.recordSuccess('10.0.0.5', 'admin');
     limiter.recordAttempt('10.0.0.5', 'admin');
     expect(limiter.isBlocked('10.0.0.5', 'admin')).toBe(false);
@@ -74,13 +75,41 @@ describe('LoginLimiter', () => {
     expect(limiter.isBlocked('10.9.9.9', 'bob')).toBe(false);
   });
 
-  it('keeps the count of the user on all addresses after a good password', () => {
+  it('does not lock a user after 30 good logins', () => {
+    const limiter = new LoginLimiter();
+    for (let i = 0; i < MAX_USER_FAILURES; i++) {
+      const address = `10.0.${i}.1`;
+      expect(limiter.isBlocked(address, 'admin')).toBe(false);
+      limiter.recordAttempt(address, 'admin');
+      limiter.recordSuccess(address, 'admin');
+    }
+
+    expect(limiter.isBlocked('10.9.9.9', 'admin')).toBe(false);
+    expect(limiter.lockedUsers()).toEqual([]);
+  });
+
+  it('keeps the wrong passwords of the user on all addresses after a good password', () => {
     const limiter = new LoginLimiter();
     failFromManyAddresses(limiter, 'admin', MAX_USER_FAILURES - 1);
-    limiter.recordSuccess('10.0.0.1', 'admin');
+    limiter.recordAttempt('10.8.8.8', 'admin');
+    limiter.recordSuccess('10.8.8.8', 'admin');
+    expect(limiter.isBlocked('10.9.9.9', 'admin')).toBe(false);
 
     limiter.recordAttempt('10.9.9.8', 'admin');
     expect(limiter.isBlocked('10.9.9.9', 'admin')).toBe(true);
+  });
+
+  it('reports the first blocked try again when a good login ends a user lock and a new lock starts', () => {
+    const limiter = new LoginLimiter();
+    failFromManyAddresses(limiter, 'admin', MAX_USER_FAILURES - 1);
+    // The good password of the owner is the try that reaches the limit
+    limiter.recordAttempt('10.8.8.8', 'admin');
+    expect(limiter.isFirstBlockedTry('10.9.9.9', 'admin')).toBe(true);
+    limiter.recordSuccess('10.8.8.8', 'admin');
+    expect(limiter.isBlocked('10.9.9.9', 'admin')).toBe(false);
+
+    limiter.recordAttempt('10.9.9.8', 'admin');
+    expect(limiter.isFirstBlockedTry('10.9.9.9', 'admin')).toBe(true);
   });
 
   it('blocks tries that start at the same time, before any check ends', () => {

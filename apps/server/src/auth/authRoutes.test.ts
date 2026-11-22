@@ -132,6 +132,13 @@ describe('auth routes', () => {
     expect(res.status).toBe(429);
   });
 
+  it('does not lock a user after 30 good logins', async () => {
+    await setUp();
+    for (let i = 0; i < 30; i++) expect((await post('/api/auth/login', ADMIN)).status).toBe(200);
+
+    expect((await post('/api/auth/login', ADMIN)).status).toBe(200);
+  });
+
   it('reads the Basic header in any case, with a colon in the password', async () => {
     const login = { username: 'admin', password: 'pass:word:1' };
     await post('/api/auth/setup', login);

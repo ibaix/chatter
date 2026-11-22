@@ -7,8 +7,9 @@ import { addressGroup } from './addressGroup.js';
  * - For each username, from all addresses. After 30 tries, nobody can try that user until the lock ends.
  *   This stops a guess of one password from many computers.
  *
- * A good password removes only the count of that address and that username.
- * It does not remove the count of the username, so a person who knows one password cannot reset the guesses at another.
+ * Each try counts before the password check, so tries sent at the same time cannot all get past the limit.
+ * A good password removes the count of that address and that username, and takes its own try back off the count of the username.
+ * So good logins never lock a user, and a person who knows one password cannot reset the guesses at another.
  * An IPv6 address counts as its /64 (see addressGroup).
  */
 
@@ -100,6 +101,15 @@ class FailureCounts<Entry extends Failures> {
     this.entries.set(key, { ...fields, count: 1, firstAt: this.now() } as Entry);
   }
 
+  /** Take one try back off the count. The entry goes when its count is 0. */
+  undo(key: string): void {
+    const entry = this.current(key);
+    if (!entry) return;
+    entry.count--;
+    if (entry.count <= 0) this.entries.delete(key);
+    else if (entry.count < this.limit) entry.hasBlockedTry = false;
+  }
+
   delete(key: string): void {
     this.entries.delete(key);
   }
@@ -163,7 +173,7 @@ export class LoginLimiter {
   /**
    * Count one password try. Call it before the (slow) password check,
    * so many tries sent at the same time cannot all get past isBlocked().
-   * A good password then removes the count of the address with recordSuccess().
+   * A good password then takes its try back with recordSuccess().
    */
   recordAttempt(address: string, username: string): void {
     const user = normalUsername(username);
@@ -171,9 +181,13 @@ export class LoginLimiter {
     this.byUser.add(user, { username: user });
   }
 
-  /** Forget the tries of this address for this user only. The count of the user on all addresses stays. */
+  /**
+   * Forget the tries of this address for this user only.
+   * The count of the user on all addresses loses only this good try, so it keeps the wrong passwords from other addresses.
+   */
   recordSuccess(address: string, username: string): void {
     this.byAddress.delete(addressKey(address, username));
+    this.byUser.undo(normalUsername(username));
   }
 
   /** The addresses that must wait now, the oldest lock first */
