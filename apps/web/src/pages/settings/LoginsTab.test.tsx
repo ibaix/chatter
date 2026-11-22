@@ -11,8 +11,9 @@ const inMinutes = (minutes: number) => new Date(Date.now() + minutes * 60_000 - 
 function report(changes: Partial<LoginsReport> = {}): LoginsReport {
   const at = new Date().toISOString();
   return {
-    limits: { maxWrongPasswords: 10, lockMinutes: 15 },
+    limits: { maxWrongPasswords: 10, maxWrongPasswordsForUser: 30, lockMinutes: 15 },
     locked: [{ address: ATTACKER, username: 'sam', until: inMinutes(14) }],
+    lockedUsers: [],
     tries: [
       { at, username: 'sam', address: ATTACKER, result: 'locked' },
       { at, username: 'admin', address: '192.168.1.20', result: 'logged-in' },

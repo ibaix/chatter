@@ -276,9 +276,10 @@ describe('auth routes behind a reverse proxy', () => {
   const PROXY = '127.0.0.1';
   /** What the Node server gives each request: here, a connection from the proxy */
   const fromProxy = { incoming: { socket: { remoteAddress: PROXY } } };
+  const BOB = { username: 'bob', password: 'bob-password' };
   let app: ReturnType<typeof createApp>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     const { auth, accounts } = authParts();
     app = createApp({
       poller: new HardwarePoller(emptyDb),
@@ -287,6 +288,8 @@ describe('auth routes behind a reverse proxy', () => {
       history: noHistory(),
       proxySettings: ProxySettings.inMemory(PROXY),
     });
+    await postFor('192.168.1.20', '/api/auth/setup', ADMIN);
+    await accounts.add({ ...BOB, role: 'operator' });
   });
 
   /** A request that the proxy sends on for a user */
@@ -298,16 +301,42 @@ describe('auth routes behind a reverse proxy', () => {
     }, fromProxy);
   }
 
+  const wrongAdminPassword = (user: string) =>
+    postFor(user, '/api/auth/login', { ...ADMIN, password: 'wrong-password' });
+
   it('blocks only the user with 10 wrong passwords, not every user of the proxy', async () => {
-    await postFor('192.168.1.20', '/api/auth/setup', ADMIN);
     for (let i = 0; i < 10; i++) await postFor('192.168.1.66', '/api/auth/login', { ...ADMIN, password: 'wrong-password' });
 
     expect((await postFor('192.168.1.66', '/api/auth/login', ADMIN)).status).toBe(429);
     expect((await postFor('192.168.1.20', '/api/auth/login', ADMIN)).status).toBe(200);
   });
 
+  it('does not reset the tries against admin when another user logs in from the same address', async () => {
+    for (let i = 0; i < 9; i++) await wrongAdminPassword('192.168.1.66');
+    expect((await postFor('192.168.1.66', '/api/auth/login', BOB)).status).toBe(200);
+    await wrongAdminPassword('192.168.1.66');
+
+    expect((await postFor('192.168.1.66', '/api/auth/login', ADMIN)).status).toBe(429);
+    expect((await postFor('192.168.1.66', '/api/auth/login', BOB)).status).toBe(200);
+  });
+
+  it('counts the tries from two IPv6 addresses in one /64 together', async () => {
+    for (let i = 0; i < 5; i++) await wrongAdminPassword('2001:db8:1:2::66');
+    for (let i = 0; i < 5; i++) await wrongAdminPassword('2001:db8:1:2::67');
+
+    expect((await postFor('2001:db8:1:2::68', '/api/auth/login', ADMIN)).status).toBe(429);
+    expect((await postFor('2001:db8:1:3::68', '/api/auth/login', ADMIN)).status).toBe(200);
+  });
+
+  it('blocks a username on all addresses after 30 wrong passwords from many addresses', async () => {
+    for (let i = 0; i < 30; i++) await wrongAdminPassword(`192.168.2.${Math.floor(i / 5)}`);
+
+    expect((await postFor('192.168.1.20', '/api/auth/login', ADMIN)).status).toBe(429);
+    expect((await postFor('192.168.1.20', '/api/auth/login', BOB)).status).toBe(200);
+  });
+
   it('makes the cookie HTTPS-only when the browser used HTTPS', async () => {
-    const overHttps = await postFor('192.168.1.20', '/api/auth/setup', ADMIN, 'https');
+    const overHttps = await postFor('192.168.1.20', '/api/auth/login', ADMIN, 'https');
     const overHttp = await postFor('192.168.1.20', '/api/auth/login', ADMIN, 'http');
 
     expect(overHttps.headers.get('Set-Cookie')).toContain('Secure');

@@ -97,7 +97,7 @@ interface PasswordTry<Value> {
   check: () => Promise<Value | null>;
 }
 
-/** Check a password from the caller. Each try counts against the caller's address and goes in the login log. */
+/** Check a password from the caller. Each try counts against the caller's address and the username, and goes in the login log. */
 async function withPasswordCheck<Value>(
   c: Context,
   { auth, limiter, loginLog }: LoginGuard,
@@ -106,8 +106,8 @@ async function withPasswordCheck<Value>(
 ): Promise<Checked<Value>> {
   const recordTry = (result: LoginResult) =>
     withoutFailing('[Login log] Could not save a login try', () => loginLog.record({ username, address, result }));
-  if (limiter.isBlocked(address)) {
-    if (limiter.isFirstBlockedTry(address)) recordTry('locked');
+  if (limiter.isBlocked(address, username)) {
+    if (limiter.isFirstBlockedTry(address, username)) recordTry('locked');
     return { ok: false, reply: tooManyTries(c) };
   }
   // Count the try before the slow check, so tries sent at the same time cannot all get past the block
@@ -117,7 +117,7 @@ async function withPasswordCheck<Value>(
     recordTry(auth.hasUser(username) ? 'wrong-password' : 'no-such-user');
     return { ok: false, reply: wrongLogin(c) };
   }
-  limiter.recordSuccess(address);
+  limiter.recordSuccess(address, username);
   recordTry(success);
   return { ok: true, value };
 }

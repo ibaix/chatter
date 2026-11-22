@@ -3,15 +3,16 @@ import type { Auth } from '../auth/Auth.js';
 import type { UserAccounts } from '../auth/userAccounts.js';
 import { LoginLog } from '../auth/loginLog.js';
 import { loggedInAuth, TEST_LOGIN } from '../auth/testSupport.js';
-import { testApp, type TestApp } from './testSupport.js';
+import { errorOf, testApp, type TestApp } from './testSupport.js';
 
 const ATTACKER = '192.168.1.66';
 /** A connection from this address, as the Node server gives it */
 const from = (address: string) => ({ incoming: { socket: { remoteAddress: address } } });
 
 interface LoginsReport {
-  limits: { maxWrongPasswords: number; lockMinutes: number };
+  limits: { maxWrongPasswords: number; maxWrongPasswordsForUser: number; lockMinutes: number };
   locked: { address: string; username: string; until: string }[];
+  lockedUsers: { username: string; until: string }[];
   tries: { at: string; username: string; address: string; result: string }[];
 }
 
@@ -63,7 +64,8 @@ describe('login settings routes', () => {
       { at: expect.any(String), username: 'sam', address: ATTACKER, result: 'no-such-user' },
     ]);
     expect(report.locked).toEqual([]);
-    expect(report.limits).toEqual({ maxWrongPasswords: 10, lockMinutes: 15 });
+    expect(report.lockedUsers).toEqual([]);
+    expect(report.limits).toEqual({ maxWrongPasswords: 10, maxWrongPasswordsForUser: 30, lockMinutes: 15 });
   });
 
   it('lists a locked computer, and unlocks it', async () => {
@@ -78,8 +80,25 @@ describe('login settings routes', () => {
     expect((await logIn(TEST_LOGIN.username, TEST_LOGIN.password)).status).toBe(200);
   });
 
+  it('lists a user that is locked on all addresses, and unlocks it', async () => {
+    for (let i = 0; i < 30; i++) await logIn('sam', 'wrong-password', `192.168.2.${Math.floor(i / 5)}`);
+    const before = (await (await asAdmin('/api/settings/logins')).json()) as LoginsReport;
+    expect(before.lockedUsers).toEqual([{ username: 'sam', until: expect.any(String) }]);
+
+    const res = await asAdmin('/api/settings/logins/unlock', { username: 'Sam' });
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as LoginsReport).lockedUsers).toEqual([]);
+  });
+
   it('refuses an unlock with no address', async () => {
     const res = await asAdmin('/api/settings/logins/unlock', { address: ' ' });
     expect(res.status).toBe(400);
+  });
+
+  it('refuses an unlock with no address and no username', async () => {
+    const res = await asAdmin('/api/settings/logins/unlock', {});
+    expect(res.status).toBe(400);
+    expect(await errorOf(res)).toBe('Give an address or a username to unlock');
   });
 });
