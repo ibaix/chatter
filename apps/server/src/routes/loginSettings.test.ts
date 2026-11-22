@@ -6,6 +6,8 @@ import { loggedInAuth, TEST_LOGIN } from '../auth/testSupport.js';
 import { errorOf, testApp, type TestApp } from './testSupport.js';
 
 const ATTACKER = '192.168.1.66';
+/** The computer of the admin */
+const ADMIN_COMPUTER = '192.168.1.20';
 /** A connection from this address, as the Node server gives it */
 const from = (address: string) => ({ incoming: { socket: { remoteAddress: address } } });
 
@@ -43,7 +45,7 @@ describe('login settings routes', () => {
       method: body ? 'POST' : 'GET',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
       body: body && JSON.stringify(body),
-    });
+    }, from(ADMIN_COMPUTER));
   }
 
   async function lockOut(address: string) {
@@ -77,7 +79,17 @@ describe('login settings routes', () => {
 
     expect(res.status).toBe(200);
     expect(((await res.json()) as LoginsReport).locked).toEqual([]);
-    expect((await logIn(TEST_LOGIN.username, TEST_LOGIN.password)).status).toBe(200);
+    expect((await logIn('sam', 'wrong-password')).status).toBe(401);
+  });
+
+  it('unlocks only the IPv4 address that the admin gives', async () => {
+    await lockOut(ATTACKER);
+    await lockOut('192.168.1.67');
+
+    await asAdmin('/api/settings/logins/unlock', { address: ATTACKER });
+
+    expect((await logIn('sam', 'wrong-password')).status).toBe(401);
+    expect((await logIn('sam', 'wrong-password', '192.168.1.67')).status).toBe(429);
   });
 
   it('lists a user that is locked on all addresses, and unlocks it', async () => {
@@ -89,6 +101,7 @@ describe('login settings routes', () => {
 
     expect(res.status).toBe(200);
     expect(((await res.json()) as LoginsReport).lockedUsers).toEqual([]);
+    expect((await logIn('sam', 'wrong-password', '192.168.3.1')).status).toBe(401);
   });
 
   it('refuses an unlock with no address', async () => {
