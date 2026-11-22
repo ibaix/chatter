@@ -73,8 +73,9 @@ interface LockedComputersPanelProps {
 function LockedComputersPanel({ locked, limits, onUnlock }: LockedComputersPanelProps) {
   const now = Date.now();
   const description =
-    `After ${limits.maxWrongPasswords} wrong passwords for one user, a computer must wait ${limits.lockMinutes} min ` +
-    'to try that user again. You can unlock it now.';
+    `After ${limits.maxWrongPasswords} wrong passwords for one user in ${limits.lockMinutes} min, ` +
+    'a computer must wait to try that user again. ' +
+    `The wait ends ${limits.lockMinutes} min after the first wrong password. You can unlock the computer now.`;
   return (
     <Panel title="Locked computers" description={description}>
       {locked.length === 0 ? (
@@ -120,8 +121,11 @@ interface LockedUsersPanelProps {
 
 function LockedUsersPanel({ locked, limits, onUnlock }: LockedUsersPanelProps) {
   const now = Date.now();
-  const description = `After ${limits.maxWrongPasswordsForUser} wrong passwords for one user from all computers, ` +
-    `nobody can log in as that user for ${limits.lockMinutes} min. You can unlock the user now.`;
+  const description =
+    `After ${limits.maxWrongPasswordsForUser} wrong passwords for one user from all computers in ${limits.lockMinutes} min, ` +
+    'nobody can log in as that user. ' +
+    `The lock ends ${limits.lockMinutes} min after the first wrong password. ` +
+    'Browsers that are logged in still work. You can unlock the user now.';
   return (
     <Panel title="Locked users" description={description}>
       {locked.length === 0 ? (

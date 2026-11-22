@@ -76,10 +76,12 @@ describe('LoginsTab', () => {
   it('tells the limits of a computer and of a user', async () => {
     await renderTab(report());
     expect(screen.getByText(
-      'After 10 wrong passwords for one user, a computer must wait 15 min to try that user again. You can unlock it now.',
+      'After 10 wrong passwords for one user in 15 min, a computer must wait to try that user again. ' +
+      'The wait ends 15 min after the first wrong password. You can unlock the computer now.',
     )).toBeInTheDocument();
     expect(screen.getByText(
-      'After 30 wrong passwords for one user from all computers, nobody can log in as that user for 15 min. You can unlock the user now.',
+      'After 30 wrong passwords for one user from all computers in 15 min, nobody can log in as that user. ' +
+      'The lock ends 15 min after the first wrong password. Browsers that are logged in still work. You can unlock the user now.',
     )).toBeInTheDocument();
   });
 
