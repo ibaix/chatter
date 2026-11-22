@@ -47,7 +47,9 @@ describe('POST /api/machine/:id/tools/sync', () => {
     const res = await sync();
 
     expect(res.status).toBe(502);
-    expect(await errorOf(res)).toContain('No reply');
+    expect(await res.json()).toEqual({
+      error: 'The machine did not send its tool table: No reply', outcome: 'failed', toolSync: { ...TOOL_SYNC, error: 'No reply' },
+    });
   });
 
   it('refuses a second request within 30 seconds, and tells when to try again', async () => {
@@ -57,7 +59,9 @@ describe('POST /api/machine/:id/tools/sync', () => {
 
     expect(res.status).toBe(429);
     expect(res.headers.get('Retry-After')).toBe('12');
-    expect(await errorOf(res)).toContain('12 seconds');
+    expect(await res.json()).toEqual({
+      error: 'Chatter read the tool table a short time ago. Try again in 12 seconds.', outcome: 'too-soon', retryAfterSeconds: 12,
+    });
   });
 
   it('refuses a request while a read runs, or when the machine is not connected', async () => {
@@ -67,9 +71,9 @@ describe('POST /api/machine/:id/tools/sync', () => {
     const offline = await sync();
 
     expect(busy.status).toBe(409);
-    expect(await errorOf(busy)).toContain('runs now');
+    expect(await busy.json()).toEqual({ error: expect.stringContaining('runs now'), outcome: 'busy' });
     expect(offline.status).toBe(409);
-    expect(await errorOf(offline)).toContain('not connected');
+    expect(await offline.json()).toEqual({ error: expect.stringContaining('not connected'), outcome: 'not-connected' });
   });
 
   it('tells when the address changed during the read', async () => {
@@ -78,7 +82,7 @@ describe('POST /api/machine/:id/tools/sync', () => {
     const res = await sync();
 
     expect(res.status).toBe(409);
-    expect(await errorOf(res)).toContain('address of the machine changed');
+    expect(await res.json()).toEqual({ error: expect.stringContaining('address of the machine changed'), outcome: 'address-changed' });
   });
 
   it('gives 404 for a machine that is not there, and 400 with the reason for a machine type with no tool table', async () => {

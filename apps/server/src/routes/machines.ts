@@ -35,18 +35,29 @@ export function machineRoutes(poller: HardwarePoller) {
     })
 
     // Read the tool table now. Each user who can see the machine can ask: the read changes nothing on the machine.
+    // Each error has the outcome, so the screen can tell when the error no longer applies.
     .post('/machine/:id/tools/sync', async c => {
       const result = await poller.syncTools(c.req.param('id'));
       switch (result.outcome) {
         case 'synced': return c.json({ toolSync: result.toolSync }, 200);
-        case 'failed': return c.json({ error: `The machine did not send its tool table: ${result.toolSync.error}`, toolSync: result.toolSync }, 502);
+        case 'failed':
+          return c.json({ error: `The machine did not send its tool table: ${result.toolSync.error}`, outcome: result.outcome, toolSync: result.toolSync }, 502);
         case 'too-soon':
           c.header('Retry-After', String(result.retryAfterSeconds));
-          return c.json({ error: `Chatter read the tool table a short time ago. Try again in ${result.retryAfterSeconds} seconds.` }, 429);
-        case 'busy': return c.json({ error: 'A read of the tool table runs now. Wait until it is done.' }, 409);
-        case 'not-connected': return c.json({ error: 'The machine is not connected. Chatter can read its tool table when it is online.' }, 409);
-        case 'address-changed': return c.json({ error: 'The address of the machine changed during the read. Press Sync again to read the tools at the new address.' }, 409);
-        case 'not-supported': return c.json({ error: 'This machine type has no tool table to read.' }, 400);
+          return c.json({
+            error: `Chatter read the tool table a short time ago. Try again in ${result.retryAfterSeconds} seconds.`,
+            outcome: result.outcome,
+            retryAfterSeconds: result.retryAfterSeconds,
+          }, 429);
+        case 'busy': return c.json({ error: 'A read of the tool table runs now. Wait until it is done.', outcome: result.outcome }, 409);
+        case 'not-connected':
+          return c.json({ error: 'The machine is not connected. Chatter can read its tool table when it is online.', outcome: result.outcome }, 409);
+        case 'address-changed':
+          return c.json({
+            error: 'The address of the machine changed during the read. Press Sync again to read the tools at the new address.',
+            outcome: result.outcome,
+          }, 409);
+        case 'not-supported': return c.json({ error: 'This machine type has no tool table to read.', outcome: result.outcome }, 400);
         case 'not-found': return notFound(c);
       }
     })
