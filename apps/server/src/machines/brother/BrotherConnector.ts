@@ -537,7 +537,10 @@ export class BrotherConnector extends BaseMachineConnector {
     return this.startToolSync('manual');
   }
 
-  /** Resolves when no tool read runs */
+  /**
+   * Resolves when no tool read runs. A test seam: only tests call it. They use it to wait for an automatic tool read,
+   * because poll() starts that read and does not give its promise. A test of a Sync awaits requestToolSync() instead.
+   */
   async toolSyncEnded(): Promise<void> {
     await this.runningToolSync;
   }
