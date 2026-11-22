@@ -1,8 +1,10 @@
 name: Pi update helper
 
-# Runs the shell tests of the update helper on the Pi (tools/pi-image/in-pi/update-chatter.sh) and the
-# round trip with the release script. npm test does not run them: they need Linux tools and run in a
-# Debian container (tools/pi-image/test/in-linux.sh). The runner has Docker.
+# Runs the shell tests of the Pi card: the update helper on the Pi (tools/pi-image/in-pi/update-chatter.sh),
+# the round trip with the release script, and the scripts that build the card. npm test does not run them.
+# The helper tests need Linux tools and run in a Debian container (tools/pi-image/test/in-linux.sh).
+# The other tests run on the runner, which has Docker. A guardrail test (tools/guardrails) fails when
+# a tools/pi-image/test/*.test.sh file is not named in a workflow.
 # The paths are the helper, its tests, the release script and the files that the round trip reads,
 # and the status contract in packages/shared.
 
@@ -43,10 +45,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Test the update helper and the round trip
+      - name: Test the update helper, the round trip, and the card folders
         run: |
           tools/pi-image/test/in-linux.sh \
             tools/pi-image/test/update-chatter-check.test.sh \
             tools/pi-image/test/update-chatter-install.test.sh \
             tools/pi-image/test/update-chatter-recover.test.sh \
-            tools/pi-image/test/update-file-round-trip.test.sh
+            tools/pi-image/test/update-chatter-diagnostics.test.sh \
+            tools/pi-image/test/update-file-round-trip.test.sh \
+            tools/pi-image/test/customize-update.test.sh
+
+      # Each script runs, also when one before it fails, so the log shows all the failures
+      - name: Test the card build scripts and the update folder mounts
+        run: |
+          status=0
+          for test_script in \
+            tools/pi-image/test/build-version.test.sh \
+            tools/pi-image/test/imager-list.test.sh \
+            tools/pi-image/test/load-images.test.sh \
+            tools/pi-image/test/update-mounts.test.sh; do
+            echo "==> $test_script"
+            "$test_script" || status=1
+          done
+          exit "$status"
