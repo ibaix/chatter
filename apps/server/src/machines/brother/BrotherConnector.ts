@@ -473,8 +473,8 @@ export class BrotherConnector extends BaseMachineConnector {
   }
 
   /**
-   * The tool table: the tool in each pot, with its offsets and name. A poll can read the pots and the tool data
-   * at different times, so the table is made from the last reply of each.
+   * The tool table: the tool in each pot, with its offsets and name, from the ATC reply and the tool data reply
+   * of the last tool read. With no ATC command, it has no pots.
    */
   private updateToolTable(): void {
     this.toolTable = {};

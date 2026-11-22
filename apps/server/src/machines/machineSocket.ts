@@ -1,10 +1,11 @@
 import type net from 'net';
 
 /**
- * TCP keepalive starts after 15 s with no traffic. A poll every 2 s keeps the connection busy, so the probes
- * go only when no poll runs: in the backoff of a failing machine (10 to 60 s), or while a poll waits.
- * Then a connection that is dead (a cable pulled, a machine turned off, a router that forgot it) gives an error,
- * not a silent wait. 15 s is less than the 30 s and 60 s backoff steps, so the probes come before the next poll.
+ * TCP keepalive sends its first probe after 15 s with no traffic on an open connection. With the default poll
+ * every 2 s, a connection is never idle for so long, so no probe goes: the time limit of each command finds a
+ * dead connection. The probes help only on an open connection with no traffic for 15 s or more, for example
+ * with a poll interval longer than 15 s. Then a dead connection (a cable pulled, a machine turned off, a router
+ * that forgot it) gives an error before the next command, not a silent wait.
  * The time between probes and their count are the defaults of the operating system.
  */
 export const KEEPALIVE_DELAY_MS = 15_000;
