@@ -47,16 +47,21 @@ export class ToolSyncTracker {
   private lastAttemptAt: number | null = null;
   private lastManualAt: number | null = null;
   private error: string | null = null;
-  private running = false;
+  private runningNow = false;
+
+  /** True from started() until ended() or abandoned(). The connector reads it, so it keeps no copy of this fact. */
+  get running(): boolean {
+    return this.runningNow;
+  }
 
   started(now: number, trigger: 'auto' | 'manual'): void {
-    this.running = true;
+    this.runningNow = true;
     if (trigger === 'manual') this.lastManualAt = now;
   }
 
   /** `error` is null for a good read */
   ended(now: number, error: string | null): void {
-    this.running = false;
+    this.runningNow = false;
     this.lastAttemptAt = now;
     this.error = error;
     if (error === null) this.lastSyncAt = now;
@@ -67,7 +72,7 @@ export class ToolSyncTracker {
    * A Sync whose read was abandoned does not count in the limit of 30 seconds, so the user can press Sync again.
    */
   abandoned(trigger: 'auto' | 'manual'): void {
-    this.running = false;
+    this.runningNow = false;
     if (trigger === 'manual') this.lastManualAt = null;
   }
 

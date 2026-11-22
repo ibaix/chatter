@@ -120,8 +120,11 @@ export class BrotherConnector extends BaseMachineConnector {
   private readonly toolSync = new ToolSyncTracker();
   /** The state poll that runs now, so a tool read waits for it. One operation at a time uses the connection. */
   private runningPoll: Promise<void> | null = null;
-  /** The tool read that runs now. A state poll does not use the connection while it runs. */
-  private runningToolSync: Promise<ToolSyncResult> | null = null;
+  /**
+   * The last tool read that started, for toolSyncEnded() only. Whether a tool read runs is in the tracker
+   * (toolSync.running): a state poll does not use the connection while one runs.
+   */
+  private lastToolSync: Promise<ToolSyncResult> | null = null;
   /**
    * True during the planned reconnect, from the orderly close until the new connect ends. The status says connected
    * then, because Chatter closed the connection on purpose. If the new connect fails, the machine shows offline.
@@ -345,7 +348,7 @@ export class BrotherConnector extends BaseMachineConnector {
    * and is a good poll. After a good poll that finds the machine idle, it can start a tool read (see ToolSyncTracker).
    */
   async poll(): Promise<BrotherMachineStatus> {
-    if (this.runningToolSync) return this.getStatus();
+    if (this.toolSync.running) return this.getStatus();
     this.clearErrors();
     this.timings.startPoll();
     const run = this.pollMachine();
@@ -380,14 +383,13 @@ export class BrotherConnector extends BaseMachineConnector {
    * because poll() starts that read and does not give its promise. A test of a Sync awaits requestToolSync() instead.
    */
   async toolSyncEnded(): Promise<void> {
-    await this.runningToolSync;
+    await this.lastToolSync;
   }
 
   private startToolSync(trigger: 'auto' | 'manual'): Promise<ToolSyncResult> {
     this.toolSync.started(Date.now(), trigger);
-    const run = this.syncTools(trigger).finally(() => { this.runningToolSync = null; });
-    this.runningToolSync = run;
-    return run;
+    this.lastToolSync = this.syncTools(trigger);
+    return this.lastToolSync;
   }
 
   /**

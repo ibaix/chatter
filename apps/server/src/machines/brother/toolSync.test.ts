@@ -89,6 +89,20 @@ describe('ToolSyncTracker', () => {
     expect(tracker.state().running).toBe(true);
   });
 
+  it('runs from started() until ended() or abandoned()', () => {
+    const tracker = new ToolSyncTracker();
+    expect(tracker.running).toBe(false);
+
+    tracker.started(START, 'auto');
+    expect(tracker.running).toBe(true);
+    tracker.ended(START + 1000, null);
+    expect(tracker.running).toBe(false);
+
+    tracker.started(START + 2000, 'manual');
+    tracker.abandoned('manual');
+    expect(tracker.running).toBe(false);
+  });
+
   it('keeps the time of the last good read and the error of the last read', () => {
     const tracker = new ToolSyncTracker();
     tracker.started(START, 'auto');
