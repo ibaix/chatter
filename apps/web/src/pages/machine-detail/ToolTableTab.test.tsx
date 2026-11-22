@@ -79,6 +79,18 @@ describe('ToolTableTab sync', () => {
     expect(screen.getByText(SYNCED_TEXT)).toBeInTheDocument();
   });
 
+  it('removes the error of a Sync when a newer status of the server comes', async () => {
+    syncTools.mockRejectedValue(new Error('Could not read the tool table'));
+    const { rerender } = renderTab(SYNCED);
+    fireEvent.click(screen.getByRole('button', { name: 'Sync' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not read the tool table');
+
+    rerender(<ToolTableTab machineId="m1" toolTable={TOOLS} hasPocketInfo spindleTool={undefined} toolSync={syncedAt('2026-11-21T08:20:00.000Z')} />);
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Synced 08:20 AM')).toBeInTheDocument();
+  });
+
   it('shows a later status of the server with an error, not the older result of the Sync', async () => {
     syncTools.mockResolvedValue(syncedAt('2026-11-21T08:10:00.000Z'));
     const { rerender } = renderTab(SYNCED);

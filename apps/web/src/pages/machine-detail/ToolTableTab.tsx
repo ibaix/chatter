@@ -31,7 +31,8 @@ function newerState(fromStatus: ToolSyncState, fromSync: ToolSyncState | null): 
 /** When Chatter read the tool table, and the Sync button that reads it now */
 function ToolSyncBar({ machineId, toolSync }: { machineId: string; toolSync: ToolSyncState }) {
   const [syncing, setSyncing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  /** The error of the last Sync, and the last read of the server when the Sync started */
+  const [error, setError] = useState<{ text: string; serverAttemptAt: string | null } | null>(null);
   const [fromSync, setFromSync] = useState<ToolSyncState | null>(null);
   const state = newerState(toolSync, fromSync);
   const running = syncing || state.running;
@@ -42,13 +43,15 @@ function ToolSyncBar({ machineId, toolSync }: { machineId: string; toolSync: Too
     try {
       setFromSync(await syncTools(machineId));
     } catch (err) {
-      setError(errorMessageOf(err, 'Could not read the tool table'));
+      setError({ text: errorMessageOf(err, 'Could not read the tool table'), serverAttemptAt: toolSync.lastAttemptAt });
     } finally {
       setSyncing(false);
     }
   };
 
-  const shownError = error ?? state.error;
+  // A newer read of the server replaces the error of the Sync
+  const syncError = error && error.serverAttemptAt === toolSync.lastAttemptAt ? error.text : null;
+  const shownError = syncError ?? state.error;
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-zinc-800 px-4 py-3 text-zinc-200">
       <span>{running ? 'Syncing…' : state.lastSyncAt ? `Synced ${timeOf(state.lastSyncAt)}` : 'Not synced yet'}</span>
