@@ -15,6 +15,8 @@ const log = createLogger('auth');
  */
 
 export const DEVICE_KEY_BYTES = 32;
+/** The name of the key file in the data folder */
+export const DEVICE_KEY_FILE = 'device-key';
 const DEVICE_ID_BYTES = 16;
 /** Changes when the form of the cookie changes, so an old cookie is not read the wrong way */
 const SIGNATURE_LABEL = 'chatter-device-v1';
