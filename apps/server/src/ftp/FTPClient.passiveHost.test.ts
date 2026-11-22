@@ -96,11 +96,13 @@ interface FakeMachineOptions {
   supportsEpsv?: boolean;
   /** The PASV reply has no parentheses around the address and the port */
   bareAddress?: boolean;
+  /** The text of the PASV reply, made from the port of the data listener. It replaces the usual reply. */
+  pasvReplyFor?: (dataPort: number) => string;
 }
 
 /** A decoy listens at the host of the PASV reply only when that host is on this computer */
 async function startFakeMachine({
-  controlHost = CONTROL_HOST, pasvReplyHost = PASV_REPLY_HOST, supportsEpsv = false, bareAddress = false
+  controlHost = CONTROL_HOST, pasvReplyHost = PASV_REPLY_HOST, supportsEpsv = false, bareAddress = false, pasvReplyFor
 }: FakeMachineOptions = {}): Promise<FakeMachine> {
   const dataSockets: net.Socket[] = [];
   const dataWaiters: Array<(socket: net.Socket) => void> = [];
@@ -123,7 +125,7 @@ async function startFakeMachine({
   if (pasvReplyHost === PASV_REPLY_HOST) await listen(decoyServer, dataPort, pasvReplyHost);
 
   const address = `${pasvReplyHost.replaceAll('.', ',')},${Math.floor(dataPort / 256)},${dataPort % 256}`;
-  const pasvReply = `227 Entering Passive Mode ${bareAddress ? address : `(${address})`}`;
+  const pasvReply = pasvReplyFor?.(dataPort) ?? `227 Entering Passive Mode ${bareAddress ? address : `(${address})`}`;
   const epsvReply = supportsEpsv ? `229 Entering Extended Passive Mode (|||${dataPort}|)` : '500 Not supported';
   const nextDataSocket = () => new Promise<net.Socket>(resolve => {
     const socket = dataSockets.shift();
@@ -296,5 +298,92 @@ describe('basic-ftp data connection with a PASV reply that names another host (a
 
     expect(machine.dataConnections).toBe(0);
     expect(connectHosts()).toEqual([NAT_CONTROL_HOST]);
+  });
+});
+
+// The address bytes of these replies are not the machine. The client must use only the port, and connect only to the machine.
+describe('FTPClient with a PASV reply that is not usual', () => {
+  let machine: FakeMachine | undefined;
+  let connectHosts: () => string[];
+
+  beforeEach(() => {
+    connectHosts = recordConnectHosts();
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await machine?.close();
+    machine = undefined;
+  });
+
+  async function clientFor(pasvReplyFor: (dataPort: number) => string): Promise<FTPClient> {
+    machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, pasvReplyFor });
+    return new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort });
+  }
+
+  function expectOnlyControlHost(): void {
+    expect(machine?.decoyConnections).toBe(0);
+    expect(new Set(connectHosts())).toEqual(new Set([NAT_CONTROL_HOST]));
+  }
+
+  const highByte = (port: number) => Math.floor(port / 256);
+  const lowByte = (port: number) => port % 256;
+
+  const refusedReplies = [
+    { name: 'a reply with no numbers', reply: () => '227 Entering Passive Mode', error: 'Chatter cannot read the port in the PASV reply' },
+    { name: 'a reply with port 0', reply: () => '227 Entering Passive Mode (192,0,2,1,0,0)', error: 'The PASV reply gives port 0' },
+  ];
+
+  it.each(refusedReplies)('refuses $name in a download, and opens no data connection', async ({ reply, error }) => {
+    const ftpClient = await clientFor(reply);
+
+    await expect(ftpClient.downloadFile('O1000', new PassThrough())).rejects.toThrow(error);
+
+    expect(machine?.dataConnections).toBe(0);
+    expectOnlyControlHost();
+  });
+
+  it.each(refusedReplies)('refuses $name in a basic-ftp list, and opens no data connection', async ({ reply, error }) => {
+    const ftpClient = await clientFor(reply);
+
+    await expect(ftpClient.listFiles('/')).rejects.toThrow(error);
+
+    expect(machine?.dataConnections).toBe(0);
+    expectOnlyControlHost();
+  });
+
+  // basic-ftp keeps only the low 8 bits of each port byte, so these replies give the port of the data listener.
+  // For example, 300 gives 44 and -17 gives 239.
+  const acceptedReplies = [
+    {
+      name: 'a port byte above 255',
+      reply: (port: number) => `227 Entering Passive Mode (192,0,2,1,${highByte(port) + 256},${lowByte(port)})`,
+    },
+    {
+      name: 'signed port bytes',
+      reply: (port: number) => `227 Entering Passive Mode (10,0,0,1,${highByte(port) - 256},${lowByte(port) - 256})`,
+    },
+  ];
+
+  it.each(acceptedReplies)('downloads with $name, over a connection to the machine host only', async ({ reply }) => {
+    const ftpClient = await clientFor(reply);
+    const destination = new PassThrough();
+    const text = collectText(destination);
+
+    await ftpClient.downloadFile('O1000', destination);
+
+    expect(text()).toBe(PROGRAM_TEXT);
+    expect(machine?.dataConnections).toBe(1);
+    expectOnlyControlHost();
+  });
+
+  it.each(acceptedReplies)('lists a folder through basic-ftp with $name, over a connection to the machine host only', async ({ reply }) => {
+    const ftpClient = await clientFor(reply);
+
+    const files = await ftpClient.listFiles('/');
+
+    expect(files.map(file => file.name)).toEqual(['O1000', 'O2000']);
+    expect(machine?.dataConnections).toBe(1);
+    expectOnlyControlHost();
   });
 });
