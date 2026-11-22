@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router';
 import { useNow } from '../../hooks/useNow';
 import { machineStateOf } from '../../machines/machineStatus';
 import { SUPPORTED_MACHINE_TYPES, type Machine, type MachineUpdate } from '../../types';

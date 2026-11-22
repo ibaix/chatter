@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 import { useCan } from '../../components/CurrentUser';
 import type { Machine, MachineUpdate } from '../../types';
 import { AlertRulesSection } from './AlertRulesSection';
