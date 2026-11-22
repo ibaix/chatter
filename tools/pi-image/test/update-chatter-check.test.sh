@@ -206,6 +206,77 @@ test_too_little_space_is_refused() {
   check "too little free space: no work files stay" work_files_are_gone
 }
 
+sum_of_sizes() {
+  local total=0 file
+  for file in "$@"; do total=$((total + $(stat --format %s "$file"))); done
+  echo "$total"
+}
+
+data_bytes_in_volume() {
+  du --summarize --bytes "$fake/volumes/chatter_chatterbox-data" | cut -f 1
+}
+
+# The space that the install needs, as the helper counts it: 3 times each image file (the loaded image), the data,
+# the 200 MB reserve, and the extracted files. The helper deletes the copy of the update file, so the copy does not count.
+space_for_install_of() {
+  local dir="$1" images extracted copy
+  images="$(sum_of_sizes "$dir/chatter.tar.gz" "$dir/victoria-metrics.tar.gz" "$dir/vmalert.tar.gz")"
+  extracted="$(sum_of_sizes "$dir"/{chatter.tar.gz,victoria-metrics.tar.gz,vmalert.tar.gz,docker-compose.yml,rules.yml})"
+  copy="$(stat --format %s "$inbox/chatter-update.tar")"
+  echo $((3 * images + $(data_bytes_in_volume) + 200 * 1024 * 1024 + extracted - copy))
+}
+
+last_step_in_log() {
+  steps_in_log | awk '{ print $NF }'
+}
+
+# The data is large (a sparse 1 GB file), so the install needs more space than the copy step.
+test_too_little_space_for_the_install_is_refused() {
+  local dir needed
+  set_up
+  truncate --size 1G "$(data_file big.db)"
+  dir="$(put_update_file)"
+  needed="$(space_for_install_of "$dir")"
+  check "the test needs more space for the install than for the copy (size + 200 MB)" \
+    test "$needed" -gt $(($(stat --format %s "$inbox/chatter-update.tar") + 200 * 1024 * 1024))
+  FAKE_FREE_BYTES=$((needed - 1)) send_request check
+  check "1 byte less than the install needs: refused" status_is refused
+  check "1 byte less than the install needs: the reason is the space" reason_has "space"
+  check "1 byte less than the install needs: the copy step passed, the space step refused" \
+    test "$(last_step_in_log)" = space
+  check "1 byte less than the install needs: no work files stay" work_files_are_gone
+
+  set_up
+  truncate --size 1G "$(data_file big.db)"
+  dir="$(put_update_file)"
+  FAKE_FREE_BYTES="$(space_for_install_of "$dir")" send_request check
+  check "exactly the space that the install needs: ready" status_is ready
+}
+
+# The extracted files come next to the copy, so they need their size and the reserve while the check works.
+# A correct file is always larger than its extracted files, so only a signed size that is too large fails here.
+# The data is small, so the install needs less space than the extracted files.
+test_too_little_space_for_the_extracted_files_is_refused() {
+  local dir size extracted free
+  set_up
+  rm -r "$(data_file focas)"
+  dir="$(make_payload "$NEW_VERSION")"
+  write_manifest "$dir" "$NEW_VERSION"
+  size="$(stat --format %s "$dir/rules.yml")"
+  sed -i "s/^\(file rules.yml [0-9a-f]*\) $size$/\1 $((size + 1000000000))/" "$dir/manifest.txt"
+  sign_manifest "$dir"
+  pack_into_inbox "$dir"
+  extracted=$(($(sum_of_sizes "$dir"/{chatter.tar.gz,victoria-metrics.tar.gz,vmalert.tar.gz,docker-compose.yml,rules.yml}) + 1000000000))
+  free=$((extracted + 200 * 1024 * 1024 - 1))
+  check "the test has enough space for the copy and for the install, with the signed sizes" \
+    test "$(stat --format %s "$inbox/chatter-update.tar")" -lt "$free" -a $(($(space_for_install_of "$dir") + 1000000000)) -le "$free"
+  FAKE_FREE_BYTES="$free" send_request check
+  check "1 byte less than the signed sizes and the reserve: refused for space, before the checksums" \
+    reason_has "space"
+  check "1 byte less than the signed sizes and the reserve: the space step refused" test "$(last_step_in_log)" = space
+  check "1 byte less than the signed sizes and the reserve: no work files stay" work_files_are_gone
+}
+
 test_a_too_large_file_is_refused() {
   set_up
   truncate --size 629145601 "$inbox/chatter-update.tar"
@@ -645,6 +716,8 @@ test_an_older_version_is_refused
 test_a_bad_version_text_is_refused
 test_the_wrong_processor_type_is_refused
 test_too_little_space_is_refused
+test_too_little_space_for_the_install_is_refused
+test_too_little_space_for_the_extracted_files_is_refused
 test_a_too_large_file_is_refused
 test_a_symlink_or_fifo_as_the_update_file_is_refused
 test_a_symlink_or_fifo_as_the_request_does_nothing
