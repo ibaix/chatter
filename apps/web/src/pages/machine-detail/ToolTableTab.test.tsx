@@ -34,6 +34,13 @@ describe('ToolTableTab sync', () => {
     expect(screen.getByRole('button', { name: 'Sync' })).toBeEnabled();
   });
 
+  it('tells when Chatter reads the tool table', () => {
+    renderTab(NOT_SYNCED, {});
+
+    expect(screen.getByText('Chatter reads the tool table when the machine runs no program and the last read is more than 10 minutes old.'))
+      .toBeInTheDocument();
+  });
+
   it('gives the time of the last good read', () => {
     renderTab(SYNCED);
 

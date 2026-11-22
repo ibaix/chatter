@@ -56,7 +56,7 @@ function ToolSyncBar({ machineId, toolSync }: { machineId: string; toolSync: Too
     <div className="flex flex-wrap items-center gap-3 border-b border-zinc-800 px-4 py-3 text-zinc-200">
       <span>{running ? 'Syncing…' : state.lastSyncAt ? `Synced ${timeOf(state.lastSyncAt)}` : 'Not synced yet'}</span>
       <Button size="sm" onClick={() => void sync()} disabled={running}>Sync</Button>
-      <span className="text-xs">Chatter reads the tool table when the machine runs no program, at most each 10 minutes.</span>
+      <span className="text-xs">Chatter reads the tool table when the machine runs no program and the last read is more than 10 minutes old.</span>
       {shownError && !running && <span role="alert" className="w-full text-alarm-soft">{shownError}</span>}
     </div>
   );
