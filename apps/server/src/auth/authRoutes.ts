@@ -58,6 +58,15 @@ export function currentSession(c: Context, auth: Auth): UserSession | null {
   return token === undefined ? null : auth.sessionOf(token);
 }
 
+/**
+ * The login of a request after requireLogin, as a key: the session of a browser, or the user of a program.
+ * A program sends its password with each request (HTTP Basic), so it has no session.
+ */
+export function loginOf(c: Context<LoggedInEnv>, auth: Auth): string {
+  const session = currentSession(c, auth);
+  return session ? `session:${session.id}` : `user:${c.var.user.username}`;
+}
+
 /** The browser that logs in, as the list of sessions shows it */
 function clientOf(c: Context, origin: RequestOrigin): SessionClient {
   return { userAgent: c.req.header('User-Agent') ?? '', address: origin.address };
