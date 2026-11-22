@@ -4,8 +4,8 @@ import { PERMISSIONS, ROLES, roleCan, type Permission, type Role } from './roles
 /** What each role can do, written out from the spec. A change to a role must change this table too. */
 const SPEC: Record<Role, Permission[]> = {
   viewer: [],
-  operator: ['read-files', 'send-files'],
-  admin: ['read-files', 'send-files', 'manage-machines', 'manage-chatter', 'manage-updates'],
+  operator: ['read-files', 'send-files', 'sync-tools'],
+  admin: ['read-files', 'send-files', 'sync-tools', 'manage-machines', 'manage-chatter', 'manage-updates'],
 };
 
 describe('roleCan', () => {
