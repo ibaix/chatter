@@ -7,10 +7,7 @@ import { attachmentHeader, downloadAsStream } from './fileDownload.js';
 import { requirePermission } from '../auth/authRoutes.js';
 import { checkedForm, checkedQuery } from './checks.js';
 import { notFound } from './responses.js';
-import { batchUploadForm, filePathQuery, fileTreeQuery, uploadForm } from './schemas.js';
-import { createLogger } from '../logging/logger.js';
-
-const log = createLogger('files');
+import { batchUploadForm, filePathQuery, fileTreeQuery, readTargetNames, uploadForm } from './schemas.js';
 
 const ROOT_FOLDER = '.';
 const DEFAULT_TREE_DEPTH = '2';
@@ -47,17 +44,6 @@ async function receive(file: File): Promise<ReceivedFile> {
   return { name: file.name, content: Buffer.from(await file.arrayBuffer()) };
 }
 
-/** Bad JSON is logged and ignored, so each file keeps its own name */
-function parseTargetNames(targetNames: string | undefined): Record<string, string> {
-  if (!targetNames) return {};
-  try {
-    return JSON.parse(targetNames);
-  } catch (error) {
-    log.warn('Could not read targetNames, so each file keeps its own name', { error });
-    return {};
-  }
-}
-
 function joinRemotePath(basePath: string, fileName: string): string {
   return basePath.endsWith('/') ? `${basePath}${fileName}` : `${basePath}/${fileName}`;
 }
@@ -65,7 +51,8 @@ function joinRemotePath(basePath: string, fileName: string): string {
 function planUpload(files: ReceivedFile[], basePath: string, targetNames: Record<string, string>): UploadPlan {
   const plan: UploadPlan = { files: [], fileAt: {}, targetNameAt: {} };
   for (const file of files) {
-    const targetName = targetNames[file.name] || file.name;
+    // Object.hasOwn, so that a file named "constructor" does not get a name from the object prototype
+    const targetName = (Object.hasOwn(targetNames, file.name) && targetNames[file.name]) || file.name;
     const remotePath = joinRemotePath(basePath, targetName);
     // The FTP client may report the path with or without the first "/"
     for (const key of [remotePath, remotePath.replace(/^\//, '')]) {
@@ -152,7 +139,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
       if (!connector) return notFound(c);
 
       const received = await Promise.all(files.map(receive));
-      const plan = planUpload(received, basePath, parseTargetNames(targetNames));
+      const plan = planUpload(received, basePath, readTargetNames(targetNames));
       const results = await connector.uploadFiles(plan.files, isTrueText(overwrite));
       await recordSentFiles(machineId, plan, results.success.map(sent => sent.remotePath));
 

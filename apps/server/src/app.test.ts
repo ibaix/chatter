@@ -1119,6 +1119,131 @@ describe('API Routes', () => {
     });
   });
 
+  // FTP sends each path in a command line. A line break in a path would add a second command, for example DELE.
+  describe('control characters in a path on the machine', () => {
+    const CONTROL_CHARACTER_ERROR = 'A path or a file name on the machine cannot have a line break or another control character';
+    const BAD_PATHS = ['O1000\r\nDELE O1234', 'O1000\nDELE O1234', 'O1000\0', 'O1000\tX', 'O1000\x7f'];
+
+    async function brotherConnector() {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      return { id: machine.id, connector: poller.getConnector(machine.id)! };
+    }
+
+    function batchForm({ basePath = '/PRG', targetNames, fileName = 'a.nc' }: { basePath?: string; targetNames?: string; fileName?: string }) {
+      const form = new FormData();
+      form.append('files', new File(['G00'], fileName));
+      form.append('basePath', basePath);
+      if (targetNames !== undefined) form.append('targetNames', targetNames);
+      return form;
+    }
+
+    it.each(BAD_PATHS)('refuses a download of %j and sends nothing to the machine', async path => {
+      const { id, connector } = await brotherConnector();
+      const downloadFile = vi.spyOn(connector, 'downloadFile');
+
+      const res = await call('GET', `/api/machine/${id}/files/download?path=${encodeURIComponent(path)}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
+      expect(downloadFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a file list of a folder with a line break', async () => {
+      const { id, connector } = await brotherConnector();
+      const getFileTree = vi.spyOn(connector, 'getFileTree');
+
+      const res = await call('GET', `/api/machine/${id}/files?path=${encodeURIComponent('/PRG\r\nDELE O1234')}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
+      expect(getFileTree).not.toHaveBeenCalled();
+    });
+
+    it('refuses a delete with a line break', async () => {
+      const { id, connector } = await brotherConnector();
+      const deleteFile = vi.spyOn(connector, 'deleteFile');
+
+      const res = await call('DELETE', `/api/machine/${id}/files?path=${encodeURIComponent('O1000\r\nDELE O1234')}`);
+
+      expect(res.status).toBe(400);
+      expect(deleteFile).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['path', { path: 'O1000\r\nDELE O1234' }],
+      ['targetName', { path: '/PRG/O1000.NC', targetName: 'O1000\r\nDELE O1234' }],
+    ])('refuses an upload with a line break in the %s', async (_field, fields: Record<string, string>) => {
+      const { id, connector } = await brotherConnector();
+      const uploadFile = vi.spyOn(connector, 'uploadFile');
+      const form = uploadForm({ withFile: true });
+      for (const [name, value] of Object.entries(fields)) form.append(name, value);
+
+      const res = await call('POST', `/api/machine/${id}/files/upload`, form);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
+      expect(uploadFile).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a basePath with a line break', { basePath: '/PRG\r\nDELE O1234' }, CONTROL_CHARACTER_ERROR],
+      ['a name on the machine with a line break', { targetNames: JSON.stringify({ 'a.nc': 'O1\r\nDELE O1234' }) }, CONTROL_CHARACTER_ERROR],
+      ['a file name key with a line break', { targetNames: JSON.stringify({ 'a.nc\r\nDELE O1234': 'O1' }) }, CONTROL_CHARACTER_ERROR],
+      ['targetNames that are null', { targetNames: 'null' }, 'targetNames must give a name on the machine for each file name'],
+      ['targetNames that are a list', { targetNames: '["O1"]' }, 'targetNames must give a name on the machine for each file name'],
+      ['a name on the machine that is not text', { targetNames: '{"a.nc":5}' }, 'targetNames must give a name on the machine for each file name'],
+      ['targetNames that are not JSON', { targetNames: '{a.nc' }, 'targetNames must be JSON text'],
+    ])('refuses a batch upload with %s', async (_case, fields, error) => {
+      const { id, connector } = await brotherConnector();
+      const uploadFiles = vi.spyOn(connector, 'uploadFiles');
+
+      const res = await call('POST', `/api/machine/${id}/files/upload-batch`, batchForm(fields));
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(error);
+      expect(uploadFiles).not.toHaveBeenCalled();
+    });
+
+    // The file name goes into the path when targetNames gives no other name. filename* can hold an encoded line break.
+    it('refuses a batch upload of a file whose own name has a line break', async () => {
+      const { id, connector } = await brotherConnector();
+      const uploadFiles = vi.spyOn(connector, 'uploadFiles');
+      const body = [
+        '--x', `Content-Disposition: form-data; name="files"; filename*=utf-8''O1%0D%0ADELE%20O1234`, '', 'G00',
+        '--x', 'Content-Disposition: form-data; name="basePath"', '', '/PRG',
+        '--x--', '',
+      ].join('\r\n');
+
+      const res = await send(`/api/machine/${id}/files/upload-batch`, {
+        method: 'POST', headers: { 'Content-Type': 'multipart/form-data; boundary=x' }, body,
+      });
+
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe(CONTROL_CHARACTER_ERROR);
+      expect(uploadFiles).not.toHaveBeenCalled();
+    });
+
+    it('sends a file named "constructor" with its own name, not a name from the object prototype', async () => {
+      const { id, connector } = await brotherConnector();
+      const uploadFiles = vi.spyOn(connector, 'uploadFiles').mockResolvedValue({ success: [], failed: [] });
+
+      const res = await call('POST', `/api/machine/${id}/files/upload-batch`, batchForm({ fileName: 'constructor', targetNames: '{}' }));
+
+      expect(res.status).toBe(200);
+      expect(uploadFiles).toHaveBeenCalledWith([{ remotePath: '/PRG/constructor', source: Buffer.from('G00') }], false);
+    });
+
+    it('keeps a path with spaces, dots and letters outside ASCII', async () => {
+      const { id, connector } = await brotherConnector();
+      const downloadFile = vi.spyOn(connector, 'downloadFile').mockImplementation(async (_path, output) => { output.end(); });
+
+      const res = await send(`/api/machine/${id}/files/download?path=${encodeURIComponent('/PRG/Teil A €.v2.nc')}`);
+
+      expect(res.status).toBe(200);
+      expect(downloadFile).toHaveBeenCalledWith('/PRG/Teil A €.v2.nc', expect.anything());
+    });
+  });
+
   describe('GET /api/events', () => {
     it('sends the full machine list first', async () => {
       await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
