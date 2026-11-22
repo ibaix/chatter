@@ -83,7 +83,8 @@ Chatter limits the messages of each channel. A service such as `ntfy.sh` stops a
 - **10 messages in 10 minutes.** When more alerts come, Chatter puts them in one "And N more alerts" message.
 - **One event message in 15 minutes.** A channel gets at most one **Program ended** message for each machine in 15 minutes. Chatter keeps the other program ends of that machine for the next message. That message tells the count, for example "This happened 20 times since 9:02 AM." A program that runs for 15 minutes or longer still gets one message for each end. The other messages of the channel do not wait for it.
 - **A service that asks Chatter to wait.** Some services answer "too many requests" (429) or "busy" (503) with a time to wait. Chatter then sends no message to the channel until that time, for at most 24 hours. Without a time, Chatter uses its usual waits. See [How it works](#how-it-works).
-- **No flood after a wait.** When a channel can send again and more than 4 messages wait, Chatter sends one summary message and then only the newest 3 messages. The summary tells how many alerts Chatter could not send, for each alert and machine, for example "Chatter could not send 14 alerts while the channel was blocked: Program ended on Haas ST-10 (12), In alarm on Haas VF-2 (2)."
+- **End the wait early.** When you fixed the problem, for example with an ntfy access token, you do not have to wait. Save the channel, or click **Send test**. Each save ends the wait, also a save with no change. A test ends the wait only when the service takes the test message. If the problem is still there, the service refuses the next message, and the channel waits again.
+- **No flood after a wait.** When a channel can send again and more than 4 messages waited, Chatter sends one summary message and then only the newest 3 messages. This also occurs when you end the wait early. The summary tells how many alerts Chatter could not send, for each alert and machine, for example "Chatter could not send 14 alerts while the channel was blocked: Program ended on Haas ST-10 (12), In alarm on Haas VF-2 (2)."
 
 The message list shows each message that Chatter did not send alone as **Grouped**, with the reason.
 
@@ -351,7 +352,7 @@ The panel shows the newest 10 messages. To see 10 more, click **Show more** at t
 | **Failed:** The bot cannot write to the chat | Send a message to the bot, or add the bot to the group or channel. For a channel, make the bot an admin. |
 | **Failed:** ntfy refused the access | The access token is wrong, or it cannot write to the topic. Make a new token in ntfy. |
 | **Failed:** ntfy answered 404 | The **Server** address is wrong. Do not put the topic in it. |
-| **Waiting** or **Failed:** ntfy.sh allows 250 messages each day | The daily limit of `ntfy.sh` for your network is used. Chatter waits until the reset, and then sends a summary. Other computers on the same network, for example a second Chatter, use the same limit. Use an access token of an `ntfy.sh` account, or your own ntfy server. See [The daily limit of ntfy.sh](#ntfy-app). |
+| **Waiting** or **Failed:** ntfy.sh allows 250 messages each day | The daily limit of `ntfy.sh` for your network is used. Chatter waits until the reset, and then sends a summary. Other computers on the same network, for example a second Chatter, use the same limit. Use an access token of an `ntfy.sh` account, or your own ntfy server. Then save the channel, and Chatter sends again at once. See [The daily limit of ntfy.sh](#ntfy-app). |
 | **Waiting:** Too many requests to ntfy | Chatter sent too many requests in a short time. Chatter waits the time that ntfy tells, and tries again. After **Send test**, wait for that time. |
 | The ntfy app gets no message, but Chatter shows **Sent** | The app subscribes to another topic or another server. Check the topic name in the app. |
 | **Failed:** Chatter could not reach Apprise | Apprise API is not running, or the address is wrong. Chatter tries again for 24 hours. |
@@ -377,7 +378,7 @@ A **Program ended** alert gets only its start message. Chatter sends no end mess
 
 Sometimes the service does not answer, or answers that it is busy. Then Chatter tries the message again.
 The waits are 30 seconds, 1 minute, 2 minutes, and 5 minutes, then 10 minutes each time. After 24 hours, the message fails.
-When the service tells a longer wait (the `Retry-After` header), Chatter uses that wait, for at most 24 hours.
+When the service tells a longer wait (the `Retry-After` header, or the wait in a Telegram answer), Chatter uses that wait, for at most 24 hours.
 While Chatter waits, the channel gets no other message. So Chatter does not send more requests to a service that refused one.
 It does not try again when the service refuses the message, for example for a wrong login, because the next try fails too.
 **Send test** sends one time only. It does not try again.
