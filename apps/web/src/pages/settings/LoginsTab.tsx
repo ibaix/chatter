@@ -2,7 +2,9 @@ import { cn } from '@toolpath/ui';
 import {
   fetchLoginsReport,
   unlockComputer,
+  unlockUser,
   type LockedComputer,
+  type LockedUser,
   type LoginResult,
   type LoginsReport,
   type LoginTry,
@@ -30,29 +32,33 @@ const RESULT_TONES: Record<LoginResult, StatusTone> = {
   locked: 'bad',
 };
 
-function resultLabel(result: LoginResult, { maxWrongPasswords }: Limits): string {
-  const labels: Record<LoginResult, string> = {
-    'logged-in': 'Logged in',
-    'password-changed': 'Changed the password',
-    'wrong-password': 'Wrong password',
-    'no-such-user': 'No such user',
-    locked: `Locked: ${maxWrongPasswords} wrong passwords`,
-  };
-  return labels[result];
-}
+const RESULT_LABELS: Record<LoginResult, string> = {
+  'logged-in': 'Logged in',
+  'password-changed': 'Changed the password',
+  'wrong-password': 'Wrong password',
+  'no-such-user': 'No such user',
+  // A computer or a user can be locked, and each has a different limit
+  locked: 'Locked: too many wrong passwords',
+};
 
-/** The computers that must wait after too many wrong passwords, and the last password tries */
+/** The computers and the users that must wait after too many wrong passwords, and the last password tries */
 export function LoginsTab() {
   const { report, loadError, changeError, isChanging, change } = useServerReport(fetchLoginsReport);
   if (loadError || !report) return <ReportPending loadError={loadError} />;
 
   const unlock = (address: string) => change(() => unlockComputer(address));
+  const unlockLockedUser = (username: string) => change(() => unlockUser(username));
   const refresh = () => change(fetchLoginsReport);
   return (
     <>
       {changeError && <Notice tone="error" title={changeError} />}
       <LockedComputersPanel locked={report.locked} limits={report.limits} onUnlock={isChanging ? undefined : unlock} />
-      <RecentTriesPanel tries={report.tries} limits={report.limits} onRefresh={refresh} isRefreshing={isChanging} />
+      <LockedUsersPanel
+        locked={report.lockedUsers}
+        limits={report.limits}
+        onUnlock={isChanging ? undefined : unlockLockedUser}
+      />
+      <RecentTriesPanel tries={report.tries} onRefresh={refresh} isRefreshing={isChanging} />
     </>
   );
 }
@@ -67,7 +73,8 @@ interface LockedComputersPanelProps {
 function LockedComputersPanel({ locked, limits, onUnlock }: LockedComputersPanelProps) {
   const now = Date.now();
   const description =
-    `After ${limits.maxWrongPasswords} wrong passwords, a computer must wait ${limits.lockMinutes} min. You can unlock it now.`;
+    `After ${limits.maxWrongPasswords} wrong passwords for one user, a computer must wait ${limits.lockMinutes} min ` +
+    'to try that user again. You can unlock it now.';
   return (
     <Panel title="Locked computers" description={description}>
       {locked.length === 0 ? (
@@ -75,7 +82,7 @@ function LockedComputersPanel({ locked, limits, onUnlock }: LockedComputersPanel
       ) : (
         <ul className="m-0 list-none p-0">
           {locked.map(computer => (
-            <LockedComputerRow key={computer.address} computer={computer} now={now} onUnlock={onUnlock} />
+            <LockedComputerRow key={`${computer.address} ${computer.username}`} computer={computer} now={now} onUnlock={onUnlock} />
           ))}
         </ul>
       )}
@@ -104,6 +111,46 @@ function LockedComputerRow({ computer, now, onUnlock }: LockedComputerRowProps) 
   );
 }
 
+interface LockedUsersPanelProps {
+  locked: LockedUser[];
+  limits: Limits;
+  /** Not set while a change runs */
+  onUnlock?: (username: string) => void;
+}
+
+function LockedUsersPanel({ locked, limits, onUnlock }: LockedUsersPanelProps) {
+  const now = Date.now();
+  const description = `After ${limits.maxWrongPasswordsForUser} wrong passwords for one user from all computers, ` +
+    `nobody can log in as that user for ${limits.lockMinutes} min. You can unlock the user now.`;
+  return (
+    <Panel title="Locked users" description={description}>
+      {locked.length === 0 ? (
+        <p className="m-0 px-5 py-4 text-zinc-200">No user is locked.</p>
+      ) : (
+        <ul className="m-0 list-none p-0">
+          {locked.map(user => (
+            <li
+              key={user.username}
+              className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-zinc-800 px-5 py-3 first:border-t-0"
+            >
+              <span className="font-semibold">{user.username}</span>
+              <span className="flex-1 text-zinc-200">Locked on all computers for {minutesLeft(user.until, now)} min more</span>
+              <Button
+                size="sm"
+                disabled={!onUnlock}
+                onClick={() => onUnlock?.(user.username)}
+                aria-label={`Unlock user ${user.username}`}
+              >
+                Unlock
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
 /** Rounded up, so the last seconds show as "1 min" and not "0 min" */
 function minutesLeft(until: string, now: number): number {
   return Math.max(1, Math.ceil((Date.parse(until) - now) / MINUTE_MS));
@@ -111,12 +158,11 @@ function minutesLeft(until: string, now: number): number {
 
 interface RecentTriesPanelProps {
   tries: LoginTry[];
-  limits: Limits;
   onRefresh: () => void;
   isRefreshing: boolean;
 }
 
-function RecentTriesPanel({ tries, limits, onRefresh, isRefreshing }: RecentTriesPanelProps) {
+function RecentTriesPanel({ tries, onRefresh, isRefreshing }: RecentTriesPanelProps) {
   const now = Date.now();
   const refreshButton = (
     <Button size="sm" variant="quiet" onClick={onRefresh} disabled={isRefreshing}>
@@ -145,7 +191,7 @@ function RecentTriesPanel({ tries, limits, onRefresh, isRefreshing }: RecentTrie
             <tbody>
               {tries.map((loginTry, index) => (
                 // Two tries can have the same time, user and address, so the place in the list is the key
-                <LoginTryRow key={index} loginTry={loginTry} limits={limits} now={now} />
+                <LoginTryRow key={index} loginTry={loginTry} now={now} />
               ))}
             </tbody>
           </table>
@@ -155,14 +201,14 @@ function RecentTriesPanel({ tries, limits, onRefresh, isRefreshing }: RecentTrie
   );
 }
 
-function LoginTryRow({ loginTry, limits, now }: { loginTry: LoginTry; limits: Limits; now: number }) {
+function LoginTryRow({ loginTry, now }: { loginTry: LoginTry; now: number }) {
   return (
     <tr className={ROW}>
       <td className={cn(CELL, 'text-zinc-200')}>{formatAgo(loginTry.at, now)}</td>
       <td className={CELL}>{loginTry.username}</td>
       <td className={cn(CELL, 'font-mono')}>{loginTry.address}</td>
       <td className={CELL}>
-        <StatusDot tone={RESULT_TONES[loginTry.result]}>{resultLabel(loginTry.result, limits)}</StatusDot>
+        <StatusDot tone={RESULT_TONES[loginTry.result]}>{RESULT_LABELS[loginTry.result]}</StatusDot>
       </td>
     </tr>
   );

@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fetchLoginsReport, unlockComputer, type LoginsReport } from '../../api/settings';
+import { fetchLoginsReport, unlockComputer, unlockUser, type LoginsReport } from '../../api/settings';
 import { LoginsTab } from './LoginsTab';
 
-vi.mock('../../api/settings', () => ({ fetchLoginsReport: vi.fn(), unlockComputer: vi.fn() }));
+vi.mock('../../api/settings', () => ({ fetchLoginsReport: vi.fn(), unlockComputer: vi.fn(), unlockUser: vi.fn() }));
 
 const ATTACKER = '192.168.1.66';
 const inMinutes = (minutes: number) => new Date(Date.now() + minutes * 60_000 - 1000).toISOString();
@@ -31,6 +31,7 @@ async function renderTab(loaded: LoginsReport) {
 describe('LoginsTab', () => {
   beforeEach(() => {
     vi.mocked(unlockComputer).mockReset();
+    vi.mocked(unlockUser).mockReset();
   });
 
   it('shows a locked computer with the user it tried and the time left', async () => {
@@ -42,7 +43,7 @@ describe('LoginsTab', () => {
     await renderTab(report());
     const rows = within(screen.getByRole('table')).getAllByRole('row');
 
-    expect(rows[1]).toHaveTextContent('Locked: 10 wrong passwords');
+    expect(rows[1]).toHaveTextContent('Locked: too many wrong passwords');
     expect(rows[2]).toHaveTextContent('admin');
     expect(rows[2]).toHaveTextContent('Logged in');
   });
@@ -55,6 +56,42 @@ describe('LoginsTab', () => {
 
     expect(unlockComputer).toHaveBeenCalledWith(ATTACKER);
     expect(await screen.findByText('No computer is locked.')).toBeInTheDocument();
+  });
+
+  it('shows each user that a computer is locked for', async () => {
+    const locked = [
+      { address: ATTACKER, username: 'sam', until: inMinutes(14) },
+      { address: ATTACKER, username: 'admin', until: inMinutes(10) },
+    ];
+    // React warns on the console when two rows have the same key
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await renderTab(report({ locked }));
+
+    expect(screen.getByText('Tried user "sam" · locked for 14 min more')).toBeInTheDocument();
+    expect(screen.getByText('Tried user "admin" · locked for 10 min more')).toBeInTheDocument();
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it('tells the limits of a computer and of a user', async () => {
+    await renderTab(report());
+    expect(screen.getByText(
+      'After 10 wrong passwords for one user, a computer must wait 15 min to try that user again. You can unlock it now.',
+    )).toBeInTheDocument();
+    expect(screen.getByText(
+      'After 30 wrong passwords for one user from all computers, nobody can log in as that user for 15 min. You can unlock the user now.',
+    )).toBeInTheDocument();
+  });
+
+  it('shows a user that is locked on all computers, and unlocks it', async () => {
+    await renderTab(report({ lockedUsers: [{ username: 'admin', until: inMinutes(12) }] }));
+    expect(screen.getByText('Locked on all computers for 12 min more')).toBeInTheDocument();
+    vi.mocked(unlockUser).mockResolvedValue(report({ lockedUsers: [] }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock user admin' }));
+
+    expect(unlockUser).toHaveBeenCalledWith('admin');
+    expect(await screen.findByText('No user is locked.')).toBeInTheDocument();
   });
 
   it('shows the reason when the unlock fails', async () => {
@@ -73,7 +110,7 @@ describe('LoginsTab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 
-    expect(await screen.findByText('Locked: 10 wrong passwords')).toBeInTheDocument();
+    expect(await screen.findByText('Locked: too many wrong passwords')).toBeInTheDocument();
   });
 
   it('shows the reason when the list cannot load', async () => {
