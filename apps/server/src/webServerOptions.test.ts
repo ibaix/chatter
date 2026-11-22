@@ -38,6 +38,8 @@ describe('startWebServer', () => {
   beforeEach(async () => {
     const app = new Hono()
       .post('/short', async c => c.text(`got ${await c.req.text()}`))
+      // Like a refused login: the reply goes before the route reads the body
+      .post('/early', c => c.json({ error: 'Log in first' }, 401))
       .post('/long', allowLongUpload, async c => c.text(`got ${await c.req.text()}`))
       // Like the live machine events: the request has no body, and the reply stays open longer than the limit
       .get('/quiet', () => new Response(new ReadableStream({
@@ -110,6 +112,25 @@ describe('startWebServer', () => {
     expect(socket.destroyed).toBe(false);
     socket.write('defghij');
     expect(await reply).toContain('got abcdefghij');
+  });
+
+  it('stops the time limit when the reply ends, though the body is not all in', async () => {
+    const log = captureLog();
+    try {
+      const socket = connect(port, '127.0.0.1');
+      await once(socket, 'connect');
+      const reply = replyOf(socket);
+      // Node keeps the connection open for some seconds after the reply, and it reads the rest of the body
+      socket.write('POST /early HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nabc');
+      await wait(LIMIT_MS * 3);
+
+      expect(socket.destroyed).toBe(false);
+      expect(log.lines.filter(line => line.level === 'warn')).toEqual([]);
+      socket.destroy();
+      expect(await reply).toMatch(/^HTTP\/1\.1 401 /);
+    } finally {
+      log.restore();
+    }
   });
 
   it('does not close a reply that stays open longer than the limit after the request is in', async () => {
