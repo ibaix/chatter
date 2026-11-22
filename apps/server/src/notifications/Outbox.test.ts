@@ -292,6 +292,18 @@ describe('Outbox', () => {
       ]);
     });
 
+    it('keeps the hold when a test fails, and sends the summary when the hold ends', () => {
+      holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M'), named('E', 'M')]);
+
+      outbox.keepTestResult('phones', TEST, { ok: false, error: 'ntfy: the limit is used.' }, NOW + 10 * MINUTE);
+
+      expect(outbox.takeDue(NOW + 10 * MINUTE)).toEqual([]);
+      expect(sendAll(NOW + 60 * MINUTE)).toEqual([
+        'Chatter could not send 3 alerts while the channel was blocked: A on M (1), B on M (1), In alarm on Haas VF-2 (1). Open Chatter to see them.',
+        'started C', 'started D', 'started E',
+      ]);
+    });
+
     it(`sends a summary of 2 alerts and the newest ${BACKLOG_SEND}, when exactly ${BACKLOG_SEND + 2} messages wait`, () => {
       holdWith([named('A', 'M'), named('B', 'M'), named('C', 'M'), named('D', 'M')]);
 
