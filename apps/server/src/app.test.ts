@@ -8,6 +8,8 @@ import type { UserAccounts } from './auth/userAccounts.js';
 import { loggedInAuth } from './auth/testSupport.js';
 import { SESSION_COOKIE } from './auth/authRoutes.js';
 import { hasLongTimeLimit } from './webServerOptions.js';
+import { captureLog } from './logging/testSupport.js';
+import { UNEXPECTED_ERROR_TEXT } from './routes/responses.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
@@ -1088,7 +1090,21 @@ describe('API Routes', () => {
       const res = await call('GET', `/api/machine/${machine.id}/files/download?path=/PRG/O1000.NC`);
 
       expect(res.status).toBe(500);
+      // The reply of the machine tells the user what went wrong
       expect(res.body.error).toContain('550');
+    });
+
+    it('keeps the text of the machine when it refuses to delete a file, and logs it', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'deleteFile').mockRejectedValue(new Error('FTP delete error: 550 Permission denied'));
+      const log = captureLog();
+
+      const res = await call('DELETE', `/api/machine/${machine.id}/files?path=/PRG/O1000.NC`);
+      log.restore();
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('FTP delete error: 550 Permission denied');
+      expect(log.text('error')).toContain('550 Permission denied');
     });
 
     it('uploads one file and records it', async () => {
@@ -1102,6 +1118,22 @@ describe('API Routes', () => {
       expect(res.status).toBe(200);
       expect(uploadFile).toHaveBeenCalledWith('/PRG/O1000.NC', Buffer.from('test'), true);
       expect(recordUpload).toHaveBeenCalledWith(machine.id, 'test.nc', 'test.nc', '/PRG/O1000.NC', 'test');
+    });
+
+    it('replies with success when the file is on the machine but the upload history cannot be saved, and logs the error', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'uploadFile').mockResolvedValue();
+      vi.mocked(recordUpload).mockRejectedValueOnce(new Error('SQLITE_FULL: database or disk is full'));
+      const log = captureLog();
+
+      const res = await call('POST', `/api/machine/${machine.id}/files/upload`, uploadForm({ withFile: true, path: '/PRG/O1000.NC' }));
+      log.restore();
+
+      expect(res.status).toBe(200);
+      expect(res.body.path).toBe('/PRG/O1000.NC');
+      expect(JSON.stringify(res.body)).not.toContain('SQLITE');
+      expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
+      expect(log.text('error')).toContain('SQLITE_FULL');
     });
 
     it('returns 409 when the file already exists', async () => {
@@ -1140,6 +1172,25 @@ describe('API Routes', () => {
         { filename: 'a.nc', targetName: 'O0100.NC', path: '/PRG/O0100.NC' },
         { filename: 'b.nc', targetName: 'b.nc', path: '/PRG/b.nc' },
       ]);
+    });
+
+    it('replies with the sent files when the upload history cannot be saved, and logs the error', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'uploadFiles').mockResolvedValue({ success: [{ remotePath: '/PRG/a.nc' }], failed: [] });
+      vi.mocked(recordUpload).mockRejectedValueOnce(new Error('SQLITE_FULL: database or disk is full'));
+      const form = new FormData();
+      form.append('files', new File(['G00'], 'a.nc'));
+      form.append('basePath', '/PRG');
+      const log = captureLog();
+
+      const res = await call('POST', `/api/machine/${machine.id}/files/upload-batch`, form);
+      log.restore();
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toEqual([{ filename: 'a.nc', targetName: 'a.nc', path: '/PRG/a.nc' }]);
+      expect(JSON.stringify(res.body)).not.toContain('SQLITE');
+      expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
+      expect(log.text('error')).toContain('SQLITE_FULL');
     });
 
     it('returns 400 when no files are given', async () => {
@@ -1322,13 +1373,17 @@ describe('API Routes', () => {
   });
 
   describe('errors that a route does not catch', () => {
-    it('returns 500 with the error text', async () => {
+    it('returns 500 with a general text, and logs the error', async () => {
       vi.spyOn(poller, 'getMachines').mockImplementation(() => { throw new Error('database is locked'); });
+      const log = captureLog();
 
       const res = await call('GET', '/api/machines');
+      log.restore();
 
       expect(res.status).toBe(500);
-      expect(res.body.error).toBe('database is locked');
+      expect(res.body.error).toBe(UNEXPECTED_ERROR_TEXT);
+      expect(log.text('error')).toContain('database is locked');
+      expect(log.text('error')).toContain('path=/api/machines');
     });
 
     it('returns 400 for a JSON body that is not an object', async () => {
@@ -1343,16 +1398,20 @@ describe('API Routes', () => {
       expect(body.error).toContain('must be an object');
     });
 
-    it('returns 400 for a body that is not JSON', async () => {
+    it('returns 400 for a body that is not JSON, and logs no error', async () => {
+      const log = captureLog();
+
       const res = await send('/api/machines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{not json',
       });
+      log.restore();
 
       const body = await res.json() as { error: string };
       expect(res.status).toBe(400);
       expect(body.error).toContain('Malformed JSON');
+      expect(log.text('error')).toBe('');
     });
   });
 
