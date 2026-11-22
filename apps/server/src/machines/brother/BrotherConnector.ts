@@ -607,13 +607,12 @@ export class BrotherConnector extends BaseMachineConnector {
   }
 
   /**
-   * Connect when not connected, and make the planned reconnect when it is time. False when the connect fails.
-   * It runs at the start of a poll, so no command waits for a reply during the planned reconnect.
+   * Connect, or make the planned reconnect when it is time. False when the connect fails. Call it only when
+   * mustConnect() is true. It runs at the start of a poll, so no command waits for a reply during the planned reconnect.
    */
   private async connectForPoll(): Promise<boolean> {
     const planned = this.plannedReconnectDue();
     if (planned) await this.closeInOrder();
-    if (this.socket && this.connected) return true;
 
     if (!(await this.ensureConnected())) return false;
     if (planned) {
