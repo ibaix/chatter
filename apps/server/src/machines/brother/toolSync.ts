@@ -1,4 +1,4 @@
-import type { ToolSyncOutcome, ToolSyncState } from '@local-chatter/shared';
+import type { ToolSyncOutcome, ToolSyncState } from '../../types/index.js';
 
 /**
  * The tool table (ATC) and the tool data (TOLN) are big replies, like a file, and they change only when an
