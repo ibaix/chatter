@@ -152,16 +152,18 @@ export class StatePeriodStore {
   /**
    * For a history restore: the periods wait in a temporary table (only this connection sees it), then commit()
    * adds them to the machine in one transaction. A period that the machine already has (the same kind and start) is
-   * not added again, so a second restore adds nothing. Only one restore at a time can use it.
+   * not added again, so a second restore adds nothing. Each period of one restore is added, also two with the same
+   * kind and start. Only one restore at a time can use it.
    */
   startRestore(): PeriodRestore {
     const { db } = this;
     db.exec(`
       DROP TABLE IF EXISTS temp.restored_periods;
-      CREATE TEMP TABLE restored_periods (kind TEXT NOT NULL, value TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL,
-        PRIMARY KEY (kind, started_at));
+      CREATE TEMP TABLE restored_periods (kind TEXT NOT NULL, value TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL);
     `);
-    const stage = db.prepare('INSERT OR IGNORE INTO temp.restored_periods (kind, value, started_at, ended_at) VALUES (?, ?, ?, ?)');
+    // Each period of the file, also two with the same kind and start: the database of the machine can have them, and then
+    // the restore gives the same periods, and the counts match the preview
+    const stage = db.prepare('INSERT INTO temp.restored_periods (kind, value, started_at, ended_at) VALUES (?, ?, ?, ?)');
     return {
       add: periods => db.transaction(() => {
         for (const period of periods) stage.run(period.kind, period.value, period.start, period.end);

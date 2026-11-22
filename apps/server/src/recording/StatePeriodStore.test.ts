@@ -89,7 +89,6 @@ describe('StatePeriodStore backup and restore', () => {
       const stage = store.startRestore();
       try {
         stage.add(periods);
-        stage.add(periods);
         return stage.commit('m3', () => {});
       } finally {
         stage.drop();
@@ -101,6 +100,15 @@ describe('StatePeriodStore backup and restore', () => {
     const read = store.read({ machineId: 'm3', from: 0, to: 60 * MINUTE, limit: 10 });
     expect(read.map(period => `${period.kind} ${period.value} ${period.start}-${period.end}`).sort())
       .toEqual(['program O1 1800000-1800000', 'tool 1 0-600000', 'tool 2 600000-900000']);
+  });
+
+  it('adds each restored period, also two with the same kind and start', () => {
+    const store = storeWithPeriods();
+    const stage = store.startRestore();
+    stage.add([{ kind: 'tool', value: '5', start: 0, end: 1 }, { kind: 'tool', value: '6', start: 0, end: 2 }]);
+    expect(stage.commit('m3', () => {})).toEqual({ added: 2, known: 0 });
+    stage.drop();
+    expect(store.read({ machineId: 'm3', from: 0, to: 60 * MINUTE, limit: 10 }).map(period => period.value).sort()).toEqual(['5', '6']);
   });
 
   it('adds nothing when the work in the same step fails', () => {

@@ -739,7 +739,24 @@ describe('HistoryBackup', () => {
       expect(filesLeft()).toEqual([]);
     });
 
-    it('restores a file only into the machine that it was sent for', async () => {
+    it('restores each period of the file, also two with the same kind and start, so the counts match the preview', async () => {
+      // The database does not refuse two such periods, so a machine can have them
+      periods.open(source.id, 'alarm', '1001 DOOR', NOW - 2.5 * HOUR);
+      periods.close(source.id, 'alarm', NOW - 2.5 * HOUR);
+      periods.open(source.id, 'alarm', '1002 AIR', NOW - 2.5 * HOUR);
+      periods.close(source.id, 'alarm', NOW - 2.4 * HOUR);
+      const archive = await backUp();
+      const preview = await receive(archive);
+      expect(preview.counts.periods).toBe(4);
+      expect(await backups.restore(preview.id, target, { alertRules: false }, 'admin')).toMatchObject({ periodsAdded: 4, periodsKnown: 0 });
+      expect(periods.read({ machineId: target.id, from: 0, to: NOW, kind: 'alarm', limit: 10 }).map(period => period.value).sort())
+        .toEqual(['1001 DOOR', '1002 AIR']);
+      const again = await receive(archive);
+      expect(await backups.restore(again.id, target, { alertRules: false }, 'admin')).toMatchObject({ periodsAdded: 0, periodsKnown: 4 });
+      expect(periods.read({ machineId: target.id, from: 0, to: NOW, kind: 'alarm', limit: 10 })).toHaveLength(2);
+    });
+
+        it('restores a file only into the machine that it was sent for', async () => {
       const preview = await receive(await backUp());
       await expect(backups.restore(preview.id, source, { alertRules: false }, 'admin')).rejects.toMatchObject({ status: 404 });
       expect(victoria.importRequests).toBe(0);
