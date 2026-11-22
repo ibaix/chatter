@@ -43,6 +43,13 @@ export const FIRING_UNTIL_SQL = `(CASE WHEN resolved THEN ends_at ELSE ends_at +
  */
 export const VMALERT_LEASE_MS = 60_000;
 
+/**
+ * After a start of Chatter, an alert with a passed end time and no resolve does not end before this time.
+ * vmalert could not send the alert while Chatter was off. It sends each firing alert again at each check (every 15 seconds),
+ * also after its own restart, so this waits 8 checks. A resolve ends an alert at once.
+ */
+export const STARTUP_WAIT_MS = 2 * 60_000;
+
 /** What vmalert has now: GET /api/v1/rules (see VmalertAlertSync) */
 export interface VmalertState {
   /** The alerts that fire now */
@@ -68,8 +75,8 @@ export interface AlertRow {
  * vmalert sends a firing alert again and again. One alert is one row: the same labels and the same start time.
  */
 export class AlertStore {
-  /** `now` is for the first start after the update that adds the "resolved" column */
-  constructor(private readonly db: Database.Database, now = Date.now()) {
+  /** `startedAt` is the start time of Chatter. The first start after the update that adds the "resolved" column also uses it. */
+  constructor(private readonly db: Database.Database, startedAt: number) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS alerts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,7 +90,7 @@ export class AlertStore {
       );
       CREATE INDEX IF NOT EXISTS alerts_ends_at ON alerts (ends_at);
     `);
-    this.addResolvedColumn(now);
+    this.addResolvedColumn(startedAt);
   }
 
   /**
@@ -113,9 +120,9 @@ export class AlertStore {
     return `ends_at <= @now - ${ALERT_END_GRACE_MS}`;
   }
 
-  /** For tests: the alerts are kept in memory only */
-  static inMemory(): AlertStore {
-    return new AlertStore(new Database(':memory:'));
+  /** For tests: the alerts are kept in memory only. With no start time, Chatter started long ago. */
+  static inMemory(startedAt = 0): AlertStore {
+    return new AlertStore(new Database(':memory:'), startedAt);
   }
 
   /**

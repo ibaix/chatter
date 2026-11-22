@@ -84,7 +84,7 @@ async function start(): Promise<void> {
     const stateRecorder = new StatePeriodRecorder(statePeriods);
     poller.addRecorder(stateRecorder);
     // The alerts of vmalert
-    const alerts = new AlertStore(getDb());
+    const alerts = new AlertStore(getDb(), Date.now());
     poller.addRemovalListener(alerts);
     const settings = new SettingsTable(getDb());
     // The messages that go out when an alert starts or ends, for example a text message or a Slack post

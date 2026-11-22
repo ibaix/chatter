@@ -27,7 +27,7 @@ describe('Notifications', () => {
 
   beforeEach(() => {
     db = new Database(':memory:');
-    alerts = new AlertStore(db);
+    alerts = new AlertStore(db, NOW);
     requests = [];
     const fetch = async (url: string | URL | Request, init?: RequestInit) => {
       requests.push({ url: String(url), body: JSON.parse(String(init?.body)) as { text: string } });

@@ -1,15 +1,8 @@
 import type Database from 'better-sqlite3';
-import { ALERT_COLUMNS, type Alert, type AlertRow, FIRING_UNTIL_SQL, toAlert } from '../alerts/AlertStore.js';
+import { ALERT_COLUMNS, type Alert, type AlertRow, FIRING_UNTIL_SQL, STARTUP_WAIT_MS, toAlert } from '../alerts/AlertStore.js';
 
 /** A change older than this sends no message, for example after Chatter was off for a long time */
 export const SILENT_AFTER_MS = 24 * 60 * 60_000;
-
-/**
- * After a start of Chatter, an alert with a passed end time and no resolve does not end before this time.
- * vmalert could not send the alert while Chatter was off. It sends each firing alert again at each check (every 15 seconds),
- * also after its own restart, so this waits 8 checks. A resolve ends an alert at once.
- */
-export const STARTUP_WAIT_MS = 2 * 60_000;
 
 export type AlertChangeKind = 'started' | 'ended';
 

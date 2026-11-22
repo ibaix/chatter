@@ -1,8 +1,8 @@
 import { ALERT_END_GRACE_MS } from '@local-chatter/shared';
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { type Alert, AlertStore } from '../alerts/AlertStore.js';
-import { type AlertChange, AlertChangeFinder, SILENT_AFTER_MS, STARTUP_WAIT_MS } from './AlertChangeFinder.js';
+import { type Alert, AlertStore, STARTUP_WAIT_MS } from '../alerts/AlertStore.js';
+import { type AlertChange, AlertChangeFinder, SILENT_AFTER_MS } from './AlertChangeFinder.js';
 
 const NOW = Date.UTC(2026, 10, 13, 9, 0);
 const MINUTE_MS = 60_000;
@@ -46,7 +46,7 @@ describe('AlertChangeFinder', () => {
 
   beforeEach(() => {
     db = new Database(':memory:');
-    alerts = new AlertStore(db);
+    alerts = new AlertStore(db, NOW);
     found = new ChangeList();
     finder = new AlertChangeFinder(db, found, NOW);
   });
@@ -177,7 +177,7 @@ describe('AlertChangeFinder', () => {
 
   it('reports only the later end of the alerts that were saved before the first start of the finder', () => {
     const olderDb = new Database(':memory:');
-    const olderAlerts = new AlertStore(olderDb);
+    const olderAlerts = new AlertStore(olderDb, NOW);
     olderAlerts.save([anAlert(), anEndedAlert({ name: 'Ended', labels: { alertname: 'Ended' }, endsAt: NOW - MINUTE_MS })], NOW);
     const afterUpdate = new ChangeList();
     const updatedFinder = new AlertChangeFinder(olderDb, afterUpdate, NOW);

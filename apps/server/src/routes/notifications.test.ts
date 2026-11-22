@@ -29,7 +29,7 @@ describe('notification routes', () => {
     adminCookie = parts.cookie;
     sentBodies = [];
     const db = new Database(':memory:');
-    new AlertStore(db);
+    new AlertStore(db, Date.now());
     const fetch = async (_url: string | URL | Request, init?: RequestInit) => {
       sentBodies.push(String(init?.body));
       return new Response(null, { status: 200 });
