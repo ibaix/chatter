@@ -104,7 +104,7 @@ export class Notifications implements MachineRemovalListener {
     const check = this.channels.checkInput(input, savedId);
     if (!check.ok) return check;
     const message = testMessage(this.textOptions());
-    const sent = await sendWithTimeLimit(check, message, { fetch: this.fetch, timeoutMs: SEND_TIMEOUT_MS });
+    const sent = await sendWithTimeLimit(check, message, { fetch: this.fetch, now: this.now, timeoutMs: SEND_TIMEOUT_MS });
     // The browser needs no retry flag: a test is tried one time only
     const result: ChannelTestResult = sent.ok ? sent : { ok: false, error: sent.error };
     if (savedId !== undefined) this.outbox.keepTestResult(savedId, message, result, this.now());

@@ -1,6 +1,7 @@
 import { createLogger } from '../logging/logger.js';
 import type { ChannelForSending } from './ChannelStore.js';
 import type { ChannelType, OutgoingMessage, SendContext, SendResult } from './channels/ChannelType.js';
+import { MAX_HOLD_MS } from './channels/http.js';
 import type { Outbox, OutboxEntry } from './Outbox.js';
 
 const log = createLogger('notifications');
@@ -20,9 +21,6 @@ export function retryWait(attempts: number): number {
   return RETRY_WAITS_MS[Math.min(attempts, RETRY_WAITS_MS.length - 1)];
 }
 
-/** The longest wait that Chatter takes from a service. A wrong Retry-After must not stop a channel for days. */
-export const MAX_HOLD_MS = 24 * 60 * 60_000;
-
 /**
  * The wait before the next try of the channel. The wait of the service (Retry-After) is used when it is longer than the
  * wait of Chatter. A shorter one is not, so a service that always asks for 1 second does not get a request at each round.
@@ -39,7 +37,7 @@ function holdAfter(result: { retryAfterMs?: number }, attempts: number): number 
 export function sendWithTimeLimit(
   { type, values }: Pick<ChannelForSending, 'type' | 'values'>,
   message: OutgoingMessage,
-  { fetch, timeoutMs }: { fetch: SendContext['fetch']; timeoutMs: number },
+  { fetch, now, timeoutMs }: Pick<SendContext, 'fetch' | 'now'> & { timeoutMs: number },
 ): Promise<SendResult> {
   const controller = new AbortController();
   let timer: NodeJS.Timeout | undefined;
@@ -50,7 +48,7 @@ export function sendWithTimeLimit(
     }, type.timeoutMs ?? timeoutMs);
   });
   // The async function turns an error that send throws into a failed promise, so the timer always stops
-  const sent = (async () => type.send(values, message, { fetch, signal: controller.signal }))();
+  const sent = (async () => type.send(values, message, { fetch, now, signal: controller.signal }))();
   return Promise.race([sent, timeUp]).finally(() => clearTimeout(timer));
 }
 
@@ -115,7 +113,7 @@ export class OutboxSender {
       const target = this.channels.forSending(entry.channelId);
       if (!target) return this.fail(entry, null, 'The channel is not there, or this version of Chatter does not know its type.');
       if (!target.channel.enabled) return this.fail(entry, target, 'The channel is off, so Chatter did not send the message.');
-      const result = await sendWithTimeLimit(target, entry.message, { fetch: this.fetch, timeoutMs: this.timeoutMs });
+      const result = await sendWithTimeLimit(target, entry.message, { fetch: this.fetch, now: this.now, timeoutMs: this.timeoutMs });
       this.saveResult(entry, target, result);
     } catch (error) {
       this.recoverFrom(entry, error);

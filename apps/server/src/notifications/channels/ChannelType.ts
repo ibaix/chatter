@@ -29,6 +29,8 @@ export interface SendContext {
   fetch: typeof globalThis.fetch;
   /** Stops the request after the time limit of the sender */
   signal: AbortSignal;
+  /** The clock of the sender, to read a Retry-After date. Without it, the clock of the computer. */
+  now?: () => number;
 }
 
 /**

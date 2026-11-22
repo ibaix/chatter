@@ -29,8 +29,9 @@ export interface Answer {
  * The text of a network failure never has the web address in it, because the address can have a token in it.
  */
 export async function postJson(
-  { fetch, signal }: SendContext, target: string, request: JsonPost, resultOf: (answer: Answer) => SendResult,
+  context: SendContext, target: string, request: JsonPost, resultOf: (answer: Answer) => SendResult,
 ): Promise<SendResult> {
+  const { fetch, signal } = context;
   let response: Response;
   try {
     // A redirect would change the POST to a GET, so Chatter does not follow it
@@ -45,7 +46,7 @@ export async function postJson(
     return networkFailure(error, target);
   }
   const { status } = response;
-  const retryAfterMs = retryAfterOf(response);
+  const retryAfterMs = retryAfterOf(response, context.now?.() ?? Date.now());
   const sent = status >= 200 && status < 300;
   if (request.readJson && !sent) return withWait(resultOf({ status, json: await jsonOf(response), retryAfterMs }), retryAfterMs);
   // Chatter does not read the answer. A failure to close it must not send the message again.
@@ -62,16 +63,23 @@ function withWait(result: SendResult, retryAfterMs: number | undefined): SendRes
   return { ...result, retryAfterMs, error: `${result.error} The service asks Chatter to wait ${durationText(retryAfterMs)}.` };
 }
 
+/** The longest wait that Chatter takes from a service. A wrong Retry-After must not stop a channel for days. */
+export const MAX_HOLD_MS = 24 * 60 * 60_000;
+
 /**
- * The Retry-After header of a 429 or a 503: a number of seconds, or an HTTP date.
- * undefined for another answer, a wrong value, or a time that is not in the future.
+ * The Retry-After header of a 429 or a 503: a number of seconds, or an HTTP date. `now` is the clock of the sender.
+ * undefined for another answer, a wrong value, or a time that is not in the future. At most MAX_HOLD_MS.
  */
-function retryAfterOf(response: Response): number | undefined {
+function retryAfterOf(response: Response, now: number): number | undefined {
   if (response.status !== 429 && response.status !== 503) return undefined;
   const value = response.headers.get('retry-after')?.trim();
   if (!value) return undefined;
-  const milliseconds = /^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
-  return Number.isFinite(milliseconds) && milliseconds > 0 ? milliseconds : undefined;
+  return cappedWait(/^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - now);
+}
+
+/** A wait of a service, at most MAX_HOLD_MS, so the text tells the real wait. undefined when it is not a time in the future. */
+function cappedWait(milliseconds: number): number | undefined {
+  return Number.isFinite(milliseconds) && milliseconds > 0 ? Math.min(milliseconds, MAX_HOLD_MS) : undefined;
 }
 
 /** For example "5 seconds", "12 minutes", or "7 hours and 12 minutes". Each part is rounded up, so Chatter never tells a wait that is too short. */

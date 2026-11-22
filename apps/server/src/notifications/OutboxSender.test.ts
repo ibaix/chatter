@@ -5,7 +5,8 @@ import { configureLogging } from '../logging/logger.js';
 import type { ChannelForSending } from './ChannelStore.js';
 import type { ChannelType, OutgoingMessage, SendContext, SendResult } from './channels/ChannelType.js';
 import { Outbox } from './Outbox.js';
-import { GIVE_UP_AFTER_MS, MAX_HOLD_MS, OutboxSender, retryWait } from './OutboxSender.js';
+import { MAX_HOLD_MS, postJson, statusResult } from './channels/http.js';
+import { GIVE_UP_AFTER_MS, OutboxSender, retryWait } from './OutboxSender.js';
 
 const NOW = Date.UTC(2026, 10, 13, 9, 0);
 const SECOND = 1000;
@@ -165,6 +166,56 @@ describe('OutboxSender', () => {
       await sender.sendDue();
       expect(calls).toHaveLength(2);
       expect(statusOf(second)?.status).toBe('sent');
+    });
+
+    /**
+     * A sender with a channel type that sends with postJson, to a service that always answers 429 with this Retry-After.
+     * `calls` gets each request.
+     */
+    function senderWithRetryAfter(retryAfter: string, calls: string[]): OutboxSender {
+      const type: ChannelType = {
+        id: 'fake', name: 'Fake', fields: [], checkSettings: () => ({ ok: true }),
+        send: (_values, _message, context) => postJson(
+          context, 'Fake', { url: 'https://example.com', body: {} },
+          answer => statusResult(answer.status, { answered: `Fake answered ${answer.status}`, refused: () => 'Refused.' }),
+        ),
+      };
+      const fetch = (async (url: string | URL | Request) => {
+        calls.push(String(url));
+        return new Response(null, { status: 429, headers: { 'retry-after': retryAfter } });
+      }) as typeof globalThis.fetch;
+      return new OutboxSender(outbox, { forSending: () => ({ channel: channel('phones'), type, values: {} }) }, { now: () => now, fetch });
+    }
+
+    it('holds the channel for exactly 24 hours when the Retry-After header of the service asks for much longer', async () => {
+      const calls: string[] = [];
+      const sender = senderWithRetryAfter('999999999', calls);
+      const first = queue();
+      await sender.sendDue();
+
+      expect(statusOf(first)).toMatchObject({ status: 'failed', lastError: 'Fake answered 429: too many requests. The service asks Chatter to wait 24 hours.' });
+      queue();
+      now += MAX_HOLD_MS - 1;
+      await sender.sendDue();
+      expect(calls).toHaveLength(1);
+      now += 1;
+      await sender.sendDue();
+      expect(calls).toHaveLength(2);
+    });
+
+    it('reads the HTTP date of Retry-After with the clock of the sender', async () => {
+      const calls: string[] = [];
+      const sender = senderWithRetryAfter(new Date(NOW + 2 * HOUR).toUTCString(), calls);
+      const first = queue();
+      await sender.sendDue();
+
+      expect(statusOf(first)).toMatchObject({ status: 'waiting', lastError: expect.stringContaining('wait 2 hours.') });
+      now += 2 * HOUR - 1;
+      await sender.sendDue();
+      expect(calls).toHaveLength(1);
+      now += 1;
+      await sender.sendDue();
+      expect(calls).toHaveLength(2);
     });
 
     it('logs the wait', async () => {

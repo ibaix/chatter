@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { type Answer, cutText, durationText, postJson, serviceReason, statusResult } from './http.js';
+import { type Answer, cutText, durationText, MAX_HOLD_MS, postJson, serviceReason, statusResult } from './http.js';
 import { fakeFetch } from './testSupport.js';
 
 const sentOk = () => ({ ok: true as const, detail: 'sent' });
@@ -154,6 +154,30 @@ describe('postJson', () => {
         ok: false, retry: true, retryAfterMs: 30_000,
         error: 'X answered 503. The service is busy or has a problem. The service asks Chatter to wait 30 seconds.',
       });
+    });
+
+    it('gives at most 24 hours, in the wait and in the text, when the service asks for longer', async () => {
+      const result = await postJson(busy(429, '999999999').context(), 'X', { url: 'https://example.com', body: {} }, busyResult);
+
+      expect(result).toEqual({
+        ok: false, retry: true, retryAfterMs: MAX_HOLD_MS, error: 'X answered 429: too many requests. The service asks Chatter to wait 24 hours.',
+      });
+    });
+
+    it('gives at most 24 hours for an HTTP date that is more than 24 hours later', async () => {
+      vi.useFakeTimers({ now: Date.UTC(2026, 10, 13, 9, 0) });
+
+      const result = await postJson(busy(503, 'Mon, 16 Nov 2026 09:00:00 GMT').context(), 'X', { url: 'https://example.com', body: {} }, busyResult);
+
+      expect(result).toMatchObject({ retryAfterMs: MAX_HOLD_MS, error: expect.stringContaining('wait 24 hours.') });
+    });
+
+    it('reads an HTTP date with the clock of the sender, when the sender gives one', async () => {
+      const context = { ...busy(503, 'Fri, 13 Nov 2026 09:00:30 GMT').context(), now: () => Date.UTC(2026, 10, 13, 9, 0) };
+
+      const result = await postJson(context, 'X', { url: 'https://example.com', body: {} }, busyResult);
+
+      expect(result).toMatchObject({ retryAfterMs: 30_000 });
     });
 
     it('gives no wait for a date in the past, a wrong value, or an answer that is not 429 or 503', async () => {
