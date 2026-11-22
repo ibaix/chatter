@@ -732,4 +732,91 @@ describe('MachineHistoryChart', () => {
       expect(screen.getByRole('img', { name: /^Overview of the last hour/ })).toBeInTheDocument();
     });
   });
+
+  describe('undo and redo', () => {
+    const undoButton = () => screen.getByRole('button', { name: 'Previous view' });
+    const redoButton = () => screen.getByRole('button', { name: 'Next view' });
+
+    it('has buttons for the previous and the next view in place of Earlier and Later', async () => {
+      await overviewOfStateView();
+
+      expect(undoButton()).toHaveAttribute('title', 'Previous view');
+      expect(redoButton()).toHaveAttribute('title', 'Next view');
+      expect(screen.queryByRole('button', { name: 'Earlier' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Later' })).not.toBeInTheDocument();
+    });
+
+    it('can go back only after a change, and on only after a go back', async () => {
+      await overviewOfStateView();
+      expect(undoButton()).toBeDisabled();
+      expect(redoButton()).toBeDisabled();
+
+      fireEvent.click(screen.getByRole('button', { name: '1h' }));
+      expect(undoButton()).toBeEnabled();
+      expect(redoButton()).toBeDisabled();
+
+      fireEvent.click(undoButton());
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(undoButton()).toBeDisabled();
+      expect(redoButton()).toBeEnabled();
+
+      fireEvent.click(redoButton());
+      expect(await screen.findByText('What the machine did in the last hour.')).toBeInTheDocument();
+    });
+
+    it('gives back the strip and the zoom after an accepted zoom', async () => {
+      const overview = await overviewOfStateView();
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`);
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+      await screen.findByRole('img', { name: /^Overview from / });
+
+      fireEvent.click(undoButton());
+
+      expect(await screen.findByRole('img', { name: /^Overview of the last 10 minutes/ })).toBeInTheDocument();
+      expect(screen.getByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Clear the zoom' })).toBeInTheDocument();
+    });
+
+    it('goes back before a series of moves in one step', async () => {
+      await overviewOfStateView();
+      scrollHalfARange(-1);
+      drag(chartBody(), 100, 100 + BOX_WIDTH / 2);
+      await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 10 * MINUTE)}.`);
+
+      fireEvent.click(undoButton());
+
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(undoButton()).toBeDisabled();
+    });
+
+    it('loads the time of the previous zoom again, also when the two zooms have the same length', async () => {
+      const overview = await overviewOfStateView();
+      // Two zooms of 2.5 minutes: from 7.5 to 5 minutes ago, then from 5 to 2.5 minutes ago
+      drag(overview, BOX_WIDTH / 4, BOX_WIDTH / 2);
+      await screen.findByText(`What the machine did ${pastText(2.5 * MINUTE, NOW - 5 * MINUTE)}.`);
+      drag(overview, BOX_WIDTH / 2, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(`What the machine did ${pastText(2.5 * MINUTE, NOW - 2.5 * MINUTE)}.`);
+      // The chart loads one more range after the first zoom: up to 2.5 minutes ago
+      const loadsOfFirstZoom = () => vi.mocked(fetchStateTimeline).mock.calls.filter(call => call[2] === NOW - 2.5 * MINUTE).length;
+      await waitFor(() => expect(loadsOfFirstZoom()).toBe(1));
+
+      fireEvent.click(undoButton());
+
+      expect(await screen.findByText(`What the machine did ${pastText(2.5 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
+      await waitFor(() => expect(loadsOfFirstZoom()).toBe(2));
+    });
+
+    it('keeps the history when the user picks another value', async () => {
+      render(<ChartWithMenu machine={testMachine({}, { spindleSpeed: 1200, spindleLoad: 30 })} />);
+      fireEvent.click(screen.getByRole('button', { name: '1h' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Value in the chart: Spindle speed' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Spindle load' }));
+      await screen.findByText('How hard the spindle worked in the last hour.');
+
+      fireEvent.click(undoButton());
+
+      expect(await screen.findByText('How hard the spindle worked in the last 10 minutes.')).toBeInTheDocument();
+    });
+  });
 });

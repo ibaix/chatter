@@ -1,6 +1,6 @@
 import { cn } from '@toolpath/ui';
 import type { CSSProperties, PointerEvent, ReactNode } from 'react';
-import { ChevronLeftIcon, ChevronRightIcon } from '../../components/ui/icons';
+import { RedoIcon, UndoIcon } from '../../components/ui/icons';
 import { timeLabelAnchor, type TimeLabel } from './historyChart';
 
 /** The text of the axis labels of both charts */
@@ -37,25 +37,27 @@ export function ChartTooltip({ style, className, children }: { style: CSSPropert
 const PAN_BUTTON_CLASS =
   'inline-flex min-h-8 items-center gap-1 rounded-md border-0 bg-transparent px-2 font-semibold text-zinc-200 hover:text-zinc-50 disabled:cursor-default disabled:text-zinc-500';
 
-interface PanButtonsProps {
+interface ViewButtonsProps {
+  canUndo: boolean;
+  canRedo: boolean;
   /** False for the live chart: it already ends now */
-  canGoLater: boolean;
-  onEarlier: () => void;
-  onLater: () => void;
+  canGoToNow: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
   onNow: () => void;
 }
 
-/** Buttons that move the time of the chart: back, on, and back to now */
-export function PanButtons({ canGoLater, onEarlier, onLater, onNow }: PanButtonsProps) {
+/** Buttons that change the time of the chart: the previous view, the next view, and back to now */
+export function ViewButtons({ canUndo, canRedo, canGoToNow, onUndo, onRedo, onNow }: ViewButtonsProps) {
   return (
     <div role="group" aria-label="Move in time" className="inline-flex gap-0.5 rounded-lg bg-zinc-950 p-[0.1875rem]">
-      <button type="button" onClick={onEarlier} className={PAN_BUTTON_CLASS} aria-label="Earlier">
-        <ChevronLeftIcon size={16} />
+      <button type="button" onClick={onUndo} disabled={!canUndo} className={PAN_BUTTON_CLASS} aria-label="Previous view" title="Previous view">
+        <UndoIcon size={16} />
       </button>
-      <button type="button" onClick={onLater} disabled={!canGoLater} className={PAN_BUTTON_CLASS} aria-label="Later">
-        <ChevronRightIcon size={16} />
+      <button type="button" onClick={onRedo} disabled={!canRedo} className={PAN_BUTTON_CLASS} aria-label="Next view" title="Next view">
+        <RedoIcon size={16} />
       </button>
-      <button type="button" onClick={onNow} disabled={!canGoLater} className={PAN_BUTTON_CLASS}>
+      <button type="button" onClick={onNow} disabled={!canGoToNow} className={PAN_BUTTON_CLASS}>
         Now
       </button>
     </div>

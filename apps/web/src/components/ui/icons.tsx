@@ -50,12 +50,14 @@ export const ChevronDownIcon = (props: IconProps) => (
   <LineIcon strokeWidth={2} {...props}><path d="M4 6l4 4 4-4" /></LineIcon>
 );
 
-export const ChevronLeftIcon = (props: IconProps) => (
-  <LineIcon strokeWidth={2} {...props}><path d="M10 4l-4 4 4 4" /></LineIcon>
+/** An arrow that turns back to the left: go back to the view before */
+export const UndoIcon = (props: IconProps) => (
+  <LineIcon strokeWidth={2} {...props}><path d="M6 3.5L3 6.5l3 3M3 6.5h6.5a3.5 3.5 0 0 1 0 7H7" /></LineIcon>
 );
 
-export const ChevronRightIcon = (props: IconProps) => (
-  <LineIcon strokeWidth={2} {...props}><path d="M6 4l4 4-4 4" /></LineIcon>
+/** The undo arrow, mirrored: go on to the next view */
+export const RedoIcon = (props: IconProps) => (
+  <LineIcon strokeWidth={2} {...props}><path d="M10 3.5l3 3-3 3M13 6.5H6.5a3.5 3.5 0 0 0 0 7H9" /></LineIcon>
 );
 
 export const CheckIcon = (props: IconProps) => (

@@ -267,6 +267,18 @@ describe('MachineDetailPage', () => {
       expect(within(chart()).getByText(/from .* to /, { selector: 'span' }).textContent).toBe(movedText);
     });
 
+    it('keeps the view history of the chart when the user opens another tab and comes back', () => {
+      renderPage();
+      fireEvent.click(within(within(chart()).getByRole('group', { name: 'Time range' })).getByRole('button', { name: '7d' }));
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Dashboard' }));
+      fireEvent.click(within(chart()).getByRole('button', { name: 'Previous view' }));
+
+      expect(within(chart()).getByRole('button', { name: '10m' })).toHaveAttribute('aria-pressed', 'true');
+      expect(within(chart()).getByRole('button', { name: 'Next view' })).toBeEnabled();
+    });
+
     it('keeps the time range of the report when the user opens another tab and comes back', () => {
       renderPage({ address: '/machine/m1?tab=report' });
       fireEvent.click(within(screen.getByRole('region', { name: 'Report' })).getByRole('button', { name: '7d' }));
