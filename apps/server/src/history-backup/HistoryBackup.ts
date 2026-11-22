@@ -38,6 +38,7 @@ const PERIOD_BATCH = 1000;
 const CLOCK_SKEW_MS = 60 * 60_000;
 /** The rest of the file name when the machine name has no letter or digit */
 const FALLBACK_NAME = 'machine';
+const DISK_FULL_MESSAGE = 'The disk of Chatter is full. Make free space, then try again.';
 
 /** The machine of a backup or a restore */
 export interface BackupMachine {
@@ -649,15 +650,26 @@ async function extractParts(upload: string, folder: string, requireFreeBytes: (b
         const file = path.join(folder, localName(name));
         const out = createWriteStream(file, { flags: 'wx' });
         open.add(out);
+        // A write error (for example a full disk) can come at any time, also between two writes. It stops the next step.
+        let failure: Error | null = null;
+        out.on('error', (error: Error) => {
+          failure ??= error;
+        });
         const hash = createHash('sha256');
+        const wait = async (event: 'drain' | 'finish') => {
+          if (failure) throw failure;
+          await once(out, event);
+        };
         return {
           write: async piece => {
+            if (failure) throw failure;
             hash.update(piece);
-            if (!out.write(piece)) await once(out, 'drain');
+            if (!out.write(piece)) await wait('drain');
           },
           end: async () => {
+            if (failure) throw failure;
             out.end();
-            await once(out, 'finish');
+            await wait('finish');
             open.delete(out);
             parts.set(name, { file, bytes: size, sha256: hash.digest('hex') });
           },
@@ -737,7 +749,9 @@ function isZlibError(error: unknown): boolean {
   return typeof (error as { code?: unknown })?.code === 'string' && (error as { code: string }).code.startsWith('Z_');
 }
 
-/** A problem with the file is a refusal with status 400 */
+/** A problem with the file is a refusal with status 400. A full disk is a refusal with status 507. */
 function refusalOf(error: unknown): unknown {
-  return error instanceof ArchiveError ? new BackupRefusedError(error.message, 400) : error;
+  if (error instanceof ArchiveError) return new BackupRefusedError(error.message, 400);
+  if ((error as { code?: unknown })?.code === 'ENOSPC') return new BackupRefusedError(DISK_FULL_MESSAGE, 507);
+  return error;
 }

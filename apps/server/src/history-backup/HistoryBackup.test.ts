@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import type { ReadStream, WriteStream } from 'node:fs';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +13,43 @@ import { ARCHIVE_LIMITS, FORMAT_VERSION, type Manifest } from './archive.js';
 import { changeArchive, linesOf, pack, partOf, unpack } from './archiveTestSupport.js';
 import { BackupRefusedError, HistoryBackup, type BackupMachine, type BackupOptions } from './HistoryBackup.js';
 import { addHistory, FakeVictoria } from './testSupport.js';
+
+/** For tests that make the disk fail, or that see which files the code opens */
+const fsHooks = vi.hoisted(() => ({
+  onWriteStream: null as ((stream: WriteStream, file: string) => void) | null,
+  readStreams: [] as { file: string; stream: ReadStream }[],
+}));
+
+vi.mock('node:fs', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...fs,
+    createWriteStream: (...args: Parameters<typeof fs.createWriteStream>) => {
+      const stream = fs.createWriteStream(...args);
+      fsHooks.onWriteStream?.(stream, String(args[0]));
+      return stream;
+    },
+    createReadStream: (...args: Parameters<typeof fs.createReadStream>) => {
+      const stream = fs.createReadStream(...args);
+      fsHooks.readStreams.push({ file: String(args[0]), stream });
+      return stream;
+    },
+  };
+});
+
+/**
+ * The disk becomes full after the first write. The error comes between two writes, when Chatter does not wait for
+ * the stream (no listener waits for 'drain' or 'finish' then).
+ */
+function failAsDiskFull(stream: WriteStream): void {
+  stream._write = (_chunk, _encoding, done) => {
+    done();
+    process.nextTick(() => {
+      stream.destroy();
+      stream.emit('error', Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }));
+    });
+  };
+}
 
 const HOUR = 3_600_000;
 const NOW = Date.UTC(2026, 10, 21, 12);
@@ -50,7 +88,11 @@ describe('HistoryBackup', () => {
     rules.replaceWithoutPublish(source.id, [highLoad]);
   });
 
-  afterEach(() => rmSync(folder, { recursive: true, force: true }));
+  afterEach(() => {
+    fsHooks.onWriteStream = null;
+    fsHooks.readStreams.length = 0;
+    rmSync(folder, { recursive: true, force: true });
+  });
 
   async function backUp(options = ALL, machine = source): Promise<Buffer> {
     const prepared = await backups.prepareBackup(machine, options, 'admin');
@@ -345,6 +387,21 @@ describe('HistoryBackup', () => {
         expect((await refusalOf(archive)).status).toBe(507);
         expect(filesLeft()).toEqual([]);
       }
+    });
+
+    it('refuses a file when the disk becomes full while Chatter unpacks it, and frees the place', async () => {
+      // A large part, so Chatter writes it in many pieces. Its content does not matter: the disk fails first.
+      const archive = await changeArchive(await backUp(), entries => {
+        entries.set('history/raw.jsonl.gz', randomBytes(1024 * 1024));
+      });
+      fsHooks.onWriteStream = (stream, file) => {
+        if (path.basename(file) === 'part-0') failAsDiskFull(stream);
+      };
+      const error = await refusalOf(archive);
+      expect(error).toMatchObject({ status: 507, message: expect.stringMatching(/disk of Chatter is full/) });
+      expect(filesLeft()).toEqual([]);
+      fsHooks.onWriteStream = null;
+      expect((await receive(await backUp())).counts.rawSamples).toBe(14400);
     });
 
     it('deletes the files of a refused file, of a cancelled restore, and of a restore that ends', async () => {
