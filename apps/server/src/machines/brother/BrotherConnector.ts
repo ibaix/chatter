@@ -1,5 +1,9 @@
 import net from 'net';
 import { BaseMachineConnector } from '../BaseMachineConnector.js';
+import { PollTimingRecorder } from '../pollTimings.js';
+import { tuneMachineSocket } from '../machineSocket.js';
+import { createLogger } from '../../logging/logger.js';
+import { TOOL_SYNC_TIMEOUT_MS, ToolSyncTracker, isIdle } from './toolSync.js';
 import type {
   BrotherMachineConfig,
   BrotherMachineStatus,
@@ -12,9 +16,24 @@ import type {
   MachineType,
   MacroConfig,
   MachineDataSnapshot,
+  ToolSyncOutcome,
 } from '../../types/index.js';
 
+const log = createLogger('brother');
+
 const DEFAULT_DATA_PORT = 10000;
+
+/**
+ * Chatter closes the data connection on purpose and opens it again every 60 seconds, at the start of a poll.
+ * This renews the session on the control, and limits how long a bad state of that session can last.
+ * A Brother serves one client at a time, so the close is an orderly close (FIN), and the control frees its
+ * client slot before the new connect. It does not help with a half-open session on the control after the Pi
+ * lost power: TCP keepalive and the timeout of the control cover that.
+ */
+export const BROTHER_RECONNECT_MS = 60_000;
+
+/** The time that an orderly close can take before Chatter destroys the socket */
+const ORDERLY_CLOSE_MS = 2000;
 const DEFAULT_UNIT = 'in';
 
 const PANEL_MODES = ['MANUAL', 'MDI', 'MEMORY', 'EDIT'];
@@ -159,6 +178,16 @@ const MAX_TOOL_NUMBER = 99;
 /** The position of each value in a row of the tool data reply */
 const TOOL_DATA_COLUMN = { length: 0, lengthWear: 1, diameter: 2, diameterWear: 3, name: 8 } as const;
 
+/** What a Sync request of a Brother gives: each outcome of a Sync, except the ones of the poller */
+export type ToolSyncResult = Exclude<ToolSyncOutcome, { outcome: 'not-supported' | 'not-found' }>;
+
+/** The address changed during a tool read. The reply came from the old control, so Chatter does not keep it. */
+class OldAddressError extends Error {
+  constructor() {
+    super('The address changed during the tool read');
+  }
+}
+
 /** The key of the reply status in a parsed reply. No data key of a Brother starts with @. */
 export const REPLY_STATUS_KEY = '@status';
 /** The header line of a reply: "RLOD", the command, and a status of 2 digits */
@@ -185,9 +214,15 @@ export class BrotherConnector extends BaseMachineConnector {
   public macros: MacroConfig[];
 
   private socket: net.Socket | null = null;
+  /** When connect() opened the connection */
+  private connectedAt: number | null = null;
   private data: BrotherMachineData = {};
   private prevData: BrotherMachineData = {};
   private toolTable: ToolTable = {};
+  /** The tool in each pot, from the last ATC reply */
+  private potTools: Record<number, number> = {};
+  /** The offsets and the name of each tool, from the last tool data reply */
+  private toolOffsets = new Map<number, Omit<ToolTable[number], 'toolNum'>>();
   private hasPocketInfo = false;
   private controlType: ControlType | null = null;
   private atcCommand: AtcCommand | null = null;
@@ -196,9 +231,30 @@ export class BrotherConnector extends BaseMachineConnector {
    * connector, also after a reconnect, so Chatter never sends a command that the control does not know again.
    */
   private unknownAtcCommands = new Set<AtcCommand>();
+  /**
+   * Each forgetControl() starts a new generation. A tool read keeps no result of an older generation: no tool table,
+   * no ATC command, no error and no time of the read, because those are about the control at the old address.
+   */
+  private controlGeneration = 0;
   private toolDataCommand: string;
   private macroCommand: string;
   private dataItems: DataItem[];
+  private readonly timings: PollTimingRecorder;
+  private readonly toolSync = new ToolSyncTracker();
+  /** The state poll that runs now, so a tool read waits for it. One operation at a time uses the connection. */
+  private runningPoll: Promise<void> | null = null;
+  /** The tool read that runs now. A state poll does not use the connection while it runs. */
+  private runningToolSync: Promise<ToolSyncResult> | null = null;
+  /**
+   * True during the planned reconnect, from the orderly close until the new connect ends. The status says connected
+   * then, because Chatter closed the connection on purpose. If the new connect fails, the machine shows offline.
+   */
+  private reconnecting = false;
+  /**
+   * Counts the calls of disconnect(), so the planned reconnect opens no new connection after a disconnect or a removal
+   * during its orderly close. The orderly close itself does not count.
+   */
+  private disconnects = 0;
 
   constructor(config: BrotherMachineConfig) {
     super(config);
@@ -215,6 +271,7 @@ export class BrotherConnector extends BaseMachineConnector {
     this.macroCommand = `MCRN${unitLetter}1`;
 
     this.dataItems = this.buildDataItems();
+    this.timings = new PollTimingRecorder(this.id);
   }
 
   /** The standard data items, then one item for each configured macro */
@@ -237,6 +294,7 @@ export class BrotherConnector extends BaseMachineConnector {
       this.socket = socket;
       // The same time limit is for the connect and, in sendCommand, for each reply
       socket.setTimeout(this.timeout);
+      tuneMachineSocket(socket);
 
       // Only for the connect. After it, a timeout means that a command got no reply (see sendCommand).
       const onConnectTimeout = () => {
@@ -262,18 +320,43 @@ export class BrotherConnector extends BaseMachineConnector {
       socket.connect(this.dataPort, this.host, () => {
         socket.removeListener('timeout', onConnectTimeout);
         this.connected = true;
+        this.connectedAt = Date.now();
         this.clearErrors();
         resolve();
       });
     });
   }
 
+  /**
+   * Close the connection with a FIN, and wait until the control closes its side too, for at most ORDERLY_CLOSE_MS.
+   * Then the control has freed its one client slot for the next connect.
+   */
+  private async closeInOrder(): Promise<void> {
+    const socket = this.socket;
+    this.socket = null;
+    this.connected = false;
+    if (!socket) return;
+    // The listeners of connect() would report an error of the closing socket as an error of the machine
+    socket.removeAllListeners('error');
+    socket.on('error', () => socket.destroy());
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(() => socket.destroy(), ORDERLY_CLOSE_MS);
+      socket.once('close', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      socket.end();
+    });
+  }
+
   disconnect(): void {
+    this.disconnects++;
     if (this.socket) {
       this.socket.destroy();
       this.socket = null;
     }
     this.connected = false;
+    this.reconnecting = false;
   }
 
   /**
@@ -344,105 +427,266 @@ export class BrotherConnector extends BaseMachineConnector {
   }
 
   /**
-   * Find which ATC command this control knows. Only the reply status decides. An error from a send (no reply, or a
-   * closed connection) tells nothing about the control: the poll fails, and the next poll asks again.
-   * Chatter does not ask a command again when the control did not know it: an unknown command adds a CM entry to
-   * its alarm list. With neither command, the tool table has no pots.
+   * Find which ATC command this control knows, and give its reply, which is the first tool table. With neither,
+   * the tool table has no pots, and the reply is null. Only the reply status decides. An error from a send (no
+   * reply, or a closed connection) tells nothing about the control: the tool read fails, and the next one asks
+   * again. Chatter does not ask a command again when the control did not know it: an unknown command adds a CM
+   * entry to its alarm list.
    */
-  private async detectControlType(): Promise<void> {
+  private async detectControlType(generation: number): Promise<ParsedResponse | null> {
     for (const { command, controlType } of ATC_COMMANDS) {
       if (this.unknownAtcCommands.has(command)) continue;
-      if (isKnownAtcReply(await this.sendCommand(command))) {
+      const response = await this.sendForToolRead(command, generation);
+      if (isKnownAtcReply(response)) {
         this.atcCommand = command;
         this.controlType = controlType;
-        return;
+        return response;
       }
       this.unknownAtcCommands.add(command);
     }
+    return null;
   }
 
   /**
-   * Forget what Chatter found about the control: the ATC command, the control type and the tool table.
-   * Use it when the address changes, because a different control can be at the new address.
+   * Forget what Chatter found about the control: the ATC command, the control type and the tool table. The next
+   * idle poll reads the tools again. Use it when the address changes, because a different control can be there.
    */
   forgetControl(): void {
+    this.controlGeneration++;
     this.atcCommand = null;
     this.controlType = null;
     this.unknownAtcCommands.clear();
+    this.potTools = {};
+    this.toolOffsets = new Map();
     this.toolTable = {};
     this.hasPocketInfo = false;
+    this.toolSync.forgetLastRead();
   }
 
   /** The tool in each pot, from the ATC reply */
-  private updateToolTable(atcResponse: ParsedResponse): void {
-    this.toolTable = {};
+  private updatePotTools(atcResponse: ParsedResponse): void {
+    this.potTools = {};
     for (let potKey = FIRST_POT_KEY; potKey <= LAST_POT_KEY; potKey++) {
       const rawValue = atcResponse[`M${String(potKey).padStart(2, '0')}`]?.[0];
       const toolNum = parseInt(rawValue, 10);
       if (toolNum >= 1 && toolNum <= MAX_TOOL_NUMBER) {
-        this.toolTable[potKey - 1] = { toolNum };
+        this.potTools[potKey - 1] = toolNum;
       }
     }
-    this.hasPocketInfo = Object.keys(this.toolTable).length > 0;
   }
 
-  /** Add the offsets and names from the tool data reply to the tools in the tool table */
+  /** The offsets and names from the tool data reply */
   private updateToolOffsets(toolDataResponse: ParsedResponse): void {
     // Some controls send 3-digit keys (T001), others 2-digit keys (T01)
     const keyDigits = toolDataResponse['T001'] !== undefined ? 3 : 2;
 
+    this.toolOffsets = new Map();
     for (let toolNum = 1; toolNum <= MAX_TOOL_NUMBER; toolNum++) {
       const values = toolDataResponse[`T${String(toolNum).padStart(keyDigits, '0')}`];
       if (!values) continue;
-
-      const tool = Object.values(this.toolTable).find(t => t?.toolNum === toolNum);
-      if (tool) {
-        tool.length = parseFloat(values[TOOL_DATA_COLUMN.length]) || 0;
-        tool.lengthWear = parseFloat(values[TOOL_DATA_COLUMN.lengthWear]) || 0;
-        tool.diameter = parseFloat(values[TOOL_DATA_COLUMN.diameter]) || 0;
-        tool.diameterWear = parseFloat(values[TOOL_DATA_COLUMN.diameterWear]) || 0;
-        tool.name = withoutQuotes(values[TOOL_DATA_COLUMN.name] || '');
-      }
+      this.toolOffsets.set(toolNum, {
+        length: parseFloat(values[TOOL_DATA_COLUMN.length]) || 0,
+        lengthWear: parseFloat(values[TOOL_DATA_COLUMN.lengthWear]) || 0,
+        diameter: parseFloat(values[TOOL_DATA_COLUMN.diameter]) || 0,
+        diameterWear: parseFloat(values[TOOL_DATA_COLUMN.diameterWear]) || 0,
+        name: withoutQuotes(values[TOOL_DATA_COLUMN.name] || ''),
+      });
     }
   }
 
-  async poll(): Promise<BrotherMachineStatus> {
-    this.clearErrors();
-
-    if (!this.socket || !this.connected) {
-      if (!(await this.ensureConnected())) {
-        return this.getStatus();
-      }
+  /**
+   * The tool table: the tool in each pot, with its offsets and name, from the ATC reply and the tool data reply
+   * of the last tool read. With no ATC command, it has no pots.
+   */
+  private updateToolTable(): void {
+    this.toolTable = {};
+    for (const [pot, toolNum] of Object.entries(this.potTools)) {
+      this.toolTable[Number(pot)] = { toolNum, ...this.toolOffsets.get(toolNum) };
     }
+    this.hasPocketInfo = Object.keys(this.toolTable).length > 0;
+  }
+
+  /**
+   * Read the machine state. While a tool read runs, the poll does not use the connection: it gives the last values,
+   * and is a good poll. After a good poll that finds the machine idle, it can start a tool read (see ToolSyncTracker).
+   */
+  async poll(): Promise<BrotherMachineStatus> {
+    if (this.runningToolSync) return this.getStatus();
+    this.clearErrors();
+    this.timings.startPoll();
+    const run = this.pollMachine();
+    this.runningPoll = run;
+    try {
+      await run;
+    } finally {
+      // A poll that the scheduler left behind must not clear the promise of the poll that came after it
+      if (this.runningPoll === run) this.runningPoll = null;
+      this.timings.endPoll(this.pollTimeLimitMs);
+    }
+    if (this.connected && this.lastPollTime && isIdle(this.data) && this.toolSync.autoSyncDue(Date.now())) {
+      // Not awaited: the tool read runs between the state polls, with its own time limit
+      void this.startToolSync('auto');
+    }
+    return this.getStatus();
+  }
+
+  /**
+   * A user pressed Sync: read the tools now, also while a program runs. During the planned reconnect, the read
+   * waits for the poll that reconnects. If that connect fails, the read fails with the reason.
+   */
+  async requestToolSync(): Promise<ToolSyncResult> {
+    const refusal = this.toolSync.manualRefusal(Date.now());
+    if (refusal) return refusal;
+    if (!this.connected && !this.reconnecting) return { outcome: 'not-connected' };
+    return this.startToolSync('manual');
+  }
+
+  /**
+   * Resolves when no tool read runs. A test seam: only tests call it. They use it to wait for an automatic tool read,
+   * because poll() starts that read and does not give its promise. A test of a Sync awaits requestToolSync() instead.
+   */
+  async toolSyncEnded(): Promise<void> {
+    await this.runningToolSync;
+  }
+
+  private startToolSync(trigger: 'auto' | 'manual'): Promise<ToolSyncResult> {
+    this.toolSync.started(Date.now(), trigger);
+    const run = this.syncTools(trigger).finally(() => { this.runningToolSync = null; });
+    this.runningToolSync = run;
+    return run;
+  }
+
+  /**
+   * Read the tools after the state poll that runs now, in TOOL_SYNC_TIMEOUT_MS at most. The time limit includes the
+   * wait for that poll, so a poll that does not end cannot keep the tool read, and with it each later poll, waiting.
+   */
+  private async syncTools(trigger: 'auto' | 'manual'): Promise<ToolSyncResult> {
+    const generation = this.controlGeneration;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        // Ends the command that waits, and the next poll connects again
+        this.disconnect();
+        reject(new Error(`The tool read did not end in ${TOOL_SYNC_TIMEOUT_MS / 1000} seconds`));
+      }, TOOL_SYNC_TIMEOUT_MS);
+    });
+    let error: string | null = null;
+    try {
+      const read = (async () => {
+        await this.runningPoll?.catch(() => {});
+        // After the time limit, a later state poll can use the connection, so the read must not start
+        if (timedOut) return;
+        // The poll before the read lost the connection (for example the machine was removed, or a reconnect
+        // failed). The read fails with the reason of that poll.
+        if (!this.connected) throw new Error(this.errors.at(-1) ?? 'Not connected');
+        await this.readTools(generation);
+      })();
+      await Promise.race([read, timeout]);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (generation !== this.controlGeneration) {
+      this.toolSync.abandoned(trigger);
+      log.debug('Tool read of the old address ignored', { machine: this.id, trigger });
+      return { outcome: 'address-changed' };
+    }
+    this.toolSync.ended(Date.now(), error);
+    log.debug('Tool read', { machine: this.id, trigger, error: error ?? undefined });
+    return { outcome: error === null ? 'synced' : 'failed', toolSync: this.toolSync.state() };
+  }
+
+  /** Read the tool table and the tool data. The first time, find the control type: its reply is also the tool table. */
+  private async readTools(generation: number): Promise<void> {
+    const atcResponse = this.atcCommand
+      ? await this.sendForToolRead(this.atcCommand, generation)
+      : this.atcDetectionDone ? null : await this.detectControlType(generation);
+    if (atcResponse && this.atcCommand) this.updatePotTools(atcResponse);
+    const toolDataResponse = await this.sendForToolRead(this.toolDataCommand, generation);
+    this.updateToolOffsets(toolDataResponse);
+    this.updateToolTable();
+  }
+
+  /** Connect when needed, read the machine, and keep the values */
+  private async pollMachine(): Promise<void> {
+    // With an open connection and no planned reconnect, the first command goes out at once, with no await before it
+    if (this.mustConnect() && !(await this.connectForPoll())) return;
 
     this.prevData = { ...this.data };
 
     const responses = await this.readMachine();
-    if (!responses) {
-      return this.getStatus();
-    }
+    if (!responses) return;
 
     this.saveDataItems(responses);
-    if (this.atcCommand && responses[this.atcCommand]) {
-      this.updateToolTable(responses[this.atcCommand]);
-    }
-    if (responses[this.toolDataCommand]) {
-      this.updateToolOffsets(responses[this.toolDataCommand]);
-    }
 
     this.updatePollTime();
     this.emitDataChanges(this.prevData, this.data);
-
-    return this.getStatus();
   }
 
-  /** Find the control type the first time, then send the poll commands. Gives null when a command fails. */
+  /**
+   * Connect, or make the planned reconnect when it is time. False when the connect fails. Call it only when
+   * mustConnect() is true. It runs at the start of a poll, so no command waits for a reply during the planned reconnect.
+   */
+  private async connectForPoll(): Promise<boolean> {
+    if (!this.plannedReconnectDue()) return this.ensureConnected();
+
+    const disconnects = this.disconnects;
+    this.reconnecting = true;
+    try {
+      await this.closeInOrder();
+      if (disconnects !== this.disconnects) {
+        // Chatter disconnected or removed the machine during the orderly close. After a removal, no poll and no
+        // disconnect comes again, so a new connection would hold the one client slot of the control.
+        this.addError(`Unable to connect: ${CLOSED_BEFORE_OPEN_ERROR}`);
+        return false;
+      }
+      if (!(await this.ensureConnected())) return false;
+    } finally {
+      this.reconnecting = false;
+    }
+    this.timings.recordPlannedReconnect();
+    log.debug('Planned reconnect', { machine: this.id });
+    return true;
+  }
+
+  /** True when the connection is open and BROTHER_RECONNECT_MS old or more */
+  private plannedReconnectDue(): boolean {
+    return this.connected && this.connectedAt !== null && Date.now() - this.connectedAt >= BROTHER_RECONNECT_MS;
+  }
+
+  /** True when the poll must connect first: there is no connection, or the planned reconnect is due */
+  private mustConnect(): boolean {
+    return !this.socket || !this.connected || this.plannedReconnectDue();
+  }
+
+  /**
+   * Send a command of a tool read. Throws OldAddressError when the address changed while it waited for the reply.
+   * An address change disconnects, so a reply that has not come fails anyway. This check is for the two other cases:
+   * the reply came before the address changed, but the read has not used it yet; or the poll that the read waited for
+   * connected to the new address, so the reply is of the new control, but the read started for the old one.
+   */
+  private async sendForToolRead(command: string, generation: number): Promise<ParsedResponse> {
+    const response = await this.send(command);
+    if (generation !== this.controlGeneration) throw new OldAddressError();
+    return response;
+  }
+
+  /** Send a command, and record how long the machine took to answer */
+  private send(command: string): Promise<ParsedResponse> {
+    return this.timings.time(command, () => this.sendCommand(command));
+  }
+
+  /** Send each command of the machine state once, and get the replies by command. Gives null when a command fails. */
   private async readMachine(): Promise<Record<string, ParsedResponse> | null> {
     try {
-      if (!this.atcDetectionDone) {
-        await this.detectControlType();
+      const responses: Record<string, ParsedResponse> = {};
+      for (const command of new Set([...this.dataItems.map(([, command]) => command), ALARM_COMMAND])) {
+        responses[command] = await this.send(command);
       }
-      return await this.sendPollCommands();
+      return responses;
     } catch (err) {
       if (err instanceof NoReplyError) {
         // The message tells the cause and the fix, so it needs no "Poll failed" in front. sendCommand disconnected.
@@ -452,20 +696,6 @@ export class BrotherConnector extends BaseMachineConnector {
       }
       return null;
     }
-  }
-
-  /** Send each command once, and get the replies by command */
-  private async sendPollCommands(): Promise<Record<string, ParsedResponse>> {
-    const commands = [...new Set([...this.dataItems.map(([, command]) => command), ALARM_COMMAND]), this.toolDataCommand];
-    if (this.atcCommand) {
-      commands.push(this.atcCommand);
-    }
-
-    const responses: Record<string, ParsedResponse> = {};
-    for (const command of commands) {
-      responses[command] = await this.sendCommand(command);
-    }
-    return responses;
   }
 
   private saveDataItems(responses: Record<string, ParsedResponse>): void {
@@ -480,6 +710,7 @@ export class BrotherConnector extends BaseMachineConnector {
   }
 
   getStatus(): BrotherMachineStatus {
+    const pollTimings = this.timings.snapshot();
     return {
       id: this.id,
       name: this.name,
@@ -489,11 +720,20 @@ export class BrotherConnector extends BaseMachineConnector {
       ftpUser: this.ftpUser,
       hasFtpPassword: this.hasFtpPassword,
       type: 'brother',
-      connected: this.connected,
+      // The planned reconnect is not a disconnect, so the screens and the connection log do not show it
+      connected: this.connected || this.reconnecting,
       lastPollTime: this.lastPollTime,
       errors: this.errors,
-      data: { ...this.data, toolTable: this.toolTable, hasPocketInfo: this.hasPocketInfo, controlType: this.controlType },
-      macros: this.macros
+      data: {
+        ...this.data,
+        toolTable: this.toolTable,
+        hasPocketInfo: this.hasPocketInfo,
+        controlType: this.controlType,
+        toolSync: this.toolSync.state(),
+      },
+      macros: this.macros,
+      // Only after the first poll, so the status has the same fields as the status of the other connectors until then
+      ...(pollTimings ? { pollTimings } : {}),
     };
   }
 

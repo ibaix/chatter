@@ -1,4 +1,5 @@
 import net from 'net';
+import { tuneMachineSocket } from '../machineSocket.js';
 import { BaseMachineConnector, errorMessage } from '../BaseMachineConnector.js';
 import type {
   HaasMachineConfig,
@@ -157,6 +158,7 @@ interface SocketOptions {
 export function openSocket(socket: net.Socket, options: SocketOptions): Promise<void> {
   return new Promise((resolve, reject) => {
     socket.setTimeout(options.timeoutMs);
+    tuneMachineSocket(socket);
 
     socket.on('timeout', () => {
       options.onDown();

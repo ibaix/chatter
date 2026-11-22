@@ -3,7 +3,7 @@ import { readOptions } from './options.js';
 
 describe('readOptions', () => {
   it('gives the defaults without options', () => {
-    expect(readOptions([])).toEqual({ speed: 5, add: false, api: 'http://localhost:3001', lan: false, slowStartSeconds: 10 });
+    expect(readOptions([])).toEqual({ speed: 5, add: false, api: 'http://localhost:3001', lan: false, slowStartSeconds: 10, replyDelaySeconds: 0 });
   });
 
   it('reads --lan', () => {
@@ -12,7 +12,7 @@ describe('readOptions', () => {
 
   it('reads --speed, --add and --api together with --lan', () => {
     expect(readOptions(['--lan', '--speed', '10', '--add', '--api', 'http://chatter.local:3001'])).toEqual({
-      speed: 10, add: true, api: 'http://chatter.local:3001', lan: true, slowStartSeconds: 10,
+      speed: 10, add: true, api: 'http://chatter.local:3001', lan: true, slowStartSeconds: 10, replyDelaySeconds: 0,
     });
   });
 
@@ -31,5 +31,13 @@ describe('readOptions', () => {
 
   it('stops when --slow-start is below 0', () => {
     expect(() => readOptions(['--slow-start', '-1'])).toThrow(/--slow-start/);
+  });
+
+  it('reads --reply-delay in seconds, for a control that is always slow', () => {
+    expect(readOptions(['--reply-delay', '1.5']).replyDelaySeconds).toBe(1.5);
+  });
+
+  it('stops when --reply-delay is below 0', () => {
+    expect(() => readOptions(['--reply-delay', '-1'])).toThrow(/--reply-delay/);
   });
 });

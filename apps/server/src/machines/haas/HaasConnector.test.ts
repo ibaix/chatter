@@ -388,6 +388,26 @@ describe('Haas data stream', () => {
   });
 });
 
+describe('Haas openSocket socket options', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('turns on TCP keepalive and sends each command at once', async () => {
+    vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) { return this; });
+    const keepAlive = vi.spyOn(net.Socket.prototype, 'setKeepAlive');
+    const noDelay = vi.spyOn(net.Socket.prototype, 'setNoDelay');
+    const socket = new net.Socket();
+    const opening = openSocket(socket, { host: '127.0.0.1', port: 5051, timeoutMs: 60_000, name: 'Query port', onDown: () => {} });
+
+    socket.destroy();
+    await opening.catch(() => {});
+
+    expect(keepAlive).toHaveBeenCalledWith(true, expect.any(Number));
+    expect(noDelay).toHaveBeenCalledWith(true);
+  });
+});
+
 describe('Haas openSocket when the socket closes before it connects', () => {
   afterEach(() => {
     vi.restoreAllMocks();

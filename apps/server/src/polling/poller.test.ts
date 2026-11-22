@@ -309,6 +309,36 @@ describe('HardwarePoller', () => {
 
   });
 
+  describe('syncTools', () => {
+    it('asks the Brother to read its tools, and sends the new status to the screens', async () => {
+      const machine = await addSpeedio();
+      const connector = poller.getConnector(machine.id) as BrotherConnector;
+      // Connected, and each command gets an empty good reply
+      Object.assign(connector, { socket: { destroy: () => {} }, connected: true });
+      vi.spyOn(connector, 'sendCommand').mockImplementation(async command => connector.parseResponse(`RLOD    ${command.padEnd(8)}00\r\n\r\n00%`));
+      const updates = vi.fn();
+      poller.on('update', updates);
+
+      const result = await poller.syncTools(machine.id);
+
+      expect(result).toEqual({ outcome: 'synced', toolSync: expect.objectContaining({ error: null, running: false }) });
+      const { toolSync } = result as { toolSync: { lastSyncAt: string | null } };
+      expect(toolSync.lastSyncAt).not.toBeNull();
+      const sent: Array<{ id: string; data: { toolSync?: unknown } }> = updates.mock.lastCall![0];
+      expect(sent.find(status => status.id === machine.id)?.data.toolSync).toEqual(toolSync);
+    });
+
+    it('gives not-found for a machine that is not there', async () => {
+      expect(await poller.syncTools('non-existent')).toEqual({ outcome: 'not-found' });
+    });
+
+    it('gives not-supported for a machine that is not a Brother', async () => {
+      const machine = await addRobodrill();
+
+      expect(await poller.syncTools(machine.id)).toEqual({ outcome: 'not-supported' });
+    });
+  });
+
   describe('removeMachine with a Brother machine', () => {
     it('removes machine from map', async () => {
       const machine = await addSpeedio();

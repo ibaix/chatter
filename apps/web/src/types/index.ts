@@ -3,6 +3,7 @@ export type {
   MacroConfig,
   ToolInfo,
   ToolTable,
+  ToolSyncState,
   MachineData,
   MachinePath,
   MachineSpindle,

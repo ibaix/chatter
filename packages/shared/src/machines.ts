@@ -1,4 +1,5 @@
-import type { MachineData, MachinePath, MacroConfig, ToolTable } from './machineData.js';
+import type { MachineData, MachinePath, MacroConfig, ToolSyncState, ToolTable } from './machineData.js';
+import type { PollTimings } from './pollTimings.js';
 
 // ============================================
 // Machine Type Definitions
@@ -27,6 +28,8 @@ export interface BaseMachine {
   /** Only whether an FTP password is saved. The server never sends the password itself. */
   hasFtpPassword?: boolean;
   macros?: MacroConfig[];
+  /** How long the polls take. Only connectors that measure their polls send it. */
+  pollTimings?: PollTimings;
 }
 
 // ============================================
@@ -35,6 +38,7 @@ export interface BaseMachine {
 
 export interface BrotherMachineData extends MachineData {
   toolTable?: ToolTable;
+  toolSync?: ToolSyncState;
   hasPocketInfo?: boolean;  // true if ATC command returns valid data (pocket != tool number)
   controlType?: 'C00' | 'D00' | null;  // C00 uses ATCTL, D00 uses ATCTLD
 }

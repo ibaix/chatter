@@ -20,6 +20,7 @@ import { slowStartOf, type SlowStart } from './tcp.js';
  *   npm run fake-machines -- --speed 10   run 10 times faster than real time
  *   npm run fake-machines -- --lan        let other devices on the local network find them, like real machines
  *   npm run fake-machines -- --slow-start 0   answer at once; by default Brother and Haas answer slowly for 10 seconds after Chatter connects
+ *   npm run fake-machines -- --reply-delay 1.5   after the slow start, Brother and Haas take 1.5 seconds for each answer, like a busy control
  */
 
 function startMachine(profile: MachineProfile, speed: number, host: string, slowStart: SlowStart): Server[] {
@@ -70,7 +71,7 @@ async function main(): Promise<void> {
   const options = readOptions(process.argv.slice(2));
   const hosts = hostsFor(options.lan, networkInterfaces());
   await prepareAllSampleFiles();
-  const slowStart = slowStartOf(options.slowStartSeconds);
+  const slowStart = slowStartOf(options.slowStartSeconds, options.replyDelaySeconds);
   const servers = PROFILES.flatMap(profile => startMachine(profile, options.speed, hosts.listen, slowStart));
   servers.forEach(server => server.on('error', error => {
     console.error(`Could not open a port: ${error.message}`);

@@ -41,6 +41,15 @@ Chatter polls each machine every few seconds, but the log has a line only when s
 
 A machine that is off for a weekend gives two lines, not one for each poll.
 
+### A slow Brother
+
+Each poll of a machine must end in 10 seconds. A Brother answers each request in turn, so a busy Brother can come near this limit.
+
+- When a poll of a Brother uses more than 6 seconds, the log has a warning: `[poll-times] A poll used most of its time limit`. `slowest` names the slowest requests. You get this warning at most one time in 10 minutes for each machine.
+- With `LOG_LEVEL=debug`, the `Poll times` line of each poll shows the time of each request.
+- A poll of a Brother does not read the tool table. Chatter reads the tool table in a separate step, with a limit of 20 seconds (see [The tool table of a Brother](get-started.md#the-tool-table-of-a-brother)). During this step, the polls show the last values, and the machine stays online.
+- Every 60 seconds, Chatter closes the connection to a Brother and opens it again. This gives the control a new session. During this step, the machine stays online on each screen, and the log has no `info` or `warn` line for it. With `LOG_LEVEL=debug`, the log has a `Planned reconnect` line. If the new connection fails, the machine shows offline with the reason, as after other connection problems.
+
 ## Change the level or the format
 
 Set these in the `environment:` of the `chatterbox` service in `docker-compose.yml`, then run `docker compose up -d`:
