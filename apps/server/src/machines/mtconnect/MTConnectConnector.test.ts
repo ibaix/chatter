@@ -218,26 +218,58 @@ async function localServer(answer: (response: import('node:http').ServerResponse
 }
 
 describe('MTConnect redirects', () => {
-  it('does not follow a redirect from the agent to another address, and says why it did not connect', async () => {
+  /** Connect to an agent that answers with `status` and a Location of a second server. Gives the result and the request counts. */
+  async function connectToAgentThatSends(status: number) {
     const target = await localServer(response => response.end(PROBE));
     const agent = await localServer(response => {
-      response.writeHead(302, { Location: `http://127.0.0.1:${target.port}/probe` });
+      response.writeHead(status, { Location: `http://127.0.0.1:${target.port}/probe` });
       response.end();
     });
     const connector = newConnector({ host: '127.0.0.1', mtConnectPort: agent.port });
-
     try {
       await connector.connect();
-
-      expect(agent.requests()).toBe(1);
-      expect(target.requests()).toBe(0);
-      expect(connector.connected).toBe(false);
-      expect(connector.getStatus().errors).toEqual([
-        'Connection failed: The agent sent a redirect (HTTP 302). Chatter does not follow redirects.',
-      ]);
+      return {
+        connected: connector.connected,
+        errors: connector.getStatus().errors,
+        agentRequests: agent.requests(),
+        targetRequests: target.requests(),
+      };
     } finally {
       await Promise.all([agent.close(), target.close()]);
     }
+  }
+
+  it.each([301, 302, 303, 307, 308])(
+    'does not follow a %i redirect from the agent to another address, and says why it did not connect',
+    async status => {
+      const result = await connectToAgentThatSends(status);
+
+      expect(result.agentRequests).toBe(1);
+      expect(result.targetRequests).toBe(0);
+      expect(result.connected).toBe(false);
+      expect(result.errors).toEqual([
+        `Connection failed: The agent sent a redirect (HTTP ${status}). Chatter does not follow redirects.`,
+      ]);
+    },
+  );
+
+  it('treats a 304 Not Modified as a redirect, and does not connect', async () => {
+    const result = await connectToAgentThatSends(304);
+
+    expect(result.agentRequests).toBe(1);
+    expect(result.targetRequests).toBe(0);
+    expect(result.connected).toBe(false);
+    expect(result.errors).toEqual([
+      'Connection failed: The agent sent a redirect (HTTP 304). Chatter does not follow redirects.',
+    ]);
+  });
+
+  it('still gives the normal HTTP error for a 400, which is not a redirect', async () => {
+    const result = await connectToAgentThatSends(400);
+
+    expect(result.targetRequests).toBe(0);
+    expect(result.connected).toBe(false);
+    expect(result.errors).toEqual(['Connection failed: HTTP 400: Bad Request']);
   });
 });
 
