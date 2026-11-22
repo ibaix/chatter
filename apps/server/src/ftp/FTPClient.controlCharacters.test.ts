@@ -53,20 +53,27 @@ describe('FTPClient with a control character in a path', () => {
     expectNothingSent();
   });
 
-  // The manual download writes RETR straight to the control socket, past the check of basic-ftp
-  it('does not write a raw RETR with a line break when the passive data connection opens', async () => {
+  // The manual download writes RETR straight to the control socket, past the check of basic-ftp. downloadFile
+  // refuses the path before it gets there, so this test calls the manual download itself. The data connection
+  // opens, so only the check in the manual download stops the raw write.
+  it('does not write a raw RETR with a line break, even when the passive data connection opens', async () => {
     const dataServer = net.createServer(socket => socket.end());
     await new Promise<void>(resolve => dataServer.listen(0, '127.0.0.1', resolve));
     const { port } = dataServer.address() as net.AddressInfo;
     mockSend.mockImplementation(async (command: string) => (command === 'PASV'
       ? { code: 227, message: `227 Entering Passive Mode (127,0,0,1,${Math.floor(port / 256)},${port % 256})` }
       : { code: 200, message: 'OK' }));
+    const manualDownload = ftpClient as unknown as {
+      downloadOverPassiveSocket(client: typeof mockFtpClient, filePath: string, destination: PassThrough): Promise<void>;
+    };
 
     try {
-      await expect(ftpClient.downloadFile('O1000\r\nDELE O1234', new PassThrough())).rejects.toThrow(CONTROL_CHARACTER_ERROR);
+      await expect(manualDownload.downloadOverPassiveSocket(mockFtpClient, 'O1000\r\nDELE O1234', new PassThrough()))
+        .rejects.toThrow(CONTROL_CHARACTER_ERROR);
     } finally {
       dataServer.close();
     }
+    expect(mockSend).not.toHaveBeenCalled();
     expect(mockWrite).not.toHaveBeenCalled();
   });
 
