@@ -303,11 +303,20 @@ describe('NotificationsTab', () => {
   });
 
   it('fills the time zone from the browser when none is saved', async () => {
+    // A time zone that is not the one of the test computer, so the test proves where the value comes from
+    const browserOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+    const resolvedOptions = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(function (this: Intl.DateTimeFormat) {
+      return { ...browserOptions.call(this), timeZone: 'America/Chicago' };
+    });
     vi.mocked(fetchNotificationSettings).mockResolvedValue({ linkBaseUrl: null, timeZone: null });
-    await renderTab();
+    try {
+      await renderTab();
 
-    expect(screen.getByLabelText('Time zone')).toHaveValue(Intl.DateTimeFormat().resolvedOptions().timeZone);
-    expect(screen.getByText(/from this browser/)).toBeInTheDocument();
+      expect(screen.getByLabelText('Time zone')).toHaveValue('America/Chicago');
+      expect(screen.getByText(/from this browser/)).toBeInTheDocument();
+    } finally {
+      resolvedOptions.mockRestore();
+    }
   });
 
   it('saves the message settings', async () => {

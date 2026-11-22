@@ -15,7 +15,7 @@ const NOT_SYNCED: ToolSyncState = { lastSyncAt: null, lastAttemptAt: null, error
 const SYNCED: ToolSyncState = { lastSyncAt: SYNCED_AT, lastAttemptAt: SYNCED_AT, error: null, running: false };
 const TOOLS = { 1: { toolNum: 5, length: 3.402, name: 'ENDMILL' } };
 
-/** The text for SYNCED_AT. vitest.config.js sets the time zone (UTC) and the locale (en-US) of the tests. */
+/** The text for SYNCED_AT in the time zone UTC and the format of en-US (see beforeEach) */
 const SYNCED_TEXT = 'Synced 08:05 AM';
 
 function renderTab(toolSync: ToolSyncState | undefined, toolTable: ToolTable = TOOLS, connected = true) {
@@ -42,6 +42,16 @@ const syncedAt = (iso: string, error: string | null = null): ToolSyncState =>
 describe('ToolTableTab sync', () => {
   beforeEach(() => {
     syncTools.mockReset();
+    // The tab shows a time in the locale and the time zone of the browser. The test uses en-US and UTC, so it gets
+    // the same text on each computer.
+    const browserTime = Date.prototype.toLocaleTimeString;
+    vi.spyOn(Date.prototype, 'toLocaleTimeString').mockImplementation(function (this: Date, _locales, options) {
+      return browserTime.call(this, 'en-US', { ...options, timeZone: 'UTC' });
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('says "Not synced yet" and offers Sync before the first read', () => {
