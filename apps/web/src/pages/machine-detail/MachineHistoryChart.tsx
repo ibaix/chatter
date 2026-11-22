@@ -72,7 +72,7 @@ interface MachineHistoryChartProps {
 /** One machine value, or the machine state, over time, with a menu for the value and buttons for the time range */
 function MachineHistoryChart({ machine, choices, choice, onChoose, view: keptView, className }: MachineHistoryChartProps) {
   const clockNow = useChartClock(machine);
-  const { view, pick, moveBy, pan, showNow, zoomTo, clearZoom, zoomed } = useChartView(clockNow, keptView);
+  const { view, pick, moveBy, pan, showNow, zoomTo, clearZoom, acceptZoom, zoomed } = useChartView(clockNow, keptView);
   const { range, end } = view;
   const isStateChart = choice.id === MACHINE_STATE.id;
   const drag = useChartDrag({ rangeMs: range.ms, end, now: clockNow, margins: isStateChart ? 0 : MARGIN.left + MARGIN.right, onMove: moveBy });
@@ -128,6 +128,7 @@ function MachineHistoryChart({ machine, choices, choice, onChoose, view: keptVie
         onMove={moveBy}
         onZoom={zoomTo}
         onClearZoom={zoomed ? clearZoom : undefined}
+        onAcceptZoom={zoomed && range.ms < view.overview.ms ? acceptZoom : undefined}
       />
     </section>
   );

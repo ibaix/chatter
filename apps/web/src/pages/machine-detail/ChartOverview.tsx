@@ -1,5 +1,6 @@
+import { cn } from '@toolpath/ui';
 import { useState, type PointerEvent } from 'react';
-import { CloseIcon } from '../../components/ui/icons';
+import { CheckIcon, CloseIcon } from '../../components/ui/icons';
 import { useBoxSize } from '../../hooks/useBoxSize';
 import type { Machine } from '../../types';
 import { offsetXOf, TimeLabels, ZoomHighlight, type ZoomSelection } from './ChartParts';
@@ -12,9 +13,12 @@ const BAND_HEIGHT = 16;
 /** The space between the band and the time labels */
 const TIME_LABEL_GAP = 15;
 const SVG_HEIGHT = BAND_HEIGHT + TIME_LABEL_GAP + 3;
-/** The row above the band for the button that clears the zoom. It is always there, so the chart does not jump. */
-const CLEAR_ROW_HEIGHT = 18;
-const CLEAR_BUTTON_SIZE = 16;
+/** The row above the band for the zoom buttons. It is always there, so the chart does not jump. */
+const ZOOM_ROW_HEIGHT = 22;
+const ZOOM_BUTTON_SIZE = 20;
+/** The space between the accept button and the clear button */
+const ZOOM_BUTTON_GAP = 8;
+const ZOOM_BUTTON_CLASS = 'absolute top-0 inline-flex items-center justify-center rounded-full border-0 bg-zinc-700 p-0 text-zinc-50';
 
 interface ChartOverviewProps {
   machine: Machine;
@@ -39,12 +43,14 @@ interface ChartOverviewProps {
   onZoom: (from: number, to: number) => void;
   /** Shows the full time of the strip again. Undefined while the chart is not zoomed in. */
   onClearZoom?: () => void;
+  /** Makes the zoom the full time of the strip. It shows only with `onClearZoom`. */
+  onAcceptZoom?: () => void;
 }
 
 /**
  * A thin machine state band of the full range under the chart, with a box on the time that the chart shows.
  * Drag on the band to highlight a time and zoom in to it. Click the band to move the chart there.
- * While the chart is zoomed in, a button above the box clears the zoom.
+ * While the chart is zoomed in, buttons above the box accept the zoom as the full range, or clear it.
  */
 export function ChartOverview({ machine, overview, overviewEnd, ...plotProps }: ChartOverviewProps) {
   const { segments, now } = useStateTimeline(machine.id, liveStateOf(machine), overview, plotProps.clockNow, overviewEnd);
@@ -66,7 +72,7 @@ interface OverviewPlotProps extends Omit<ChartOverviewProps, 'machine' | 'overvi
 }
 
 function OverviewPlot(props: OverviewPlotProps) {
-  const { segments, overview, live, now, clockNow, width, view, viewEnd, selection, onSelect, left, right, onMove, onZoom, onClearZoom } = props;
+  const { segments, overview, live, now, clockNow, width, view, viewEnd, selection, onSelect, left, right, onMove, onZoom, onClearZoom, onAcceptZoom } = props;
   /** Where the pointer went down, or null when the user does not drag */
   const [startX, setStartX] = useState<number | null>(null);
   const bandRight = width - right;
@@ -117,21 +123,37 @@ function OverviewPlot(props: OverviewPlotProps) {
     onSelect(null);
   };
 
-  // The button is over the middle of the box, and stays inside the strip
-  const clearLeft = Math.min(Math.max((boxLeft + boxRight - CLEAR_BUTTON_SIZE) / 2, 0), width - CLEAR_BUTTON_SIZE);
+  // The buttons are over the middle of the box, and stay inside the strip
+  const showAccept = onClearZoom !== undefined && onAcceptZoom !== undefined;
+  const buttonsWidth = showAccept ? 2 * ZOOM_BUTTON_SIZE + ZOOM_BUTTON_GAP : ZOOM_BUTTON_SIZE;
+  const buttonsLeft = Math.min(Math.max((boxLeft + boxRight - buttonsWidth) / 2, 0), width - buttonsWidth);
+  const clearLeft = buttonsLeft + buttonsWidth - ZOOM_BUTTON_SIZE;
+  const buttonSize = { width: ZOOM_BUTTON_SIZE, height: ZOOM_BUTTON_SIZE };
 
   return (
-    <div className="relative" style={{ paddingTop: CLEAR_ROW_HEIGHT }}>
+    <div className="relative" style={{ paddingTop: ZOOM_ROW_HEIGHT }}>
+      {showAccept && (
+        <button
+          type="button"
+          aria-label="Use as full range"
+          title="Use as full range"
+          onClick={onAcceptZoom}
+          className={cn(ZOOM_BUTTON_CLASS, 'hover:bg-primary hover:text-on-primary')}
+          style={{ left: buttonsLeft, ...buttonSize }}
+        >
+          <CheckIcon size={13} />
+        </button>
+      )}
       {onClearZoom && (
         <button
           type="button"
           aria-label="Clear the zoom"
           title="Clear the zoom"
           onClick={onClearZoom}
-          className="absolute top-0 inline-flex items-center justify-center rounded-full border-0 bg-zinc-700 p-0 text-zinc-50 hover:bg-zinc-500"
-          style={{ left: clearLeft, width: CLEAR_BUTTON_SIZE, height: CLEAR_BUTTON_SIZE }}
+          className={cn(ZOOM_BUTTON_CLASS, 'hover:bg-zinc-500')}
+          style={{ left: clearLeft, ...buttonSize }}
         >
-          <CloseIcon size={10} />
+          <CloseIcon size={12} />
         </button>
       )}
       <svg

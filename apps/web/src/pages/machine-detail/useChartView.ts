@@ -24,7 +24,8 @@ type ChartViewAction =
   | { type: 'move'; deltaMs: number; now: number }
   | { type: 'now'; now: number }
   | { type: 'zoom'; from: number; to: number; now: number }
-  | { type: 'clearZoom'; now: number };
+  | { type: 'clearZoom'; now: number }
+  | { type: 'accept' };
 
 /** The live view of a range button: the chart and the strip show the same time, up to now */
 function liveView(range: ChartRange): ChartView {
@@ -51,13 +52,18 @@ export function chartViewReducer(view: ChartView, action: ChartViewAction): Char
       return show(view, view.range, null, action.now);
     case 'zoom': {
       const zoomed = zoomView(action.from, action.to, action.now);
-      return show(view, zoomed.range, zoomed.end, action.now);
+      // A zoom as long as the strip is no zoom: the chart only moves
+      const range = zoomed.range.ms >= view.overview.ms ? view.overview : zoomed.range;
+      return show(view, range, zoomed.end, action.now);
     }
     case 'clearZoom': {
       // The full time of the strip, at the place in time where the strip shows now
       const overviewEnd = fittedStrip(view, action.now);
       return { ...view, overviewEnd, range: view.overview, end: overviewEnd };
     }
+    case 'accept':
+      // The zoom becomes the time of the strip. The same range object in both, so the chart is not zoomed.
+      return { overview: view.range, overviewEnd: view.end, range: view.range, end: view.end };
   }
 }
 
@@ -93,6 +99,8 @@ export function useChartView(now: number, keptView?: KeptChartView) {
     /** Shows the time that the user highlighted. The range buttons and the clear button show the wider times again. */
     zoomTo: (from: number, to: number) => dispatch({ type: 'zoom', from, to, now }),
     clearZoom: () => dispatch({ type: 'clearZoom', now }),
+    /** Makes the zoom the full time of the strip. The range buttons still show their times. */
+    acceptZoom: () => dispatch({ type: 'accept' }),
     /** True while the chart shows a zoom, not the full time of the strip */
     zoomed: view.range !== view.overview,
   };

@@ -635,4 +635,96 @@ describe('MachineHistoryChart', () => {
       expect(screen.getByRole('button', { name: 'Now' })).toBeEnabled();
     });
   });
+
+  describe('accepting a zoom', () => {
+    /** Zooms in on the middle 5 minutes of the 10-minute strip: from 7.5 to 2.5 minutes ago */
+    async function zoomInOnTheMiddle() {
+      const overview = await overviewOfStateView();
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`);
+    }
+
+    it('shows the accept button only while the chart is zoomed in, before the clear button', async () => {
+      const overview = await overviewOfStateView();
+      expect(screen.queryByRole('button', { name: 'Use as full range' })).not.toBeInTheDocument();
+
+      drag(overview, BOX_WIDTH / 4, (3 * BOX_WIDTH) / 4);
+      await screen.findByText(/^What the machine did from /);
+
+      const accept = screen.getByRole('button', { name: 'Use as full range' });
+      const clear = screen.getByRole('button', { name: 'Clear the zoom' });
+      expect(accept).toHaveAttribute('title', 'Use as full range');
+      // The user gets to the accept button first with the Tab key
+      expect(accept.compareDocumentPosition(clear) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('makes the accept and the clear buttons 20 px, with a gap between them', async () => {
+      await zoomInOnTheMiddle();
+
+      const accept = screen.getByRole('button', { name: 'Use as full range' });
+      const clear = screen.getByRole('button', { name: 'Clear the zoom' });
+      for (const button of [accept, clear]) {
+        expect(button.style.width).toBe('20px');
+        expect(button.style.height).toBe('20px');
+      }
+      expect(parseFloat(clear.style.left) - parseFloat(accept.style.left) - 20).toBeGreaterThanOrEqual(8);
+    });
+
+    it('keeps the two buttons inside the strip when the zoom is at its edge', async () => {
+      const overview = await overviewOfStateView();
+      drag(overview, BOX_WIDTH - 20, BOX_WIDTH);
+      await screen.findByRole('button', { name: 'Use as full range' });
+
+      const clear = screen.getByRole('button', { name: 'Clear the zoom' });
+      expect(parseFloat(clear.style.left) + 20).toBeLessThanOrEqual(BOX_WIDTH);
+      expect(parseFloat(screen.getByRole('button', { name: 'Use as full range' }).style.left)).toBeGreaterThanOrEqual(0);
+    });
+
+    it('makes the zoom the full range of the strip, with no zoom to clear and no range button pressed', async () => {
+      await zoomInOnTheMiddle();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+
+      expect(await screen.findByRole('img', { name: name => name.startsWith(`Overview ${viewText({ ...CHART_RANGES[0], ms: 5 * MINUTE }, NOW - 2.5 * MINUTE)}.`) }))
+        .toBeInTheDocument();
+      expect(screen.getByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Clear the zoom' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Use as full range' })).not.toBeInTheDocument();
+      for (const name of ['10m', '1h', '24h', '7d']) expect(screen.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('zooms in again inside the accepted range, and clears that zoom back to the accepted range', async () => {
+      await zoomInOnTheMiddle();
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+      const overview = await screen.findByRole('img', { name: /^Overview from / });
+
+      // The first half of the 5-minute strip: from 7.5 to 5 minutes ago
+      drag(overview, 0, BOX_WIDTH / 2);
+      expect(await screen.findByText(`What the machine did ${pastText(2.5 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Clear the zoom' }));
+      expect(await screen.findByText(`What the machine did ${pastText(5 * MINUTE, NOW - 2.5 * MINUTE)}.`)).toBeInTheDocument();
+    });
+
+    it('keeps the accepted length with Now', async () => {
+      await zoomInOnTheMiddle();
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Now' }));
+
+      expect(await screen.findByText('What the machine did in the last 5 minutes.')).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: /^Overview of the last 5 minutes/ })).toBeInTheDocument();
+    });
+
+    it('shows the range of a range button again after an accepted zoom', async () => {
+      await zoomInOnTheMiddle();
+      fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
+
+      fireEvent.click(screen.getByRole('button', { name: '1h' }));
+
+      expect(await screen.findByText('What the machine did in the last hour.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '1h' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('img', { name: /^Overview of the last hour/ })).toBeInTheDocument();
+    });
+  });
 });
