@@ -23,11 +23,11 @@ export function DiagnosticsTab({ machines }: { machines: MachineName[] }) {
   if (loadError || !facts) return <ReportPending loadError={loadError} />;
 
   const ask = async (action: () => Promise<void>) => {
-    const startedAt = facts.startedAt;
+    await restart.prepare();
     if (await change(async () => {
       await action();
       return facts;
-    })) restart.wait(startedAt);
+    })) restart.wait();
   };
 
   return (

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { Dialog } from '@toolpath/ui';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  fetchDebugState, fetchHelperLog, fetchStartTime, fetchSystemFacts, restartChatter, restartPi, setDebug, type SystemFacts,
+  fetchDebugState, fetchHelperLog, fetchInstance, fetchSystemFacts, restartChatter, restartPi, setDebug, type SystemFacts,
 } from '../../api/diagnostics';
 import { DiagnosticsTab } from './DiagnosticsTab';
 import { LIVE_LINES } from './LogPanel';
@@ -12,7 +12,7 @@ vi.mock('../../api/diagnostics', () => ({
   fetchSystemFacts: vi.fn(),
   restartChatter: vi.fn(),
   restartPi: vi.fn(),
-  fetchStartTime: vi.fn(),
+  fetchInstance: vi.fn(),
   fetchDebugState: vi.fn(),
   setDebug: vi.fn(),
   fetchHelperLog: vi.fn(),
@@ -110,10 +110,12 @@ describe('DiagnosticsTab', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.mocked(restartChatter).mockResolvedValue();
     // First the old process answers, then nothing, then the new process
-    vi.mocked(fetchStartTime)
-      .mockResolvedValueOnce(Date.parse(STARTED_AT))
+    // Before the request, the old process answers. Then it answers once more, then nothing, then the new process.
+    vi.mocked(fetchInstance)
+      .mockResolvedValueOnce('old-process')
+      .mockResolvedValueOnce('old-process')
       .mockResolvedValueOnce(null)
-      .mockResolvedValue(Date.now() + 30_000);
+      .mockResolvedValue('new-process');
 
     fireEvent.click(screen.getByRole('button', { name: 'Restart Chatter' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Restart' }));
@@ -126,11 +128,31 @@ describe('DiagnosticsTab', () => {
     expect(screen.getByText('Chatter is back')).toBeInTheDocument();
   });
 
+  it('when the old process did not answer before the request, waits for a time with no answer before it says "back"', async () => {
+    await renderTab(facts());
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(restartChatter).mockResolvedValue();
+    vi.mocked(fetchInstance)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('old-process')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue('new-process');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restart Chatter' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Restart' }));
+
+    expect(await screen.findByText('Chatter restarts…')).toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(2 * RESTART_POLL_MS));
+    expect(screen.getByText('Chatter restarts…')).toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(RESTART_POLL_MS));
+    expect(screen.getByText('Chatter is back')).toBeInTheDocument();
+  });
+
   it('says what to check when Chatter does not come back in 5 minutes', async () => {
     await renderTab(facts());
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.mocked(restartChatter).mockResolvedValue();
-    vi.mocked(fetchStartTime).mockResolvedValue(null);
+    vi.mocked(fetchInstance).mockResolvedValue(null);
 
     fireEvent.click(screen.getByRole('button', { name: 'Restart Chatter' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Restart' }));

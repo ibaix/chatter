@@ -21,13 +21,16 @@ export async function restartPi(): Promise<void> {
   await jsonOrThrow(await api.system['restart-pi'].$post(), 'Could not restart the Pi');
 }
 
-/** When the server process started, or null while Chatter does not answer */
-export async function fetchStartTime(): Promise<number | null> {
+/**
+ * The random name of the server process, which changes at each start, or null while Chatter does not answer.
+ * A restart wait compares these names, not times: the clock of the Pi and the clock of the browser can be different.
+ */
+export async function fetchInstance(): Promise<string | null> {
   try {
     const response = await api.health.$get();
     if (!response.ok) return null;
-    const { uptime } = await response.json();
-    return Date.now() - uptime * 1000;
+    const { instance } = await response.json();
+    return instance;
   } catch {
     return null;
   }
