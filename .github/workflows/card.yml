@@ -3,8 +3,9 @@
 # The card gets the exact Chatter image that the release published, so the card and the update file match.
 #
 # docker.yml runs it after the release job. To make the card again, or for a release made before this
-# workflow, run it by hand: Actions > Pi card > Run workflow, with the tag. A run by hand uses the build
-# scripts of the branch that you pick, and the published Chatter image of the tag.
+# workflow, run it by hand: Actions > Pi card > Run workflow, with the tag. Pick main or a release tag in "Use workflow
+# from". The job does not run from another branch. A run by hand uses the build scripts of main or of the tag,
+# and the published Chatter image of the tag.
 
 name: Pi card
 
@@ -22,8 +23,7 @@ on:
         type: string
 
 permissions:
-  contents: write
-  packages: read
+  contents: read
 
 # One card build for each tag at a time, so a run by hand and the release run do not upload over each other
 concurrency:
@@ -31,7 +31,14 @@ concurrency:
 
 jobs:
   card:
+    # Only from main or a release tag. A run from another branch would use the build scripts of that branch,
+    # with a token that can change the release. docker.yml calls it with the ref of the tag.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # contents: write adds the card to the release. packages: read pulls the Chatter image of the release.
+    permissions:
+      contents: write
+      packages: read
 
     steps:
       # Only a release version. A pre-release such as v1.2.0-rc1 has no update file, so it gets no card.

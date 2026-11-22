@@ -20,7 +20,7 @@ on:
         default: true
 
 permissions:
-  packages: write
+  contents: read
 
 concurrency:
   group: ghcr-cleanup
@@ -30,6 +30,9 @@ jobs:
     # For a tag, workflow_run gives the tag name, such as v1.2.0, as head_branch
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
+    # Deletes images on ghcr.io. It reads no file of the repo.
+    permissions:
+      packages: write
     steps:
       # The action knows about images for more than one processor: it never deletes a part that a tagged image uses.
       # A release build pushes the parts first and tags the image after. "older-than" keeps the parts of a release

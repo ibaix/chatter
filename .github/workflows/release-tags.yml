@@ -21,11 +21,14 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   tags:
     runs-on: ubuntu-latest
+    # contents: read lets gh read the releases. packages: write moves the image tags.
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout repository
