@@ -1,5 +1,5 @@
 import type { IncomingMessage, Server, ServerOptions } from 'node:http';
-import type { HttpBindings } from '@hono/node-server';
+import { serve, type HttpBindings } from '@hono/node-server';
 import { createMiddleware } from 'hono/factory';
 import { UPDATE_TIME_LIMIT_MS } from './updates/timeLimits.js';
 
@@ -46,7 +46,7 @@ export const hasLongTimeLimit = (incoming: IncomingMessage): boolean => longRequ
  * Without this, a client with no login could hold each connection open for the full update time limit.
  * A reply can stay open longer (the live machine events do), because the limit is only on the request.
  */
-export function limitRequestTime(server: Server, limitMs = REQUEST_TIME_LIMIT_MS): void {
+function limitRequestTime(server: Server, limitMs: number): void {
   server.on('request', (req: IncomingMessage, res) => {
     const timer = setTimeout(() => {
       if (!req.complete && !longRequests.has(req)) req.socket.destroy();
@@ -54,4 +54,24 @@ export function limitRequestTime(server: Server, limitMs = REQUEST_TIME_LIMIT_MS
     timer.unref();
     res.once('close', () => clearTimeout(timer));
   });
+}
+
+/** The app that the web server serves */
+type WebApp = Pick<Parameters<typeof serve>[0], 'fetch'>;
+
+export interface WebServerStart {
+  /** Called when the server listens */
+  onListening?: () => void;
+  /** Only a test gives a shorter limit, so that it does not wait 2 minutes */
+  requestTimeLimitMs?: number;
+}
+
+/**
+ * Starts the web server with WEB_SERVER_OPTIONS and the request time limit.
+ * serve() makes a plain HTTP/1 server, because no HTTP/2 option is given.
+ */
+export function startWebServer(app: WebApp, port: number, { onListening, requestTimeLimitMs = REQUEST_TIME_LIMIT_MS }: WebServerStart = {}): Server {
+  const server = serve({ fetch: app.fetch, port, serverOptions: WEB_SERVER_OPTIONS }, () => onListening?.()) as Server;
+  limitRequestTime(server, requestTimeLimitMs);
+  return server;
 }

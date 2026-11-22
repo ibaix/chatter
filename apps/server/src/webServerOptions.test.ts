@@ -3,9 +3,8 @@ import { createServer, type Server } from 'node:http';
 import { connect, type AddressInfo, type Socket } from 'node:net';
 import { once } from 'node:events';
 import { setTimeout as wait } from 'node:timers/promises';
-import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { allowLongUpload, limitRequestTime, WEB_SERVER_OPTIONS } from './webServerOptions.js';
+import { allowLongUpload, startWebServer, WEB_SERVER_OPTIONS } from './webServerOptions.js';
 import { UPDATE_TIME_LIMIT_MS } from './updates/timeLimits.js';
 
 describe('WEB_SERVER_OPTIONS', () => {
@@ -22,7 +21,7 @@ describe('WEB_SERVER_OPTIONS', () => {
   });
 });
 
-describe('limitRequestTime', () => {
+describe('startWebServer', () => {
   /** A short limit, so the test does not wait 2 minutes */
   const LIMIT_MS = 150;
   let server: Server;
@@ -41,8 +40,7 @@ describe('limitRequestTime', () => {
           controller.close();
         },
       })));
-    server = serve({ fetch: app.fetch, port: 0, serverOptions: WEB_SERVER_OPTIONS }) as Server;
-    limitRequestTime(server, LIMIT_MS);
+    server = startWebServer(app, 0, { requestTimeLimitMs: LIMIT_MS });
     await once(server, 'listening');
     port = (server.address() as AddressInfo).port;
   });
@@ -67,6 +65,11 @@ describe('limitRequestTime', () => {
     socket.write(`POST ${path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\nConnection: close\r\n\r\nabc`);
     return { socket, reply };
   }
+
+  it('uses the web server options', () => {
+    expect(server.requestTimeout).toBe(WEB_SERVER_OPTIONS.requestTimeout);
+    expect(server.headersTimeout).toBe(WEB_SERVER_OPTIONS.headersTimeout);
+  });
 
   it('closes a request that does not send its whole body within the limit', async () => {
     const { socket, reply } = await startSlowUpload('/short');
