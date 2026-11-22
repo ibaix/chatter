@@ -104,8 +104,15 @@ const targetNamesJson = z.string()
   // A key with a bad character matches no file, but a request with one is not from the web app
   .refine(names => Object.keys(names).every(hasNoControlCharacter), CONTROL_CHARACTER_IN_PATH);
 
-/** The names on the machine from targetNames text that batchUploadForm accepted */
-export const readTargetNames = (json: string | undefined): Record<string, string> => (json ? targetNamesJson.parse(json) : {});
+/** The names on the machine from targetNames text, or why the text is bad */
+export type TargetNames = { ok: true; names: Record<string, string> } | { ok: false; error: string };
+
+/** Read targetNames text. A form with no targetNames gives no names. It does not throw on bad text. */
+export function readTargetNames(json: string | undefined): TargetNames {
+  if (json === undefined) return { ok: true, names: {} };
+  const names = targetNamesJson.safeParse(json);
+  return names.success ? { ok: true, names: names.data } : { ok: false, error: names.error.issues[0].message };
+}
 
 export const fileTreeQuery = z.object({
   path: remoteName().optional(),
@@ -143,8 +150,8 @@ export const batchUploadForm = z.object({
    * The field stays text after the check, because the typed web client sends the form as the route reads it.
    */
   targetNames: z.string().superRefine((json, context) => {
-    const names = targetNamesJson.safeParse(json);
-    if (!names.success) context.addIssue({ code: 'custom', message: names.error.issues[0].message });
+    const names = readTargetNames(json);
+    if (!names.ok) context.addIssue({ code: 'custom', message: names.error });
   }).optional(),
 });
 
