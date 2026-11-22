@@ -35,6 +35,7 @@ These limits are known. They are not bugs, but you must know them:
 Chatter itself cannot install an update. It only puts the update file and a request in a folder. A helper on the Pi, outside Docker, does the install.
 
 - The helper installs only a file that is signed with the Chatter release key, and only a newer version. So a bad download or a bad upload cannot install.
+- GitHub signs the update file in a separate job. Only that job gets the release key, and it runs no GitHub Action except the checkout. It signs only a release tag on `main`. Each workflow pins its actions by a full commit.
 - The helper does not trust anything that Chatter says or puts in the folder. So an attacker who breaks into Chatter cannot use the helper to take control of the Pi.
 - A newer helper also accepts the request `reboot`, and restarts the Pi at most once in 15 minutes. So an attacker who breaks into Chatter can restart the Pi, but cannot keep it down.
 - A newer helper writes `network.json` (the addresses of the Pi, the gateway, and if SSH is on) and `helper.log` for **Settings > Diagnostics**. It writes each value only when the value has the expected shape.
