@@ -1081,6 +1081,31 @@ describe('Brother tool sync that does not end', () => {
     expect(sentCommands(connector)).not.toContain('TOLNI1');
   });
 
+  it('does not start the tool read when a newer poll connected again before the old state poll ended', async () => {
+    vi.useFakeTimers();
+    const connector = connectorWithReplies(MOCK_RESPONSES);
+    const answer = vi.mocked(connector.sendCommand).getMockImplementation()!;
+    let releaseFirstPanel: () => void = () => {};
+    let panels = 0;
+    vi.mocked(connector.sendCommand).mockImplementation(async command => {
+      if (command === 'PANEL' && ++panels === 1) await new Promise<void>(resolve => { releaseFirstPanel = resolve; });
+      return answer(command);
+    });
+    const oldPoll = connector.poll();
+    const sync = connector.requestToolSync();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect((await sync).outcome).toBe('failed');
+    vi.spyOn(connector, 'connect').mockImplementation(async () => { Object.assign(connector, { socket: { destroy: () => {} }, connected: true }); });
+    expect((await connector.poll()).connected).toBe(true);
+
+    releaseFirstPanel();
+    await oldPoll;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sentCommands(connector)).not.toContain('ATCTL');
+    expect(sentCommands(connector)).not.toContain('TOLNI1');
+  });
+
   it('keeps a Sync waiting for the poll that runs now when an older poll, which the scheduler left behind, ends', async () => {
     const connector = connectorWithReplies({ ...MOCK_RESPONSES, MEM: MEM_RUNNING });
     const answer = vi.mocked(connector.sendCommand).getMockImplementation()!;
