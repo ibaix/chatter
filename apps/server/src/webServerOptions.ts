@@ -2,6 +2,9 @@ import type { IncomingMessage, Server, ServerOptions } from 'node:http';
 import { serve, type HttpBindings } from '@hono/node-server';
 import { createMiddleware } from 'hono/factory';
 import { UPDATE_TIME_LIMIT_MS } from './updates/timeLimits.js';
+import { createLogger } from './logging/logger.js';
+
+const log = createLogger('web-server');
 
 /** A client must send all its request headers within this time */
 const HEADERS_TIME_LIMIT_MS = 60_000;
@@ -25,6 +28,9 @@ export const WEB_SERVER_OPTIONS: ServerOptions = {
   headersTimeout: HEADERS_TIME_LIMIT_MS,
 };
 
+/** The reply text when a request takes too long */
+const REQUEST_TOO_SLOW_TEXT = 'The request took too long. Try again.';
+
 /** The requests that a route allowed to take the Node time limit */
 const longRequests = new WeakSet<IncomingMessage>();
 
@@ -43,13 +49,22 @@ export const hasLongTimeLimit = (incoming: IncomingMessage): boolean => longRequ
 
 /**
  * Closes a request that did not send its whole body within the limit, unless its route allowed a long upload.
+ * The client gets a 408 reply first, if the route did not start its reply.
  * Without this, a client with no login could hold each connection open for the full update time limit.
  * A reply can stay open longer (the live machine events do), because the limit is only on the request.
  */
 function limitRequestTime(server: Server, limitMs: number): void {
   server.on('request', (req: IncomingMessage, res) => {
     const timer = setTimeout(() => {
-      if (!req.complete && !longRequests.has(req)) req.socket.destroy();
+      if (req.complete || longRequests.has(req)) return;
+      // The query and the body can hold names and passwords, so they are not in the log
+      log.warn('A request took too long. Chatter closed it', { method: req.method, path: req.url?.split('?')[0] });
+      if (res.headersSent) {
+        req.socket.destroy();
+        return;
+      }
+      res.writeHead(408, { 'Content-Type': 'application/json', Connection: 'close' });
+      res.end(JSON.stringify({ error: REQUEST_TOO_SLOW_TEXT }), () => req.socket.destroy());
     }, limitMs);
     timer.unref();
     res.once('close', () => clearTimeout(timer));

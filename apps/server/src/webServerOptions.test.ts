@@ -6,6 +6,14 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { Hono } from 'hono';
 import { allowLongUpload, startWebServer, WEB_SERVER_OPTIONS } from './webServerOptions.js';
 import { UPDATE_TIME_LIMIT_MS } from './updates/timeLimits.js';
+import { captureLog } from './logging/testSupport.js';
+
+/** All that the server sends on the socket, when the server or the client closes it */
+function replyOf(socket: Socket): Promise<string> {
+  let reply = '';
+  socket.on('data', chunk => { reply += chunk.toString(); });
+  return new Promise(resolve => socket.on('close', () => resolve(reply)));
+}
 
 describe('WEB_SERVER_OPTIONS', () => {
   it('gives a slow upload of an update file the full update time, not the Node default of 5 minutes', () => {
@@ -50,13 +58,6 @@ describe('startWebServer', () => {
     server.close();
   });
 
-  /** All that the server sends on the socket, when the server or the client closes it */
-  function replyOf(socket: Socket): Promise<string> {
-    let reply = '';
-    socket.on('data', chunk => { reply += chunk.toString(); });
-    return new Promise(resolve => socket.on('close', () => resolve(reply)));
-  }
-
   /** Send the headers and only the first 3 of 10 bytes of the body */
   async function startSlowUpload(path: string): Promise<{ socket: Socket; reply: Promise<string> }> {
     const socket = connect(port, '127.0.0.1');
@@ -71,13 +72,35 @@ describe('startWebServer', () => {
     expect(server.headersTimeout).toBe(WEB_SERVER_OPTIONS.headersTimeout);
   });
 
-  it('closes a request that does not send its whole body within the limit', async () => {
+  it('closes a request that does not send its whole body within the limit, with a 408 reply', async () => {
     const { socket, reply } = await startSlowUpload('/short');
     const closedInTime = await Promise.race([reply.then(() => true), wait(LIMIT_MS * 10).then(() => false)]);
 
     expect(closedInTime).toBe(true);
-    expect(await reply).not.toContain('got');
+    const text = await reply;
+    expect(text).toMatch(/^HTTP\/1\.1 408 /);
+    expect(text).toContain('{"error":"The request took too long. Try again."}');
+    expect(text).not.toContain('got');
     socket.destroy();
+  });
+
+  it('logs one warning with the method and the path of the closed request, but not its query or its body', async () => {
+    const log = captureLog();
+    try {
+      const { reply } = await startSlowUpload('/short?token=secret-token');
+      await reply;
+      await wait(LIMIT_MS);
+
+      const warnings = log.lines.filter(line => line.level === 'warn');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].text).toContain('web-server');
+      expect(warnings[0].text).toContain('POST');
+      expect(warnings[0].text).toContain('/short');
+      expect(warnings[0].text).not.toContain('secret-token');
+      expect(warnings[0].text).not.toContain('abc');
+    } finally {
+      log.restore();
+    }
   });
 
   it('gives more time to a route that allows a long upload', async () => {
@@ -115,7 +138,7 @@ describe('startWebServer with the default request time limit', () => {
     await once(server, 'listening');
     const socket = connect((server.address() as AddressInfo).port, '127.0.0.1');
     await once(socket, 'connect');
-    const closed = once(socket, 'close');
+    const reply = replyOf(socket);
     const requestIn = once(server, 'request');
     socket.write('POST /short HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nabc');
     await requestIn;
@@ -125,7 +148,6 @@ describe('startWebServer with the default request time limit', () => {
     expect(socket.destroyed).toBe(false);
 
     await vi.advanceTimersByTimeAsync(2_000);
-    await closed;
-    expect(socket.destroyed).toBe(true);
+    expect(await reply).toMatch(/^HTTP\/1\.1 408 /);
   });
 });
