@@ -58,23 +58,60 @@ describe('Brother connection problems, with a real TCP connection', () => {
     expect(fake.machineSides).toHaveLength(2);
   });
 
-  it('gives a socket error, not the no-answer message, when nothing listens on the port', async () => {
+  it('gives one error line with the socket error, not the no-answer message, when nothing listens on the port', async () => {
     const status = await connectorFor(await closedPort()).poll();
 
     expect(status.connected).toBe(false);
-    expect(status.errors[0]).toMatch(/^Socket error: connect ECONNREFUSED/);
-    expect(status.errors).not.toContain(NO_REPLY_ERROR);
+    expect(status.errors).toEqual([expect.stringMatching(/^Unable to connect: connect ECONNREFUSED/)]);
   });
 
-  it('gives "Connection timeout" when the connection does not open in time', async () => {
+  it('gives one error line "Unable to connect: Connection timeout" when the connection does not open in time', async () => {
     // The connect never ends, as with a machine that is off behind a router
     vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) { return this; });
 
     const status = await connectorFor(10000).poll();
 
     expect(status.connected).toBe(false);
-    expect(status.errors[0]).toBe('Connection timeout');
-    expect(status.errors).not.toContain(NO_REPLY_ERROR);
+    expect(status.errors).toEqual(['Unable to connect: Connection timeout']);
+  });
+
+  it('writes one reason in the connection log for a failed connect', async () => {
+    const log = captureLog();
+    try {
+      const brother = connectorFor(await closedPort());
+      await brother.poll();
+
+      new ConnectionLog().record(brother);
+
+      expect(log.text('warn')).toMatch(/Machine cannot be reached.*reason="Unable to connect: connect ECONNREFUSED [^;"]*"/);
+    } finally {
+      log.restore();
+    }
+  });
+
+  it('gives one error line when the machine resets the connection during a poll', async () => {
+    const fake = await startSilentBrother();
+    const brother = connectorFor(fake.port, 60_000);
+    const poll = brother.poll();
+    await vi.waitFor(() => expect(fake.commands).toContain('PANEL'));
+
+    fake.machineSides[0].resetAndDestroy();
+    const status = await poll;
+
+    expect(status.connected).toBe(false);
+    expect(status.errors).toEqual(['Poll failed: read ECONNRESET']);
+  });
+
+  it('tells the socket error when the machine resets the connection between two polls', async () => {
+    const fake = await startFakeBrother();
+    const brother = connectorFor(fake.port, 60_000);
+    await brother.poll();
+    await brother.toolSyncEnded();
+
+    fake.machineSides[0].resetAndDestroy();
+
+    await vi.waitFor(() => expect(brother.getStatus().connected).toBe(false));
+    expect(brother.getStatus().errors).toEqual(['Socket error: read ECONNRESET']);
   });
 
   it('gives no error when the machine answers each command', async () => {
