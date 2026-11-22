@@ -65,6 +65,7 @@ export default defineConfig({
           { text: 'Run from source', link: '/develop/' },
           { text: 'Fake machines', link: '/develop/fake-machines' },
           { text: 'Pi card image', link: '/develop/pi-image' },
+          { text: 'Brother connector', link: '/develop/brother-connector' },
         ],
       },
       {

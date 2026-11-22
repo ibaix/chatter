@@ -1,6 +1,6 @@
 import type { FoundMachine } from '@local-chatter/shared';
 import { parseStringPromise } from 'xml2js';
-import { brotherCommand } from '../machines/brother/BrotherConnector.js';
+import { brotherCommand } from '../machines/brother/brotherProtocol.js';
 import { buildCommandString } from '../machines/haas/HaasConnector.js';
 import { DEFAULT_DATA_PORTS, DEFAULT_HAAS_QUERY_PORT } from '../polling/machinePorts.js';
 import { askOverTcp } from './tcp.js';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MANUAL_SYNC_EVERY_MS, TOOL_SYNC_MIN_AGE_MS, ToolSyncTracker, isIdle } from './toolSync.js';
+import { TOOL_SYNC_MIN_AGE_MS, TOOL_SYNC_MIN_GAP_MS, ToolSyncTracker, isIdle } from './toolSync.js';
 
 const START = Date.parse('2026-11-21T08:00:00Z');
 const MINUTE = 60_000;
@@ -46,8 +46,8 @@ describe('ToolSyncTracker', () => {
     tracker.started(START, 'auto');
     tracker.ended(START, 'No reply');
 
-    expect(tracker.autoSyncDue(START + MANUAL_SYNC_EVERY_MS - 1)).toBe(false);
-    expect(tracker.autoSyncDue(START + MANUAL_SYNC_EVERY_MS)).toBe(true);
+    expect(tracker.autoSyncDue(START + TOOL_SYNC_MIN_GAP_MS - 1)).toBe(false);
+    expect(tracker.autoSyncDue(START + TOOL_SYNC_MIN_GAP_MS)).toBe(true);
   });
 
   it('keeps no result of an abandoned read: only the read stops running', () => {
@@ -89,6 +89,20 @@ describe('ToolSyncTracker', () => {
     expect(tracker.state().running).toBe(true);
   });
 
+  it('runs from started() until ended() or abandoned()', () => {
+    const tracker = new ToolSyncTracker();
+    expect(tracker.running).toBe(false);
+
+    tracker.started(START, 'auto');
+    expect(tracker.running).toBe(true);
+    tracker.ended(START + 1000, null);
+    expect(tracker.running).toBe(false);
+
+    tracker.started(START + 2000, 'manual');
+    tracker.abandoned('manual');
+    expect(tracker.running).toBe(false);
+  });
+
   it('keeps the time of the last good read and the error of the last read', () => {
     const tracker = new ToolSyncTracker();
     tracker.started(START, 'auto');
@@ -112,7 +126,7 @@ describe('ToolSyncTracker', () => {
     expect(tracker.manualRefusal(START + 1000)).toEqual({ outcome: 'busy' });
     tracker.ended(START + 2000, null);
     expect(tracker.manualRefusal(START + 10_000)).toEqual({ outcome: 'too-soon', retryAfterSeconds: 20 });
-    expect(tracker.manualRefusal(START + MANUAL_SYNC_EVERY_MS)).toBeNull();
+    expect(tracker.manualRefusal(START + TOOL_SYNC_MIN_GAP_MS)).toBeNull();
   });
 
   it('does not count an automatic read in the limit of the Sync button', () => {

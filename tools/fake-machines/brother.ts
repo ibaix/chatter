@@ -7,7 +7,8 @@ import { startRequestReplyServer, type SlowStart } from './tcp.js';
  *
  * The client sends a frame: %CLOD    <COMMAND>  \r\n\r\n<checksum>%
  * The control answers:      %RLOD    <COMMAND>00\r\n<KEY>,<value>,...\r\n\r\n<checksum>%
- * Formats copy the replies in apps/server/src/machines/brother/BrotherConnector.test.ts,
+ * A command that the control does not know gets status 08 and no values, as on a real control.
+ * Formats copy the replies in apps/server/src/machines/brother/testSupport.ts,
  * which were captured from real machines.
  */
 
@@ -20,6 +21,9 @@ const COMMAND_WIDTH = 8;
 const MODE_NUMBERS: Record<Mode, number> = { MANUAL: 0, MDI: 1, MEMORY: 2, EDIT: 3 };
 /** The MEM "operation status": 0 reset, 1 operation, 2 temporary stop (feed hold) */
 const OPERATION_STATUS: Record<Execution, number> = { READY: 0, ACTIVE: 1, INTERRUPTED: 2, STOPPED: 0 };
+
+/** The reply status for a command that the control does not know */
+const UNKNOWN_COMMAND_STATUS = '08';
 
 /** The ALARM reply uses category 90 when there is no alarm */
 const NO_ALARM = '9000000000';
@@ -50,11 +54,14 @@ export function startBrotherServer(simulator: MachineSimulator, host: string, po
 function buildReply(frame: string, state: MachineState): string {
   const command = frame.slice(COMMAND_START, COMMAND_START + COMMAND_WIDTH).trim();
   const lines = replyLines(command, state);
-  const body = `RLOD    ${command.padEnd(COMMAND_WIDTH)}00\r\n${lines.join('\r\n')}\r\n\r\n`;
+  const body = lines === null
+    ? `RLOD    ${command.padEnd(COMMAND_WIDTH)}${UNKNOWN_COMMAND_STATUS}\r\n`
+    : `RLOD    ${command.padEnd(COMMAND_WIDTH)}00\r\n${lines.join('\r\n')}\r\n\r\n`;
   return `%${body}${checksum(body)}%`;
 }
 
-function replyLines(command: string, state: MachineState): string[] {
+/** The lines of the reply, or null for a command that the control does not know */
+function replyLines(command: string, state: MachineState): string[] | null {
   switch (command) {
     case 'PANEL': return [`D01,0,0,0`, `K01,${MODE_NUMBERS[state.mode]},5,0,0,0,0,0,0,0,1,0`];
     case 'MEM': return [`A01,'/       ',${state.program.number},${OPERATION_STATUS[state.execution]},0,0,0,0`];
@@ -67,7 +74,7 @@ function replyLines(command: string, state: MachineState): string[] {
     case 'TOLNM1': return toolOffsetLines(INCH_TO_MM);
     case 'MCRNI1':
     case 'MCRNM1': return macroLines(state);
-    default: return [];
+    default: return null;
   }
 }
 
