@@ -242,6 +242,49 @@ describe('ToolTableTab sync', () => {
     });
   });
 
+  describe('the error "address changed"', () => {
+    const ADDRESS_CHANGED = 'The address of the machine changed during the read. Chatter did not keep the result.';
+
+    it('shows after an earlier read, when the status of the server without the forgotten read comes before the reply', async () => {
+      let refuse: (error: Error) => void = () => {};
+      syncTools.mockReturnValue(new Promise((_, reject) => { refuse = reject; }));
+      const { rerender } = renderTab(SYNCED);
+      fireEvent.click(screen.getByRole('button', { name: 'Sync' }));
+      // The server forgets the read of the old address, and sends its status before the reply
+      rerender(tabWith(NOT_SYNCED));
+
+      await act(async () => refuse(new ToolSyncError(ADDRESS_CHANGED, { outcome: 'address-changed' })));
+
+      expect(screen.getByRole('alert')).toHaveTextContent(ADDRESS_CHANGED);
+    });
+
+    it('stays after the reply when the status without the forgotten read comes, until a newer read', async () => {
+      refuseSync(ADDRESS_CHANGED, { outcome: 'address-changed' });
+      const { rerender } = renderTab(SYNCED);
+      await pressSync();
+
+      rerender(tabWith(NOT_SYNCED));
+      expect(screen.getByRole('alert')).toHaveTextContent(ADDRESS_CHANGED);
+
+      rerender(tabWith(syncedAt('2026-11-21T08:20:00.000Z')));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('goes when the user presses Sync again, and the new Sync reads the tools', async () => {
+      refuseSync(ADDRESS_CHANGED, { outcome: 'address-changed' });
+      const { rerender } = renderTab(SYNCED);
+      await pressSync();
+      rerender(tabWith(NOT_SYNCED));
+      syncTools.mockResolvedValue(syncedAt('2026-11-21T08:20:00.000Z'));
+
+      await pressSync();
+
+      expect(syncTools).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByText('Synced 08:20 AM')).toBeInTheDocument();
+    });
+  });
+
   it('has no Sync for a machine that sends its tool table in each poll', () => {
     renderTab(undefined);
 

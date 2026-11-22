@@ -48,12 +48,21 @@ function causeShows(refusal: RefusalError['refusal'], connected: boolean, toolSy
 }
 
 /**
+ * True when the server read the tools after the Sync started. A status with no read is not newer: the server forgets
+ * its last read when the address changes, and it sends that status before its reply "address changed".
+ */
+function newerReadCame(toolSync: ToolSyncState, serverAttemptAt: string | null): boolean {
+  return toolSync.lastAttemptAt !== null && (serverAttemptAt === null || toolSync.lastAttemptAt > serverAttemptAt);
+}
+
+/**
  * True while the error of a refused Sync still applies. A newer read of the server removes each such error.
  * "Not connected" goes when the machine is connected again, and "busy" when the read that ran ends.
- * "Too soon" goes after its seconds (see the timer in useRefusalError). Another error stays until the newer read.
+ * "Too soon" goes after its seconds (see the timer in useRefusalError). Another error, for example
+ * "address changed", stays until the newer read or the next Sync.
  */
 function stillApplies(error: RefusalError, connected: boolean, toolSync: ToolSyncState): boolean {
-  if (toolSync.lastAttemptAt !== error.serverAttemptAt) return false;
+  if (newerReadCame(toolSync, error.serverAttemptAt)) return false;
   if (error.refusal.outcome === 'not-connected' || error.refusal.outcome === 'busy') {
     return !error.causeSeen || causeShows(error.refusal, connected, toolSync);
   }
