@@ -252,7 +252,8 @@ export class BrotherConnector extends BaseMachineConnector {
   private reconnecting = false;
   /**
    * Counts the calls of disconnect(), so the planned reconnect opens no new connection after a disconnect or a removal
-   * during its orderly close. The orderly close itself does not count.
+   * during its orderly close, and a tool read does not start after a disconnect during its wait for the poll (for
+   * example after its time limit). The orderly close itself does not count.
    */
   private disconnects = 0;
 
@@ -562,11 +563,10 @@ export class BrotherConnector extends BaseMachineConnector {
    */
   private async syncTools(trigger: 'auto' | 'manual'): Promise<ToolSyncResult> {
     const generation = this.controlGeneration;
+    const disconnects = this.disconnects;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let timedOut = false;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        timedOut = true;
         // Ends the command that waits, and the next poll connects again
         this.disconnect();
         reject(new Error(`The tool read did not end in ${TOOL_SYNC_TIMEOUT_MS / 1000} seconds`));
@@ -576,11 +576,11 @@ export class BrotherConnector extends BaseMachineConnector {
     try {
       const read = (async () => {
         await this.runningPoll?.catch(() => {});
-        // After the time limit, a later state poll can use the connection, so the read must not start
-        if (timedOut) return;
-        // The poll before the read lost the connection (for example the machine was removed, or a reconnect
-        // failed). The read fails with the reason of that poll.
-        if (!this.connected) throw new Error(this.errors.at(-1) ?? 'Not connected');
+        // A disconnect during the wait: the time limit ended (then a later poll can have connected again, and the
+        // read must not use that connection), the machine was removed, or the poll lost the connection. Also the
+        // poll before the read can have lost the connection, for example when a reconnect failed. The read fails
+        // with the reason of that poll. The planned reconnect is not a disconnect, so a Sync can wait for it.
+        if (disconnects !== this.disconnects || !this.connected) throw new Error(this.errors.at(-1) ?? 'Not connected');
         await this.readTools(generation);
       })();
       await Promise.race([read, timeout]);
