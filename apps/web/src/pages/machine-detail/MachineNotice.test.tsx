@@ -18,6 +18,16 @@ describe('MachineNotice', () => {
     expect(machineStateOf(machine)).toBe('connecting');
   });
 
+  it('shows why an offline machine cannot be reached, with a link to what to do', () => {
+    const machine = testMachine({ connected: false, errors: ['Connection timeout'] });
+
+    render(<MachineNotice machine={machine} state="offline" now={Date.now()} />);
+
+    expect(screen.getByText('Connection timeout')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'What to do when a machine is offline' }))
+      .toHaveAttribute('href', expect.stringMatching(/\/guide\/get-started#if-a-machine-shows-offline$/));
+  });
+
   it('shows no notice for a machine that runs while the page is live', () => {
     const machine = testMachine({ connected: true }, { execution: 'ACTIVE' });
 

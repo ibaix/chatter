@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
+import { DocsLink } from '../../components/ui/DocsLink';
 import { Notice } from '../../components/ui/Notice';
 import { alarmOf, offlineReasonOf } from '../../machines/alarm';
 import type { MachineState } from '../../machines/machineStatus';
@@ -19,7 +20,7 @@ interface NoticeContent {
   tone: 'alarm' | 'offline';
   title: string;
   tag?: string;
-  text: string;
+  text: ReactNode;
 }
 
 function noticeOf(machine: Machine, state: MachineState, now: number, chatterIsLost: boolean): NoticeContent | null {
@@ -39,7 +40,12 @@ function noticeOf(machine: Machine, state: MachineState, now: number, chatterIsL
       key: `${machine.id}:offline:${reason}`,
       tone: 'offline',
       title: reason,
-      text: `${lastAnswer}Check that the machine is on and on the network.`,
+      text: (
+        <>
+          {lastAnswer}Check that the machine is on and on the network.{' '}
+          <DocsLink page="guide/get-started#if-a-machine-shows-offline">What to do when a machine is offline</DocsLink>
+        </>
+      ),
     };
   }
   const alarm = alarmOf(machine);

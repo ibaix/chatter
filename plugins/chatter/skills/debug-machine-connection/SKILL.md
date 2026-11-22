@@ -55,6 +55,7 @@ A machine can use a port other than the default. The machine's port is in `/api/
 
 - **Closed:** the machine is off, the IP address is wrong, the protocol is off on the control, or a firewall or a different network is between them. Ask the user to compare the IP address on the control with `host`.
 - **Open, but Chatter is offline:** the protocol, the port or the login does not match. Read `errors` and the log again.
+- **Open, and the error says `The machine accepts the connection, but it does not answer`:** another program holds the connection. A Brother control serves only one program at a time. Ask the user which other computers run Chatter (for example a test copy on a laptop) or other monitoring software. On a Mac or Linux computer, `lsof -nP -iTCP@<host>:<port>` shows a connection to the machine. On Windows, use `netstat -an | findstr <host>`. Chatter cannot see the other program.
 
 ## 4. No program files
 

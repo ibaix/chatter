@@ -103,6 +103,25 @@ function parseValue(
   }
 }
 
+/**
+ * The error when the machine accepts the TCP connection but does not answer a command.
+ * A Brother control serves one client at a time. It accepts a second connection, but it does not answer on it.
+ */
+export const NO_REPLY_ERROR =
+  'The machine accepts the connection, but it does not answer. Possibly another program is connected to it. ' +
+  'A Brother control serves only one program at a time. Stop the other program. If you cannot find it, turn the control off and on again.';
+
+/** A command got no reply in time. The connection is not usable after this. */
+class NoReplyError extends Error {
+  constructor() {
+    super(NO_REPLY_ERROR);
+  }
+}
+
+/** A command or a connect waits no more when its socket closes, for example when the poll ran out of time */
+const CLOSED_BEFORE_REPLY_ERROR = 'The connection closed before the machine answered';
+const CLOSED_BEFORE_OPEN_ERROR = 'The connection closed before it opened';
+
 /** A Brother request: "%CLOD    <command>  ", then a checksum, between % signs */
 export function brotherCommand(command: string): string {
   const cmdBody = 'CLOD'.padEnd(8) + command.padEnd(8) + '  \r\n';
@@ -186,25 +205,34 @@ export class BrotherConnector extends BaseMachineConnector {
     return new Promise((resolve, reject) => {
       if (this.socket) this.socket.destroy();
 
-      this.socket = new net.Socket();
-      this.socket.setTimeout(this.timeout);
+      const socket = new net.Socket();
+      this.socket = socket;
+      // The same time limit is for the connect and, in sendCommand, for each reply
+      socket.setTimeout(this.timeout);
 
-      this.socket.on('timeout', () => {
+      // Only for the connect. After it, a timeout means that a command got no reply (see sendCommand).
+      const onConnectTimeout = () => {
         this.connected = false;
         this.addError('Connection timeout');
-        this.socket?.destroy();
+        socket.destroy();
         reject(new Error('Connection timeout'));
-      });
+      };
+      socket.on('timeout', onConnectTimeout);
 
-      this.socket.on('error', (err: Error) => {
+      socket.on('error', (err: Error) => {
         this.connected = false;
         this.addError(`Socket error: ${err.message}`);
         reject(err);
       });
 
-      this.socket.on('close', () => { this.connected = false; });
+      // A destroyed socket gives only 'close'. Without this, a disconnect during the connect leaves it waiting forever.
+      socket.on('close', () => {
+        if (this.socket === socket) this.connected = false;
+        reject(new Error(CLOSED_BEFORE_OPEN_ERROR));
+      });
 
-      this.socket.connect(this.dataPort, this.host, () => {
+      socket.connect(this.dataPort, this.host, () => {
+        socket.removeListener('timeout', onConnectTimeout);
         this.connected = true;
         this.clearErrors();
         resolve();
@@ -220,10 +248,14 @@ export class BrotherConnector extends BaseMachineConnector {
     this.connected = false;
   }
 
-  /** Send a command and wait for the reply between % signs */
+  /**
+   * Send a command and wait for the reply between % signs.
+   * With no reply in time, it disconnects: a late reply would come as the reply of the next command.
+   * It also ends when the socket closes, because a destroyed socket gives no 'data', 'error' or 'timeout' after it.
+   */
   async sendCommand(command: string): Promise<ParsedResponse> {
     const socket = this.socket;
-    if (!socket || !this.connected) throw new Error('Not connected');
+    if (!socket || !this.connected || socket.destroyed || !socket.writable) throw new Error('Not connected');
 
     return new Promise((resolve, reject) => {
       let reply = '';
@@ -238,17 +270,24 @@ export class BrotherConnector extends BaseMachineConnector {
       };
 
       const onError = (err: Error) => { cleanup(); reject(err); };
-      const onTimeout = () => { cleanup(); reject(new Error('Command timeout')); };
+      const onClose = () => { cleanup(); reject(new Error(CLOSED_BEFORE_REPLY_ERROR)); };
+      const onTimeout = () => {
+        cleanup();
+        this.disconnect();
+        reject(new NoReplyError());
+      };
 
       const cleanup = () => {
         socket.removeListener('data', onData);
         socket.removeListener('error', onError);
         socket.removeListener('timeout', onTimeout);
+        socket.removeListener('close', onClose);
       };
 
       socket.on('data', onData);
       socket.on('error', onError);
       socket.on('timeout', onTimeout);
+      socket.on('close', onClose);
       socket.write(brotherCommand(command), 'ascii');
     });
   }
@@ -276,8 +315,9 @@ export class BrotherConnector extends BaseMachineConnector {
           this.controlType = controlType;
           return;
         }
-      } catch {
-        // A control that does not know this command; try the next one
+      } catch (err) {
+        // A control that does not know this command; try the next one. With no reply or no connection, stop.
+        if (err instanceof NoReplyError || !this.connected) throw err;
       }
     }
   }
@@ -324,13 +364,9 @@ export class BrotherConnector extends BaseMachineConnector {
       }
     }
 
-    if (this.controlType === null) {
-      await this.detectControlType();
-    }
-
     this.prevData = { ...this.data };
 
-    const responses = await this.sendPollCommands();
+    const responses = await this.readMachine();
     if (!responses) {
       return this.getStatus();
     }
@@ -349,8 +385,26 @@ export class BrotherConnector extends BaseMachineConnector {
     return this.getStatus();
   }
 
-  /** Send each command once, and get the replies by command. Gives null when a command fails. */
-  private async sendPollCommands(): Promise<Record<string, ParsedResponse> | null> {
+  /** Find the control type the first time, then send the poll commands. Gives null when a command fails. */
+  private async readMachine(): Promise<Record<string, ParsedResponse> | null> {
+    try {
+      if (this.controlType === null) {
+        await this.detectControlType();
+      }
+      return await this.sendPollCommands();
+    } catch (err) {
+      if (err instanceof NoReplyError) {
+        // The message tells the cause and the fix, so it needs no "Poll failed" in front. sendCommand disconnected.
+        this.addError(err.message);
+      } else {
+        this.handlePollError(err);
+      }
+      return null;
+    }
+  }
+
+  /** Send each command once, and get the replies by command */
+  private async sendPollCommands(): Promise<Record<string, ParsedResponse>> {
     const commands = [...new Set(this.dataItems.map(([, command]) => command)), this.toolDataCommand];
     if (this.atcCommand) {
       commands.push(this.atcCommand);
@@ -358,12 +412,7 @@ export class BrotherConnector extends BaseMachineConnector {
 
     const responses: Record<string, ParsedResponse> = {};
     for (const command of commands) {
-      try {
-        responses[command] = await this.sendCommand(command);
-      } catch (err) {
-        this.handlePollError(err);
-        return null;
-      }
+      responses[command] = await this.sendCommand(command);
     }
     return responses;
   }

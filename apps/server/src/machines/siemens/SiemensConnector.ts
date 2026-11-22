@@ -57,6 +57,8 @@ export class SiemensConnector extends BaseMachineConnector {
   /** What may be missing from the alarms, or null */
   private alarmWarning: string | null = null;
   private data: SiemensMachineData = {};
+  /** Counts the disconnects, so a connect that ends after a disconnect does not keep its session */
+  private disconnects = 0;
 
   constructor(config: SiemensMachineConfig, private readonly openSession: OpenSinumerikSession = openSinumerikSession) {
     super({
@@ -79,8 +81,9 @@ export class SiemensConnector extends BaseMachineConnector {
 
   async connect(): Promise<void> {
     this.disconnect();
+    const disconnects = this.disconnects;
     try {
-      this.session = await this.openSession({
+      const session = await this.openSession({
         host: this.host,
         port: this.opcuaPort,
         user: this.opcuaUser || undefined,
@@ -88,6 +91,12 @@ export class SiemensConnector extends BaseMachineConnector {
         security: this.opcuaSecurity,
         timeoutMs: this.timeout,
       });
+      if (disconnects !== this.disconnects) {
+        // The machine was disconnected while the session opened, for example at a poll timeout. It must not keep the session.
+        session.close().catch(() => undefined);
+        throw new Error('Disconnected while connecting');
+      }
+      this.session = session;
       this.connected = true;
       this.clearErrors();
     } catch (error) {
@@ -114,6 +123,7 @@ export class SiemensConnector extends BaseMachineConnector {
   }
 
   disconnect(): void {
+    this.disconnects++;
     if (this.session) {
       this.session.close().catch(() => {
         // The connection may be gone already; the connector is disconnected either way

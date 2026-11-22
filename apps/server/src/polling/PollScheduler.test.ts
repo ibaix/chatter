@@ -1,15 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
+import { captureLog } from '../logging/testSupport.js';
 import { PollScheduler } from './PollScheduler.js';
 
 const POLL_TIMEOUT_MS = 10000;
+/** After this time, the scheduler stops waiting for a poll that does not end */
+const STUCK_POLL_MS = 60000;
 
 /** A machine whose polls end when the test says so */
 class FakeMachine {
   readonly id = 'machine_1';
   connected = true;
   polls = 0;
-  private endPoll: (() => void) | null = null;
+  /** The polls that wait for the test, the oldest first */
+  private readonly waitingPolls: (() => void)[] = [];
+  /** The time limits that the scheduler told the machine about */
+  readonly timeoutReports: number[] = [];
 
   /** Each poll waits until endRunningPoll() is called */
   pollsWaitForTest = false;
@@ -21,7 +27,7 @@ class FakeMachine {
     if (this.failure === 'throws at once') throw new Error('Bad connector');
     if (this.failure === 'rejects') return Promise.reject(new Error('No answer'));
     if (!this.pollsWaitForTest) return Promise.resolve();
-    return new Promise(resolve => { this.endPoll = resolve; });
+    return new Promise(resolve => { this.waitingPolls.push(resolve); });
   }
 
   disconnects = 0;
@@ -31,9 +37,13 @@ class FakeMachine {
     this.connected = false;
   }
 
+  /** End the oldest poll that waits */
   endRunningPoll(): void {
-    this.endPoll?.();
-    this.endPoll = null;
+    this.waitingPolls.shift()?.();
+  }
+
+  reportPollTimeout(timeoutMs: number): void {
+    this.timeoutReports.push(timeoutMs);
   }
 
   asConnector(): BaseMachineConnector {
@@ -157,15 +167,70 @@ describe('PollScheduler', () => {
     });
 
     it('is not polled over again while it still runs', async () => {
-      await vi.advanceTimersByTimeAsync(5 * POLL_TIMEOUT_MS);
+      // Until the scheduler stops waiting for it (see "a poll that never ends")
+      await vi.advanceTimersByTimeAsync(STUCK_POLL_MS - POLL_TIMEOUT_MS - 1);
 
       expect(machine.polls).toBe(1);
+    });
+
+    it('tells the machine why it is offline, so the status and the log have a reason', () => {
+      expect(machine.timeoutReports).toEqual([POLL_TIMEOUT_MS]);
     });
 
     it('lets the next poll start after it ends', async () => {
       machine.endRunningPoll();
       await vi.runOnlyPendingTimersAsync();
 
+      expect(machine.polls).toBe(2);
+    });
+  });
+
+  describe('a poll that never ends', () => {
+    beforeEach(async () => {
+      machine.pollsWaitForTest = true;
+      scheduler.start(machine.asConnector());
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    it('stops blocking the machine after 60 seconds, so the next poll runs and connects again', async () => {
+      const log = captureLog();
+      try {
+        // The next poll comes at the next timer, after the interval
+        await vi.advanceTimersByTimeAsync(STUCK_POLL_MS + 2000);
+
+        expect(machine.polls).toBe(2);
+        expect(log.text('warn')).toContain('A poll did not end');
+      } finally {
+        log.restore();
+      }
+    });
+
+    it('disconnects the machine when it stops waiting, also when the old poll connected after the timeout', async () => {
+      await vi.advanceTimersByTimeAsync(STUCK_POLL_MS - 1);
+      // For example a connect of the old poll that ended after all
+      machine.connected = true;
+      const disconnectsBefore = machine.disconnects;
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(machine.disconnects).toBe(disconnectsBefore + 1);
+      expect(machine.connected).toBe(false);
+    });
+
+    it('does not let the late end of the old poll free or disconnect the new poll', async () => {
+      // The next poll comes at the next timer, after the interval
+      await vi.advanceTimersByTimeAsync(STUCK_POLL_MS + 2000);
+      expect(machine.polls).toBe(2);
+      machine.connected = true;
+      const disconnectsBefore = machine.disconnects;
+
+      // The old poll ends at last, while the new one still runs
+      machine.endRunningPoll();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(machine.disconnects).toBe(disconnectsBefore);
+      await vi.advanceTimersByTimeAsync(POLL_TIMEOUT_MS * 2);
+      // The new poll still runs, so no third poll starts over it
       expect(machine.polls).toBe(2);
     });
   });

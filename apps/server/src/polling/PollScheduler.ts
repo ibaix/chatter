@@ -1,4 +1,7 @@
+import { createLogger } from '../logging/logger.js';
 import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
+
+const log = createLogger('poller');
 
 interface PollSchedulerHooks {
   /** Called after each poll of a machine, good or bad */
@@ -23,6 +26,12 @@ const POLL_TIMEOUT_MS = 10000;
  * and for at most this time, the machine is "connecting", not "offline".
  */
 const CONNECTING_TIME_MS = 30000;
+/**
+ * A poll that still has not ended this long after it started is stuck: a promise in the connector that never settles.
+ * Then the scheduler stops waiting for it, so one bug cannot keep a machine offline until Chatter restarts.
+ * Each connector ends its requests on a timeout or a closed socket, so a working poll is never this slow.
+ */
+const STUCK_POLL_MS = 60000;
 
 /**
  * A machine that fails often is polled less often, so it does not slow the server.
@@ -43,13 +52,23 @@ export class PollScheduler {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   /** The machines to keep polling: from start() until stop() */
   private readonly activeIds = new Set<string>();
-  /** The machines with a poll that has not ended yet */
-  private readonly idsWithPollInProgress = new Set<string>();
+  /** The machines with a poll that has not ended yet, each with a token for that poll */
+  private readonly pollsInProgress = new Map<string, symbol>();
   private readonly failureCounts = new Map<string, number>();
   /** The machines that are connecting, each with the timer that ends its connecting time */
   private readonly connectingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  constructor(private readonly hooks: PollSchedulerHooks) {}
+  private readonly pollTimeoutMs: number;
+  private readonly stuckPollMs: number;
+
+  /** `limits` is for tests, which need short times */
+  constructor(
+    private readonly hooks: PollSchedulerHooks,
+    limits: { pollTimeoutMs?: number; stuckPollMs?: number } = {},
+  ) {
+    this.pollTimeoutMs = limits.pollTimeoutMs ?? POLL_TIMEOUT_MS;
+    this.stuckPollMs = limits.stuckPollMs ?? STUCK_POLL_MS;
+  }
 
   get intervalMs(): number {
     return this.baseIntervalMs;
@@ -88,7 +107,7 @@ export class PollScheduler {
   }
 
   async pollNow(connector: BaseMachineConnector): Promise<void> {
-    if (this.idsWithPollInProgress.has(connector.id)) {
+    if (this.pollsInProgress.has(connector.id)) {
       // The last poll ran out of time and still runs. Two polls at once would talk over each other.
       this.scheduleNext(connector);
       return;
@@ -110,16 +129,22 @@ export class PollScheduler {
    * A poll that runs out of time disconnects the machine, so its old values do not show as live.
    * When that poll ends later, the machine is disconnected again, so whatever the late poll did
    * (for example a connect that ended after all) does not count. The next poll connects again.
+   * A poll that has not ended after STUCK_POLL_MS is left behind (see abandonStuckPoll).
    */
   private async pollWithTimeout(connector: BaseMachineConnector): Promise<boolean> {
     const { id } = connector;
     let timedOut = false;
-    this.idsWithPollInProgress.add(id);
+    const token = Symbol(id);
+    this.pollsInProgress.set(id, token);
+    const stuckTimer = setTimeout(() => this.abandonStuckPoll(connector, token), this.stuckPollMs);
     // Promise.resolve().then also catches an error that poll() throws before it gives a promise
     const poll = Promise.resolve()
       .then(() => connector.poll())
       .finally(() => {
-        this.idsWithPollInProgress.delete(id);
+        clearTimeout(stuckTimer);
+        // A poll that was left behind must not end or disconnect the poll that came after it
+        if (this.pollsInProgress.get(id) !== token) return;
+        this.pollsInProgress.delete(id);
         if (timedOut) disconnectQuietly(connector);
       });
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
@@ -127,8 +152,9 @@ export class PollScheduler {
       timeoutTimer = setTimeout(() => {
         timedOut = true;
         disconnectQuietly(connector);
+        connector.reportPollTimeout(this.pollTimeoutMs);
         resolve(false);
-      }, POLL_TIMEOUT_MS);
+      }, this.pollTimeoutMs);
     });
 
     try {
@@ -139,6 +165,19 @@ export class PollScheduler {
     } finally {
       clearTimeout(timeoutTimer);
     }
+  }
+
+  /**
+   * Stop waiting for a poll that never ended, so the next poll can run. The connector is disconnected again,
+   * so the next poll connects again. The scheduler cannot stop the old poll. If the old poll continues after all,
+   * it can call connect() or disconnect() while the next poll runs. We accept this risk: a stuck poll is a bug
+   * in a connector, and this is better than a machine that stays offline until Chatter restarts.
+   */
+  private abandonStuckPoll(connector: BaseMachineConnector, token: symbol): void {
+    if (this.pollsInProgress.get(connector.id) !== token) return;
+    this.pollsInProgress.delete(connector.id);
+    disconnectQuietly(connector);
+    log.warn('A poll did not end, so the next poll starts without it', { machine: connector.id, waitedMs: this.stuckPollMs });
   }
 
   private startConnecting(connector: BaseMachineConnector): void {

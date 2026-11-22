@@ -1,5 +1,6 @@
+import net from 'net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { BrotherConnector, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
+import { BrotherConnector, NO_REPLY_ERROR, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
 import type { BrotherMachineConfig, DataItemTransform } from '../../types/index.js';
 
 /**
@@ -459,5 +460,244 @@ describe('Brother run state from a poll', () => {
     await connector.poll();
 
     expect(connector.getDataSnapshot().execution).toBeUndefined();
+  });
+});
+
+/** A short timeout, so that a test does not wait long for a machine that does not answer */
+const SHORT_TIMEOUT_MS = 150;
+
+/** The open connections of each test server, so that closeServer can end them */
+const serverSockets = new WeakMap<net.Server, Set<net.Socket>>();
+
+/** A TCP server on a free port of this computer. `onSocket` gets each connection. */
+function startServer(onSocket: (socket: net.Socket) => void): Promise<net.Server> {
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer(socket => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.on('error', () => {});
+    onSocket(socket);
+  });
+  serverSockets.set(server, sockets);
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+function portOf(server: net.Server): number {
+  return (server.address() as net.AddressInfo).port;
+}
+
+function closeServer(server: net.Server): Promise<void> {
+  for (const socket of serverSockets.get(server) ?? []) socket.destroy();
+  return new Promise(resolve => server.close(() => resolve()));
+}
+
+/** Answers each command the way a Brother control does. A command that it does not know gets an empty reply. */
+function answerLikeABrother(socket: net.Socket): void {
+  socket.on('data', chunk => {
+    const command = /CLOD\s+(\S+)/.exec(chunk.toString('ascii'))?.[1] ?? '';
+    socket.write('%' + (MOCK_RESPONSES[command] ?? `RLOD    ${command.padEnd(8)}01\r\n\r\n00%`));
+  });
+}
+
+describe('Brother connection problems, with a real TCP connection', () => {
+  let server: net.Server | null = null;
+  let connector: BrotherConnector;
+
+  function connectorFor(port: number): BrotherConnector {
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: port, timeout: SHORT_TIMEOUT_MS });
+    return connector;
+  }
+
+  afterEach(async () => {
+    connector?.disconnect();
+    if (server) await closeServer(server);
+    server = null;
+  });
+
+  it('tells that another program can hold the connection when the machine accepts it but does not answer', async () => {
+    server = await startServer(() => { /* accepts the connection, and never answers */ });
+
+    const status = await connectorFor(portOf(server)).poll();
+
+    expect(status.connected).toBe(false);
+    expect(status.errors).toEqual([NO_REPLY_ERROR]);
+  });
+
+  it('connects again on the next poll after a machine did not answer', async () => {
+    let connections = 0;
+    server = await startServer(() => { connections++; });
+    const silent = connectorFor(portOf(server));
+    await silent.poll();
+
+    await silent.poll();
+
+    expect(connections).toBe(2);
+  });
+
+  it('gives a socket error, not the no-answer message, when nothing listens on the port', async () => {
+    server = await startServer(() => {});
+    const port = portOf(server);
+    await closeServer(server);
+    server = null;
+
+    const status = await connectorFor(port).poll();
+
+    expect(status.connected).toBe(false);
+    expect(status.errors[0]).toMatch(/^Socket error: connect ECONNREFUSED/);
+    expect(status.errors).not.toContain(NO_REPLY_ERROR);
+  });
+
+  it('gives "Connection timeout" when the connection does not open in time', async () => {
+    // The connect never ends, as with a machine that is off behind a router
+    vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) { return this; });
+
+    const status = await connectorFor(10000).poll();
+
+    expect(status.connected).toBe(false);
+    expect(status.errors[0]).toBe('Connection timeout');
+    expect(status.errors).not.toContain(NO_REPLY_ERROR);
+  });
+
+  it('gives no error when the machine answers each command', async () => {
+    server = await startServer(answerLikeABrother);
+
+    const status = await connectorFor(portOf(server)).poll();
+
+    expect(status.errors).toEqual([]);
+    expect(status.connected).toBe(true);
+    expect(status.data.partCount).toBe(78);
+  });
+
+  it('does not read a late reply as the reply to a command of the next poll', async () => {
+    // A control answers in order. The first PANEL reply comes after the timeout, and it has an old mode (EDIT).
+    const lateReply = '%' + MOCK_RESPONSES.PANEL.replace('K01,0,', 'K01,3,');
+    let panelCommands = 0;
+    server = await startServer(socket => {
+      let replies = Promise.resolve();
+      socket.on('data', chunk => {
+        const command = /CLOD\s+(\S+)/.exec(chunk.toString('ascii'))?.[1] ?? '';
+        const late = command === 'PANEL' && ++panelCommands === 1;
+        const reply = late ? lateReply : '%' + (MOCK_RESPONSES[command] ?? `RLOD    ${command.padEnd(8)}01\r\n\r\n00%`);
+        replies = replies
+          .then(() => new Promise(resolve => setTimeout(resolve, late ? SHORT_TIMEOUT_MS + 50 : 0)))
+          .then(() => { if (!socket.destroyed) socket.write(reply); });
+      });
+    });
+    const slowOnce = connectorFor(portOf(server));
+
+    const first = await slowOnce.poll();
+    // At once, so the next poll waits for its PANEL reply when the late reply comes
+    const next = await slowOnce.poll();
+
+    expect(first.errors).toEqual([NO_REPLY_ERROR]);
+    expect(next.errors).toEqual([]);
+    expect(next.data.mode).toBe('MANUAL');
+    expect(next.data.partCount).toBe(78);
+  });
+
+  it('connects again on the next poll after the machine closed the connection', async () => {
+    const machineSides: net.Socket[] = [];
+    server = await startServer(socket => {
+      machineSides.push(socket);
+      answerLikeABrother(socket);
+    });
+    const answering = connectorFor(portOf(server));
+    await answering.poll();
+
+    machineSides[0].end();
+    await vi.waitFor(() => expect(answering.connected).toBe(false));
+    const status = await answering.poll();
+
+    expect(machineSides).toHaveLength(2);
+    expect(status.errors).toEqual([]);
+    expect(status.data.partCount).toBe(78);
+  });
+
+  it('stays connected when the old connection closes after a new connect', async () => {
+    server = await startServer(answerLikeABrother);
+    const answering = connectorFor(portOf(server));
+    await answering.connect();
+    const oldSocket = (answering as unknown as { socket: net.Socket }).socket;
+    await answering.connect();
+    await new Promise(resolve => (oldSocket.closed ? resolve(undefined) : oldSocket.once('close', resolve)));
+
+    // A late 'close' of the old socket, as when it comes after the new connection opened
+    oldSocket.emit('close', false);
+
+    expect(answering.connected).toBe(true);
+  });
+
+  it('stays connected with no error when the time between two polls is longer than the timeout', async () => {
+    server = await startServer(answerLikeABrother);
+    const answering = connectorFor(portOf(server));
+    await answering.poll();
+
+    await new Promise(resolve => setTimeout(resolve, SHORT_TIMEOUT_MS * 2));
+
+    expect(answering.getStatus().errors).toEqual([]);
+    expect(answering.connected).toBe(true);
+  });
+});
+
+describe('Brother command when the connection closes', () => {
+  let server: net.Server | null = null;
+  let connector: BrotherConnector;
+
+  afterEach(async () => {
+    connector?.disconnect();
+    if (server) await closeServer(server);
+    server = null;
+  });
+
+  /** Connected to a server that never answers, with a timeout that the test never reaches */
+  async function connectedToSilentServer(): Promise<BrotherConnector> {
+    server = await startServer(() => {});
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: portOf(server), timeout: 60_000 });
+    await connector.connect();
+    return connector;
+  }
+
+  it('ends a waiting command with an error when Chatter disconnects, so the poll does not wait forever', async () => {
+    const silent = await connectedToSilentServer();
+    const command = silent.sendCommand('PANEL');
+
+    silent.disconnect();
+
+    await expect(command).rejects.toThrow('The connection closed before the machine answered');
+  });
+
+  it('ends a waiting command with an error when the machine closes the connection', async () => {
+    let machineSide: net.Socket | undefined;
+    server = await startServer(socket => { machineSide = socket; });
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: portOf(server), timeout: 60_000 });
+    await connector.connect();
+    await vi.waitFor(() => expect(machineSide).toBeDefined());
+    const command = connector.sendCommand('PANEL');
+
+    machineSide!.end();
+
+    await expect(command).rejects.toThrow('The connection closed before the machine answered');
+  });
+
+  it('ends a connect with an error when Chatter disconnects before the connection opens', async () => {
+    vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) { return this; });
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', timeout: 60_000 });
+    const connecting = connector.connect();
+
+    connector.disconnect();
+
+    await expect(connecting).rejects.toThrow('The connection closed before it opened');
+  });
+
+  it('ends a poll with a reason when Chatter disconnects during a command', async () => {
+    const silent = await connectedToSilentServer();
+    // poll() runs at once up to the first command, which then waits for a reply
+    const poll = silent.poll();
+
+    silent.disconnect();
+    const status = await poll;
+
+    expect(status.connected).toBe(false);
+    expect(status.errors.join('; ')).toContain('The connection closed before the machine answered');
   });
 });

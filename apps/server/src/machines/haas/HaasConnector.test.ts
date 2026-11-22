@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import net from 'net';
-import { HaasConnector, buildCommandString, haasAlarmText, parseQueryResponse, parseRunStatus } from './HaasConnector.js';
+import { HaasConnector, buildCommandString, haasAlarmText, openSocket, parseQueryResponse, parseRunStatus } from './HaasConnector.js';
 import type { HaasMachineConfig } from '../../types/index.js';
 
 /** Port 1 has no server, so a connection to it fails at once */
@@ -385,5 +385,25 @@ describe('Haas data stream', () => {
     const status = await pollUntil(data => data.alarm !== undefined);
 
     expect(status.data).toMatchObject({ alarm: false, alarmText: undefined });
+  });
+});
+
+describe('Haas openSocket when the socket closes before it connects', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('ends with an error, so a disconnect during a connect does not leave the poll waiting forever', async () => {
+    // The connect never ends, as with a machine that is off behind a router
+    vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket) { return this; });
+    const socket = new net.Socket();
+    const onDown = vi.fn();
+    const opening = openSocket(socket, { host: '127.0.0.1', port: 5051, timeoutMs: 60_000, name: 'Query port', onDown });
+
+    // What disconnect() does
+    socket.destroy();
+
+    await expect(opening).rejects.toThrow('Query port connection closed before it opened');
+    expect(onDown).toHaveBeenCalledTimes(1);
   });
 });
