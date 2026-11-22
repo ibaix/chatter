@@ -57,7 +57,8 @@ export function LogPanel({ machines }: { machines: MachineName[] }) {
         </div>
         <p className="m-0 text-xs text-zinc-300">
           The support bundle has the version, the memory and the free space, the status of each machine, the update
-          helper files, and the log. It has no passwords, tokens, notification addresses or topics.
+          helper files, and the log. It does not have the passwords and tokens that are saved in the settings. But the
+          error texts and the log can contain addresses or phone numbers. The bundle is for your own support.
         </p>
         <DebugSwitch />
         <LiveLog filter={filter} />

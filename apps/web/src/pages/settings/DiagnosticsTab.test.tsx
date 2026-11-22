@@ -164,6 +164,13 @@ describe('DiagnosticsTab', () => {
     expect(screen.getByRole('link', { name: 'Download the support bundle' })).toHaveAttribute('href', '/api/support-bundle');
   });
 
+  it('tells that the support bundle hides the saved secrets only, so the log in it can have addresses or phone numbers', async () => {
+    await renderTab(facts());
+
+    expect(screen.getByText(/does not have the passwords and tokens that are saved in the settings/)).toBeInTheDocument();
+    expect(screen.getByText(/the log can contain addresses or phone numbers/)).toBeInTheDocument();
+  });
+
   it('turns on the debug level, and tells when it turns off', async () => {
     vi.mocked(setDebug).mockResolvedValue({ debugUntil: '2026-11-21T10:15:00.000Z' });
     await renderTab(facts());
