@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { changePassword, fetchSessions, logOutOtherBrowsers, type SessionsReport } from '../../api/auth';
 import { ThemeProvider } from '../../theme/ThemeProvider';
@@ -48,8 +48,10 @@ describe('AccountTab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Log out all other browsers' }));
 
-    expect(await screen.findByRole('button', { name: 'Log out all other browsers' })).toBeDisabled();
-    expect(screen.queryByText('Safari on iPad')).not.toBeInTheDocument();
+    // The button is off while the request runs too, so wait for the new list, not for the button
+    await waitForElementToBeRemoved(() => screen.queryByText('Safari on iPad'));
+    expect(logOutOtherBrowsers).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Log out all other browsers' })).toBeDisabled();
   });
 
   it('turns off the button when no other browser is logged in', async () => {
