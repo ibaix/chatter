@@ -107,3 +107,59 @@ describe('Siemens settings', () => {
     expect(connector.getStatus()).toMatchObject({ opcuaPort: 4841, opcuaUser: 'u', opcuaSecurity: 'signAndEncrypt' });
   });
 });
+
+describe('Brother address update', () => {
+  const ATC_REPLY = 'RLOD    ATCTL   00\r\nM02,  1,0,0\r\n\r\n00%';
+  const UNKNOWN = (command: string) => `RLOD    ${command.padEnd(8)}08\r\n01%`;
+
+  /** A Brother with a fake connection. `knowsAtc` tells if the control knows ATCTL; it knows no ATCTLD. */
+  function brotherThatAnswers(knowsAtc: { value: boolean }) {
+    const connector = new BrotherConnector({ name: 'B', host: HOST });
+    const connectNow = () => Object.assign(connector, { socket: { destroy: () => {} }, connected: true });
+    connectNow();
+    vi.spyOn(connector, 'connect').mockImplementation(async () => { connectNow(); });
+    const sent = vi.spyOn(connector, 'sendCommand').mockImplementation(async command => {
+      if (command === 'ATCTL' && knowsAtc.value) return connector.parseResponse(ATC_REPLY);
+      if (command.startsWith('ATCTL')) return connector.parseResponse(UNKNOWN(command));
+      return connector.parseResponse(`RLOD    ${command.padEnd(8)}00\r\n\r\n00%`);
+    });
+    const atcCommandsSent = () => sent.mock.calls.map(([command]) => command).filter(command => command.startsWith('ATCTL'));
+    return { connector, atcCommandsSent };
+  }
+
+  it.each([
+    ['host', { host: '192.168.1.60' }],
+    ['data port', { dataPort: 10001 }],
+  ])('forgets the control type and the tool table when the %s changes', async (_, update) => {
+    const { connector } = brotherThatAnswers({ value: true });
+    await connector.poll();
+    expect(connector.getStatus().data).toMatchObject({ controlType: 'C00', hasPocketInfo: true });
+
+    applyBrotherUpdate(connector, update);
+
+    expect(connector.getStatus().data).toMatchObject({ controlType: null, hasPocketInfo: false, toolTable: {} });
+  });
+
+  it('asks the ATC commands again at the new address, also after the old control knew neither', async () => {
+    const knowsAtc = { value: false };
+    const { connector, atcCommandsSent } = brotherThatAnswers(knowsAtc);
+    await connector.poll();
+    expect(atcCommandsSent()).toEqual(['ATCTL', 'ATCTLD']);
+
+    applyBrotherUpdate(connector, { host: '192.168.1.60' });
+    knowsAtc.value = true;
+    await connector.poll();
+
+    expect(connector.getStatus().data.controlType).toBe('C00');
+    expect(atcCommandsSent().filter(command => command === 'ATCTL').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('keeps the control type when the update has the same host and port', async () => {
+    const { connector } = brotherThatAnswers({ value: true });
+    await connector.poll();
+
+    applyBrotherUpdate(connector, { name: 'Renamed', host: HOST, dataPort: connector.dataPort });
+
+    expect(connector.getStatus().data).toMatchObject({ controlType: 'C00', hasPocketInfo: true });
+  });
+});

@@ -361,6 +361,18 @@ export class BrotherConnector extends BaseMachineConnector {
     }
   }
 
+  /**
+   * Forget what Chatter found about the control: the ATC command, the control type and the tool table.
+   * Use it when the address changes, because a different control can be at the new address.
+   */
+  forgetControl(): void {
+    this.atcCommand = null;
+    this.controlType = null;
+    this.unknownAtcCommands.clear();
+    this.toolTable = {};
+    this.hasPocketInfo = false;
+  }
+
   /** The tool in each pot, from the ATC reply */
   private updateToolTable(atcResponse: ParsedResponse): void {
     this.toolTable = {};

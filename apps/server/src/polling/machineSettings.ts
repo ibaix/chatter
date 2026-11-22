@@ -185,6 +185,9 @@ function reconnect(connector: BaseMachineConnector): void {
 }
 
 export function applyBrotherUpdate(connector: BrotherConnector, updates: BrotherMachineUpdate): void {
+  const addressChanged = (updates.host !== undefined && updates.host !== connector.host)
+    || (updates.dataPort !== undefined && updates.dataPort !== connector.dataPort);
+  if (addressChanged) connector.forgetControl();
   applyCommonUpdate(connector, updates);
   if (updates.dataPort !== undefined) connector.dataPort = updates.dataPort;
   if (updates.host !== undefined || updates.dataPort !== undefined) reconnect(connector);
