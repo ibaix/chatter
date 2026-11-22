@@ -65,9 +65,22 @@ const DATA_ITEMS: DataItem[] = [
   ['partGoal',     'WKCNTR', 'A01', 2, 'int'],
   ['toolNumber',   'PDSP',   'X01', 3, 'int'],
   ['spindleSpeed', 'PDSP',   'X01', 1, 'int'],
-  ['alarm',        'ALARM',  'E01', 0, 'bool', TRANSFORMS.alarm],
-  ['alarmCode',    'ALARM',  'E01', 0, 'string', TRANSFORMS.alarmCode],
 ];
+
+/** The command for the alarm list. Its E01 line has one slot for each alarm or message. */
+const ALARM_COMMAND = 'ALARM';
+
+/**
+ * The alarm and its code, from all the slots of the E01 alarm list. A slot can hold a communication message (CM)
+ * or "no alarm" (OM). A Speedio puts a CM entry in the list when it gets a command that it does not know, so a
+ * real alarm can be in a later slot. The alarm code is the code of the first real alarm.
+ */
+function alarmOfList(slots: string[]): { alarm: boolean; alarmCode: string } {
+  const firstAlarm = slots.map(slot => withoutQuotes(slot)).find(slot => slot !== '' && TRANSFORMS.alarm(slot) === true);
+  return firstAlarm === undefined
+    ? { alarm: false, alarmCode: '' }
+    : { alarm: true, alarmCode: String(TRANSFORMS.alarmCode(firstAlarm)) };
+}
 
 /** The value of each type when the machine sends nothing */
 const EMPTY_VALUES: Record<DataItemType, string | number | boolean> = {
@@ -405,7 +418,7 @@ export class BrotherConnector extends BaseMachineConnector {
 
   /** Send each command once, and get the replies by command */
   private async sendPollCommands(): Promise<Record<string, ParsedResponse>> {
-    const commands = [...new Set(this.dataItems.map(([, command]) => command)), this.toolDataCommand];
+    const commands = [...new Set([...this.dataItems.map(([, command]) => command), ALARM_COMMAND]), this.toolDataCommand];
     if (this.atcCommand) {
       commands.push(this.atcCommand);
     }
@@ -424,6 +437,8 @@ export class BrotherConnector extends BaseMachineConnector {
         this.data[label] = parseValue(raw, type, transform);
       }
     }
+    const alarmSlots = responses[ALARM_COMMAND]?.E01;
+    if (alarmSlots) Object.assign(this.data, alarmOfList(alarmSlots));
   }
 
   getStatus(): BrotherMachineStatus {
