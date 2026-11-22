@@ -23,6 +23,8 @@ const LISTING = '-rw-r--r-- 1 cnc cnc 20 Jan 01 12:00 O1000\r\n-rw-r--r-- 1 cnc 
 
 interface FakeMachine {
   controlPort: number;
+  /** The port of the data listener at the control host */
+  dataPort: number;
   /** Data connections that arrived at the control host */
   dataConnections: number;
   /** Data connections that arrived at the host of the PASV reply */
@@ -45,6 +47,46 @@ function closeServer(server: net.Server): Promise<void> {
   return new Promise(resolve => server.close(() => resolve()));
 }
 
+/** Some computers and CI runners have no IPv6 loopback. Then the tests that need ::1 are skipped. */
+async function canListenOn(host: string): Promise<boolean> {
+  const server = net.createServer();
+  try {
+    await listen(server, 0, host);
+    await closeServer(server);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const hasIpv6Loopback = await canListenOn(CONTROL_HOST);
+
+const SAME_PORT_TRIES = 10;
+
+function isAddressInUse(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException).code === 'EADDRINUSE';
+}
+
+/**
+ * Listen with `first` on a free port, then with `second` on the same port at another host.
+ * Another program can use that port at the second host, so try again with a new port.
+ */
+async function listenOnSamePort(
+  first: { server: net.Server; host: string },
+  second: { server: net.Server; host: string }
+): Promise<number> {
+  for (let attempt = 1; ; attempt += 1) {
+    const port = await listen(first.server, 0, first.host);
+    try {
+      await listen(second.server, port, second.host);
+      return port;
+    } catch (err) {
+      await closeServer(first.server);
+      if (!isAddressInUse(err) || attempt >= SAME_PORT_TRIES) throw err;
+    }
+  }
+}
+
 function readAll(socket: net.Socket): Promise<string> {
   const chunks: Buffer[] = [];
   socket.on('data', chunk => chunks.push(chunk));
@@ -53,7 +95,7 @@ function readAll(socket: net.Socket): Promise<string> {
 
 /** Reply to the commands of FTPClient and basic-ftp. RETR, LIST and STOR use the next data connection. */
 function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSocket, onUpload, commands }: {
-  pasvReply: string;
+  pasvReply: () => string;
   epsvReply: string;
   nextDataSocket: () => Promise<net.Socket>;
   onUpload: (text: string) => void;
@@ -71,7 +113,7 @@ function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSock
       commands.push(command);
       if (command === 'USER') socket.write('331 Password\r\n');
       else if (command === 'PASS') socket.write('230 Logged in\r\n');
-      else if (command === 'PASV') socket.write(`${pasvReply}\r\n`);
+      else if (command === 'PASV') socket.write(`${pasvReply()}\r\n`);
       else if (command === 'EPSV') socket.write(`${epsvReply}\r\n`);
       else if (command === 'PWD') socket.write('257 "/"\r\n');
       else if (command === 'CWD') socket.write('250 OK\r\n');
@@ -96,11 +138,15 @@ interface FakeMachineOptions {
   supportsEpsv?: boolean;
   /** The PASV reply has no parentheses around the address and the port */
   bareAddress?: boolean;
+  /** The text of the PASV reply, made from the port of the data listener. It replaces the usual reply. */
+  pasvReplyFor?: (dataPort: number) => string;
+  /** The machine refuses the first PASV, so the first data transfer fails */
+  refuseFirstPasv?: boolean;
 }
 
 /** A decoy listens at the host of the PASV reply only when that host is on this computer */
 async function startFakeMachine({
-  controlHost = CONTROL_HOST, pasvReplyHost = PASV_REPLY_HOST, supportsEpsv = false, bareAddress = false
+  controlHost = CONTROL_HOST, pasvReplyHost = PASV_REPLY_HOST, supportsEpsv = false, bareAddress = false, pasvReplyFor, refuseFirstPasv = false
 }: FakeMachineOptions = {}): Promise<FakeMachine> {
   const dataSockets: net.Socket[] = [];
   const dataWaiters: Array<(socket: net.Socket) => void> = [];
@@ -113,17 +159,17 @@ async function startFakeMachine({
     if (waiter) waiter(socket);
     else dataSockets.push(socket);
   });
-  const dataPort = await listen(dataServer, 0, controlHost);
-
   const decoyServer = net.createServer(socket => {
     machine.decoyConnections += 1;
     socket.on('error', () => undefined);
     socket.end();
   });
-  if (pasvReplyHost === PASV_REPLY_HOST) await listen(decoyServer, dataPort, pasvReplyHost);
+  const dataPort = pasvReplyHost === PASV_REPLY_HOST
+    ? await listenOnSamePort({ server: dataServer, host: controlHost }, { server: decoyServer, host: pasvReplyHost })
+    : await listen(dataServer, 0, controlHost);
 
   const address = `${pasvReplyHost.replaceAll('.', ',')},${Math.floor(dataPort / 256)},${dataPort % 256}`;
-  const pasvReply = `227 Entering Passive Mode ${bareAddress ? address : `(${address})`}`;
+  const pasvReply = pasvReplyFor?.(dataPort) ?? `227 Entering Passive Mode ${bareAddress ? address : `(${address})`}`;
   const epsvReply = supportsEpsv ? `229 Entering Extended Passive Mode (|||${dataPort}|)` : '500 Not supported';
   const nextDataSocket = () => new Promise<net.Socket>(resolve => {
     const socket = dataSockets.shift();
@@ -131,17 +177,24 @@ async function startFakeMachine({
     else dataWaiters.push(resolve);
   });
 
+  let pasvCount = 0;
+  const nextPasvReply = () => {
+    pasvCount += 1;
+    return refuseFirstPasv && pasvCount === 1 ? '425 Cannot open data connection' : pasvReply;
+  };
+
   const controlSockets = new Set<net.Socket>();
   const controlServer = net.createServer(socket => {
     controlSockets.add(socket);
     answerCommands(socket, {
-      pasvReply, epsvReply, nextDataSocket, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands
+      pasvReply: nextPasvReply, epsvReply, nextDataSocket, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands
     });
   });
   const controlPort = await listen(controlServer, 0, controlHost);
 
   return {
     controlPort,
+    dataPort,
     get dataConnections() { return machine.dataConnections; },
     get decoyConnections() { return machine.decoyConnections; },
     get uploadedText() { return machine.uploadedText; },
@@ -154,14 +207,19 @@ async function startFakeMachine({
   };
 }
 
-/** After the PASV reply, the control socket tells no remote address, as a socket that never connected does */
-function forgetControlAddressAfterPasv(): void {
+/** After the PASV reply, the control socket tells this remote address */
+function setControlAddressAfterPasv(address: string | undefined): void {
   const request = ftp.FTPContext.prototype.request;
   vi.spyOn(ftp.FTPContext.prototype, 'request').mockImplementation(async function (this: ftp.FTPContext, command: string) {
     const reply = await request.call(this, command);
-    if (command === 'PASV') Object.defineProperty(this.socket, 'remoteAddress', { get: () => undefined });
+    if (command === 'PASV') Object.defineProperty(this.socket, 'remoteAddress', { get: () => address });
     return reply;
   });
+}
+
+/** After the PASV reply, the control socket tells no remote address, as a socket that never connected does */
+function forgetControlAddressAfterPasv(): void {
+  setControlAddressAfterPasv(undefined);
 }
 
 /** The hosts of all the connections that the client starts */
@@ -171,14 +229,34 @@ function recordConnectHosts(): () => string[] {
     typeof options === 'object' ? String((options as net.TcpNetConnectOpts).host) : String(host));
 }
 
+const realConnect = net.Socket.prototype.connect;
+
+/** A connection to this port never opens, as when a firewall drops it. The other connections open as usual. */
+function neverConnectTo(port: number): void {
+  vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket, ...args: unknown[]) {
+    const [options] = args;
+    const target = typeof options === 'object' ? (options as net.TcpNetConnectOpts).port : options;
+    if (Number(target) === port) return this;
+    return (realConnect as (...connectArgs: unknown[]) => net.Socket).apply(this, args);
+  });
+}
+
+/** A port on this computer where nothing listens */
+async function closedPort(): Promise<number> {
+  const server = net.createServer();
+  const port = await listen(server, 0, NAT_CONTROL_HOST);
+  await closeServer(server);
+  return port;
+}
+
 function collectText(stream: PassThrough): () => string {
   const chunks: Buffer[] = [];
   stream.on('data', chunk => chunks.push(chunk));
   return () => Buffer.concat(chunks).toString();
 }
 
-describe('FTPClient data connection with a PASV reply that names another host', () => {
-  let machine: FakeMachine;
+describe.skipIf(!hasIpv6Loopback)('FTPClient data connection with a PASV reply that names another host', () => {
+  let machine: FakeMachine | undefined;
   let ftpClient: FTPClient;
 
   beforeEach(async () => {
@@ -188,7 +266,8 @@ describe('FTPClient data connection with a PASV reply that names another host', 
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await machine.close();
+    await machine?.close();
+    machine = undefined;
   });
 
   it('downloads over a data connection to the machine host, not to the host of the reply', async () => {
@@ -197,24 +276,24 @@ describe('FTPClient data connection with a PASV reply that names another host', 
 
     await ftpClient.downloadFile('O1000', destination);
 
-    expect(machine.decoyConnections).toBe(0);
-    expect(machine.dataConnections).toBe(1);
+    expect(machine?.decoyConnections).toBe(0);
+    expect(machine?.dataConnections).toBe(1);
     expect(text()).toBe(PROGRAM_TEXT);
   });
 
   it('reads the file tree over a data connection to the machine host, not to the host of the reply', async () => {
     const tree = await ftpClient.getFileTree('/', 1);
 
-    expect(machine.decoyConnections).toBe(0);
-    expect(machine.dataConnections).toBe(1);
+    expect(machine?.decoyConnections).toBe(0);
+    expect(machine?.dataConnections).toBe(1);
     expect(tree.map(node => node.name)).toEqual(['O1000', 'O2000']);
   });
 
   it('lists a folder through basic-ftp over a data connection to the machine host only', async () => {
     const files = await ftpClient.listFiles('/');
 
-    expect(machine.decoyConnections).toBe(0);
-    expect(machine.dataConnections).toBe(1);
+    expect(machine?.decoyConnections).toBe(0);
+    expect(machine?.dataConnections).toBe(1);
     expect(files.map(file => file.name)).toEqual(['O1000', 'O2000']);
   });
 
@@ -225,8 +304,8 @@ describe('FTPClient data connection with a PASV reply that names another host', 
 
     await expect(ftpClient.downloadFile('O1000', new PassThrough())).rejects.toThrow('FTP download error');
 
-    expect(machine.decoyConnections).toBe(0);
-    expect(machine.dataConnections).toBe(0);
+    expect(machine?.decoyConnections).toBe(0);
+    expect(machine?.dataConnections).toBe(0);
   });
 });
 
@@ -289,6 +368,83 @@ describe('basic-ftp data connection with a PASV reply that names another host (a
     expect(connectHosts()).not.toContain(NAT_PASV_REPLY_HOST);
   });
 
+  // The raw RETR fails at its PASV. Then the download of basic-ftp must also use only the machine host.
+  it('downloads through basic-ftp over a data connection to the machine host when the raw RETR fails', async () => {
+    await machine.close();
+    machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, refuseFirstPasv: true });
+    ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort });
+    const destination = new PassThrough();
+    const text = collectText(destination);
+
+    await ftpClient.downloadFile('O1000', destination);
+
+    expect(text()).toBe(PROGRAM_TEXT);
+    // The refused PASV of the raw RETR, then EPSV and PASV of basic-ftp
+    expect(machine.commands.filter(command => command === 'PASV')).toHaveLength(2);
+    expect(machine.commands).toContain('EPSV');
+    expect(machine.dataConnections).toBe(1);
+    expect(machine.decoyConnections).toBe(0);
+    expect(new Set(connectHosts())).toEqual(new Set([NAT_CONTROL_HOST]));
+  });
+
+  // The data connection of basic-ftp uses the timeout of the FTP client, so a dropped connection does not wait forever
+  it('stops a basic-ftp data connection that does not open in the FTP timeout', async () => {
+    const timeoutMs = 200;
+    ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs });
+    neverConnectTo(machine.dataPort);
+    const started = Date.now();
+
+    await expect(ftpClient.listFiles('/')).rejects.toThrow('did not answer');
+
+    expect(Date.now() - started).toBeLessThan(timeoutMs * 10);
+    expect(machine.dataConnections).toBe(0);
+  });
+
+  it('gives the socket error when the basic-ftp data connection is refused', async () => {
+    const port = await closedPort();
+    await machine.close();
+    machine = await startFakeMachine({
+      controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST,
+      pasvReplyFor: () => `227 Entering Passive Mode (192,0,2,1,${Math.floor(port / 256)},${port % 256})`
+    });
+    ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort });
+
+    const failure = await ftpClient.listFiles('/').catch((err: unknown) => err);
+
+    expect((failure as Error).cause).toMatchObject({ code: 'ECONNREFUSED', message: expect.stringContaining(`${NAT_CONTROL_HOST}:${port}`) });
+    expect(connectHosts()).not.toContain(NAT_PASV_REPLY_HOST);
+  });
+
+  // Chatter never turns on FTP over TLS. The data connection of this file cannot use TLS, so it must not open as plain text.
+  it('refuses to open a plain data connection when the control connection uses TLS', async () => {
+    vi.spyOn(ftp.FTPContext.prototype, 'hasTLS', 'get').mockReturnValue(true);
+
+    await expect(ftpClient.listFiles('/')).rejects.toThrow('Chatter does not support FTP over TLS');
+
+    expect(machine.dataConnections).toBe(0);
+  });
+
+  // A dual-stack socket tells an IPv4 address as ::ffff:127.0.0.1. The data connection must use the plain IPv4 text.
+  it('opens the download data connection to the plain IPv4 text of an IPv4-mapped control address', async () => {
+    setControlAddressAfterPasv(`::ffff:${NAT_CONTROL_HOST}`);
+    const destination = new PassThrough();
+    const text = collectText(destination);
+
+    await ftpClient.downloadFile('O1000', destination);
+
+    expect(text()).toBe(PROGRAM_TEXT);
+    expect(connectHosts()).toEqual([NAT_CONTROL_HOST, NAT_CONTROL_HOST]);
+  });
+
+  it('opens the basic-ftp data connection to the plain IPv4 text of an IPv4-mapped control address', async () => {
+    setControlAddressAfterPasv(`::ffff:${NAT_CONTROL_HOST}`);
+
+    const files = await ftpClient.listFiles('/');
+
+    expect(files.map(file => file.name)).toEqual(['O1000', 'O2000']);
+    expect(connectHosts()).toEqual([NAT_CONTROL_HOST, NAT_CONTROL_HOST]);
+  });
+
   it('opens no data connection when the address of the control connection is not known', async () => {
     forgetControlAddressAfterPasv();
 
@@ -296,5 +452,92 @@ describe('basic-ftp data connection with a PASV reply that names another host (a
 
     expect(machine.dataConnections).toBe(0);
     expect(connectHosts()).toEqual([NAT_CONTROL_HOST]);
+  });
+});
+
+// The address bytes of these replies are not the machine. The client must use only the port, and connect only to the machine.
+describe('FTPClient with a PASV reply that is not usual', () => {
+  let machine: FakeMachine | undefined;
+  let connectHosts: () => string[];
+
+  beforeEach(() => {
+    connectHosts = recordConnectHosts();
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await machine?.close();
+    machine = undefined;
+  });
+
+  async function clientFor(pasvReplyFor: (dataPort: number) => string): Promise<FTPClient> {
+    machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, pasvReplyFor });
+    return new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort });
+  }
+
+  function expectOnlyControlHost(): void {
+    expect(machine?.decoyConnections).toBe(0);
+    expect(new Set(connectHosts())).toEqual(new Set([NAT_CONTROL_HOST]));
+  }
+
+  const highByte = (port: number) => Math.floor(port / 256);
+  const lowByte = (port: number) => port % 256;
+
+  const refusedReplies = [
+    { name: 'a reply with no numbers', reply: () => '227 Entering Passive Mode', error: 'Chatter cannot read the port in the PASV reply' },
+    { name: 'a reply with port 0', reply: () => '227 Entering Passive Mode (192,0,2,1,0,0)', error: 'The PASV reply gives port 0' },
+  ];
+
+  it.each(refusedReplies)('refuses $name in a download, and opens no data connection', async ({ reply, error }) => {
+    const ftpClient = await clientFor(reply);
+
+    await expect(ftpClient.downloadFile('O1000', new PassThrough())).rejects.toThrow(error);
+
+    expect(machine?.dataConnections).toBe(0);
+    expectOnlyControlHost();
+  });
+
+  it.each(refusedReplies)('refuses $name in a basic-ftp list, and opens no data connection', async ({ reply, error }) => {
+    const ftpClient = await clientFor(reply);
+
+    await expect(ftpClient.listFiles('/')).rejects.toThrow(error);
+
+    expect(machine?.dataConnections).toBe(0);
+    expectOnlyControlHost();
+  });
+
+  // basic-ftp keeps only the low 8 bits of each port byte, so these replies give the port of the data listener.
+  // For example, 300 gives 44 and -17 gives 239.
+  const acceptedReplies = [
+    {
+      name: 'a port byte above 255',
+      reply: (port: number) => `227 Entering Passive Mode (192,0,2,1,${highByte(port) + 256},${lowByte(port)})`,
+    },
+    {
+      name: 'signed port bytes',
+      reply: (port: number) => `227 Entering Passive Mode (10,0,0,1,${highByte(port) - 256},${lowByte(port) - 256})`,
+    },
+  ];
+
+  it.each(acceptedReplies)('downloads with $name, over a connection to the machine host only', async ({ reply }) => {
+    const ftpClient = await clientFor(reply);
+    const destination = new PassThrough();
+    const text = collectText(destination);
+
+    await ftpClient.downloadFile('O1000', destination);
+
+    expect(text()).toBe(PROGRAM_TEXT);
+    expect(machine?.dataConnections).toBe(1);
+    expectOnlyControlHost();
+  });
+
+  it.each(acceptedReplies)('lists a folder through basic-ftp with $name, over a connection to the machine host only', async ({ reply }) => {
+    const ftpClient = await clientFor(reply);
+
+    const files = await ftpClient.listFiles('/');
+
+    expect(files.map(file => file.name)).toEqual(['O1000', 'O2000']);
+    expect(machine?.dataConnections).toBe(1);
+    expectOnlyControlHost();
   });
 });
