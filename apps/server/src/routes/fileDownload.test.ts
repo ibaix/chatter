@@ -4,8 +4,10 @@ import { attachmentHeader, downloadAsStream } from './fileDownload.js';
 import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
 
 /** A connector whose download runs the given steps on the output stream */
-function connectorThat(download: (output: Writable) => Promise<void>): BaseMachineConnector {
-  return { downloadFile: (_path: string, output: Writable) => download(output) } as BaseMachineConnector;
+function connectorThat(download: (output: Writable, signal?: AbortSignal) => Promise<void>): BaseMachineConnector {
+  return {
+    downloadFile: (_path: string, output: Writable, signal?: AbortSignal) => download(output, signal),
+  } as BaseMachineConnector;
 }
 
 async function readAll(stream: ReadableStream): Promise<string> {
@@ -68,6 +70,20 @@ describe('downloadAsStream', () => {
     await nextTick();
 
     expect(writesAfterCancel).toBe(1);
+  });
+
+  it('stops the download on the machine when the reader stops early', async () => {
+    let downloadSignal: AbortSignal | undefined;
+    const connector = connectorThat(async (output, signal) => {
+      downloadSignal = signal;
+      output.write('G00');
+    });
+
+    const stream = await downloadAsStream(connector, '/O0100.NC');
+    expect(downloadSignal?.aborted).toBe(false);
+    await stream.cancel();
+
+    expect(downloadSignal?.aborted).toBe(true);
   });
 });
 
