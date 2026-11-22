@@ -412,7 +412,8 @@ describe('HistoryBackup', () => {
         now: () => NOW + 365 * 24 * HOUR - 1.5 * HOUR, freeBytes: async () => freeBytes,
       });
       const preview = await later.receiveRestore(upload(archive), archive.length, target, 'admin');
-      expect(preview.tooOld.samples).toBeGreaterThan(0);
+      // Older than NOW - 1.5 hours: 1.5 hours of 2-second polls of 4 values, and the minute averages before it (89 of each value)
+      expect(preview.tooOld.samples).toBe(4 * 2700 + 4 * 89);
       expect(preview.tooOld.periods).toBe(1);
       expect(preview.counts.periods).toBe(1);
       const result = await later.restore(preview.id, target, { alertRules: false }, 'admin');
