@@ -436,6 +436,57 @@ test_tar_tricks_are_refused() {
   check "a correct update file in gzip: no work files stay" work_files_are_gone
 }
 
+# Makes a correct update file with the manifest first, as the release script does. Prints its payload folder.
+put_update_file_in_release_order() {
+  local dir
+  dir="$(make_payload "$NEW_VERSION")"
+  write_manifest "$dir" "$NEW_VERSION"
+  sign_manifest "$dir"
+  pack_into_inbox "$dir" manifest.txt manifest.txt.sig chatter.tar.gz victoria-metrics.tar.gz vmalert.tar.gz \
+    docker-compose.yml rules.yml
+  echo "$dir"
+}
+
+# Prints the block number (512 bytes) of a line of the tar listing: block_of <text in the line>
+block_of() {
+  tar --list --block-number --verbose --file "$inbox/chatter-update.tar" | sed -n "s/^block \([0-9]*\): .*$1.*/\1/p"
+}
+
+cut_update_file_at() {
+  truncate --size "$1" "$inbox/chatter-update.tar"
+}
+
+# A download or an upload that stops early gives a file that is cut short.
+test_an_update_file_that_is_cut_short_is_refused() {
+  local dir start size end cut
+  set_up
+  dir="$(put_update_file_in_release_order)"
+  start=$((($(block_of chatter.tar.gz) + 1) * 512))
+  size="$(stat --format %s "$dir/chatter.tar.gz")"
+  cut_update_file_at $((start + size / 2))
+  send_request check
+  check "a file cut in the middle of chatter.tar.gz: refused" reason_has "not a correct"
+  check "a file cut in the middle of chatter.tar.gz: no work files stay" work_files_are_gone
+
+  # GNU tar ends the file with two blocks of zeros. The last file is complete before them.
+  for cut in 0 512 700; do
+    set_up
+    put_update_file_in_release_order > /dev/null
+    end=$(($(block_of "Block of NULs") * 512))
+    cut_update_file_at $((end + cut))
+    send_request check
+    check "a file cut $cut bytes into the two end blocks: refused" reason_has "not a correct"
+    check "a file cut $cut bytes into the two end blocks: no work files stay" work_files_are_gone
+  done
+
+  set_up
+  put_update_file_in_release_order > /dev/null
+  end=$(($(block_of "Block of NULs") * 512))
+  cut_update_file_at $((end + 1024))
+  send_request check
+  check "a file with the two end blocks, but cut in the zeros that fill the last record: ready" status_is ready
+}
+
 # The limits hold before the signature check, so an unsigned file cannot make the helper store or read much.
 test_size_limits_before_the_signature_check() {
   local dir name
@@ -723,6 +774,7 @@ test_a_symlink_or_fifo_as_the_update_file_is_refused
 test_a_symlink_or_fifo_as_the_request_does_nothing
 test_only_the_exact_request_texts_work
 test_tar_tricks_are_refused
+test_an_update_file_that_is_cut_short_is_refused
 test_size_limits_before_the_signature_check
 test_a_manifest_that_does_not_match_the_tar_is_refused
 test_an_extra_entry_that_the_manifest_does_not_list_is_refused
