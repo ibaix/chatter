@@ -271,8 +271,8 @@ export class FTPClient {
   }
 
   async listFiles(path = ROOT_PATH): Promise<FTPFileInfo[]> {
-    assertSafeFtpArgument(path);
     try {
+      assertSafeFtpArgument(path);
       const list = await this.withConnection({ verbose: false }, client => client.list(path));
       return list.map(item => ({
         name: item.name,
@@ -292,12 +292,12 @@ export class FTPClient {
 
   /** The file tree, and whether the walk cut it at MAX_TREE_ENTRIES entries. The depth limit does not count as a cut. */
   async readFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FileTree> {
-    assertSafeFtpArgument(path);
-    if (depth <= 0) {
-      return { nodes: [], isCutShort: false };
-    }
     const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, isCut: false };
     try {
+      assertSafeFtpArgument(path);
+      if (depth <= 0) {
+        return { nodes: [], isCutShort: false };
+      }
       const nodes = await this.withConnection({ verbose: false }, client => this.buildTree(client, { path, depth: Math.min(depth, MAX_TREE_DEPTH), walk }));
       if (walk.isCut) {
         log.warn(`The file tree on ${this.host} is too large. Chatter shows only the first ${MAX_TREE_ENTRIES} entries.`, { path });

@@ -8,6 +8,7 @@ import { PassThrough } from 'stream';
 const mockAccess = vi.fn();
 const mockSend = vi.fn();
 const mockWrite = vi.fn();
+const mockRequest = vi.fn();
 const mockFtpClient = {
   access: mockAccess,
   send: mockSend,
@@ -18,7 +19,7 @@ const mockFtpClient = {
   uploadFrom: vi.fn(),
   downloadTo: vi.fn(),
   close: vi.fn(),
-  ftp: { verbose: false, socket: { write: mockWrite } },
+  ftp: { verbose: false, request: mockRequest, socket: { write: mockWrite, remoteAddress: '127.0.0.1' } },
 };
 
 vi.mock('basic-ftp', () => ({
@@ -53,20 +54,26 @@ describe('FTPClient with a control character in a path', () => {
     expectNothingSent();
   });
 
-  // The manual download writes RETR straight to the control socket, past the check of basic-ftp
-  it('does not write a raw RETR with a line break when the passive data connection opens', async () => {
+  // The manual download writes RETR straight to the control socket, past the check of basic-ftp. downloadFile
+  // refuses the path before it gets there, so this test calls the manual download itself. The data connection
+  // opens, so only the check in the manual download stops the raw write.
+  it('does not write a raw RETR with a line break, even when the passive data connection opens', async () => {
     const dataServer = net.createServer(socket => socket.end());
     await new Promise<void>(resolve => dataServer.listen(0, '127.0.0.1', resolve));
     const { port } = dataServer.address() as net.AddressInfo;
-    mockSend.mockImplementation(async (command: string) => (command === 'PASV'
-      ? { code: 227, message: `227 Entering Passive Mode (127,0,0,1,${Math.floor(port / 256)},${port % 256})` }
-      : { code: 200, message: 'OK' }));
+    mockRequest.mockResolvedValue({ code: 227, message: `227 Entering Passive Mode (127,0,0,1,${Math.floor(port / 256)},${port % 256})` });
+    const manualDownload = ftpClient as unknown as {
+      downloadOverPassiveSocket(client: typeof mockFtpClient, filePath: string, destination: PassThrough): Promise<void>;
+    };
 
     try {
-      await expect(ftpClient.downloadFile('O1000\r\nDELE O1234', new PassThrough())).rejects.toThrow(CONTROL_CHARACTER_ERROR);
+      await expect(manualDownload.downloadOverPassiveSocket(mockFtpClient, 'O1000\r\nDELE O1234', new PassThrough()))
+        .rejects.toThrow(CONTROL_CHARACTER_ERROR);
     } finally {
       dataServer.close();
     }
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockRequest).not.toHaveBeenCalled();
     expect(mockWrite).not.toHaveBeenCalled();
   });
 
@@ -88,6 +95,17 @@ describe('FTPClient with a control character in a path', () => {
   it.each(BAD_PATHS)('refuses the file tree of %j', async path => {
     await expect(ftpClient.getFileTree(path)).rejects.toThrow(CONTROL_CHARACTER_ERROR);
     expectNothingSent();
+  });
+
+  // Each operation gives its refusal in the same form as its other FTP errors
+  it.each([
+    ['download', (client: FTPClient) => client.downloadFile('O1\r\n', new PassThrough()), 'FTP download error: '],
+    ['upload', (client: FTPClient) => client.uploadFile('O1\r\n', 'G00', true), 'FTP upload error: '],
+    ['delete', (client: FTPClient) => client.deleteFile('O1\r\n'), 'FTP delete error: '],
+    ['list', (client: FTPClient) => client.listFiles('O1\r\n'), 'FTP error: '],
+    ['file tree', (client: FTPClient) => client.getFileTree('O1\r\n'), 'FTP error: '],
+  ])('gives the refusal of a %s in its FTP error text', async (_operation, run, prefix) => {
+    await expect(run(ftpClient)).rejects.toHaveProperty('message', `${prefix}The path "O1\\r\\n" ${CONTROL_CHARACTER_ERROR}`);
   });
 
   it('fails only the file of a batch whose path has a line break, and sends the other files', async () => {
