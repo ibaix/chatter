@@ -581,10 +581,11 @@ function countedSeries(exported: AsyncIterable<Uint8Array>, span: TimeSpan): Cou
   return {
     count: () => samples,
     async *[Symbol.asyncIterator]() {
-      for await (const line of textLines(exported, ARCHIVE_LIMITS.lineBytes)) {
-        const facts = sampleFacts(line);
-        samples += facts.samples;
-        if (facts.first !== null && facts.last !== null) span.add(facts.first, facts.last);
+      for await (const exportedLine of textLines(exported, ARCHIVE_LIMITS.lineBytes)) {
+        const { line, samples: count, first, last } = sampleFacts(exportedLine);
+        if (line === null || first === null || last === null) continue;
+        samples += count;
+        span.add(first, last);
         yield `${line}\n`;
       }
     },

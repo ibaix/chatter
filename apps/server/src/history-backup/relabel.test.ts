@@ -72,7 +72,23 @@ describe('relabelLine', () => {
 
 describe('sampleFacts', () => {
   it('counts the samples of an exported line, and finds its first and last time', () => {
-    expect(sampleFacts(goodLine)).toEqual({ samples: 3, first: NOW - 6000, last: NOW - 2000 });
+    expect(sampleFacts(goodLine)).toEqual({ line: goodLine, samples: 3, first: NOW - 6000, last: NOW - 2000 });
+  });
+
+  it('leaves out the staleness markers (null) of vmalert, and does not count them', () => {
+    const metric = { __name__: 'chatter_running:avg1m', machine: 'old-id', type: 'brother' };
+    const line = exported(metric, [null, 0.5, null], [NOW - 9000, NOW - 4000, NOW - 1000]);
+    expect(sampleFacts(line)).toEqual({ line: exported(metric, [0.5], [NOW - 4000]), samples: 1, first: NOW - 4000, last: NOW - 4000 });
+    expect(sampleFacts(exported(metric, [null], [NOW]))).toEqual({ line: null, samples: 0, first: null, last: null });
+  });
+});
+
+describe('relabelLine with staleness markers', () => {
+  it('leaves them out, and does not count them as samples or as too old', () => {
+    const metric = { __name__: 'chatter_running:avg1m', machine: 'old-id', type: 'brother' };
+    const result = relabelLine(exported(metric, [null, 0.5, null], [target.notBefore - 1, NOW - 4000, NOW - 1000]), target);
+    expect(result).toEqual({ line: exported({ ...metric, machine: 'new-id' }, [0.5], [NOW - 4000]), samples: 1, tooOld: 0 });
+    expect(relabelLine(exported(metric, [null], [NOW]), target)).toEqual({ line: null, samples: 0, tooOld: 0 });
   });
 });
 

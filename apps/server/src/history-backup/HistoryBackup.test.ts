@@ -52,6 +52,7 @@ function failAsDiskFull(stream: WriteStream): void {
 }
 
 const HOUR = 3_600_000;
+const MINUTE = 60_000;
 const NOW = Date.UTC(2026, 10, 21, 12);
 const source: BackupMachine = { id: 'brother_1', name: 'Speedio #1', type: 'brother' };
 const target: BackupMachine = { id: 'brother_2', name: 'Speedio #1', type: 'brother' };
@@ -267,6 +268,38 @@ describe('HistoryBackup', () => {
       const result = await later.restore(preview.id, target, { alertRules: false }, 'admin');
       expect(result.samples).toBe(preview.counts.rawSamples + preview.counts.averageSamples);
       expect(result.periodsAdded).toBe(1);
+    });
+
+    it('leaves out the staleness markers (null) of vmalert, in the backup and in the restore', async () => {
+      const averages = { __name__: 'chatter_running:avg1m', machine: source.id, type: 'brother' };
+      const exportSeries = victoria.exportSeries.bind(victoria);
+      victoria.exportSeries = async (machineId, pattern, range, signal) => {
+        const lines = await exportSeries(machineId, pattern, range, signal);
+        if (!pattern.includes('avg')) return lines;
+        return (async function* () {
+          yield* lines;
+          yield Buffer.from(`${JSON.stringify({ metric: averages, values: [0.5, null], timestamps: [NOW - HOUR / 2, NOW - HOUR / 2 + MINUTE] })}\n`);
+          yield Buffer.from(`${JSON.stringify({ metric: averages, values: [null], timestamps: [NOW - HOUR / 4] })}\n`);
+        })();
+      };
+      const entries = await unpack(await backUp());
+      const manifest = JSON.parse(entries.get('manifest.json')!.toString()) as Manifest;
+      expect(manifest.parts['history/averages.jsonl.gz']!.count).toBe(AVERAGES + 1);
+      expect(manifest.data.last).toBe(NOW - HOUR / 2);
+      expect(linesOf(entries.get('history/averages.jsonl.gz')!).some(line => line.includes('null'))).toBe(false);
+
+      // A file of another program can have them too
+      const withMarkers = await changeArchive(await backUp(), (files, changed) => {
+        const lines = linesOf(files.get('history/averages.jsonl.gz')!);
+        lines.push(JSON.stringify({ metric: averages, values: [null, 0.25], timestamps: [NOW - HOUR / 3, NOW - HOUR / 3 + MINUTE] }));
+        files.set('history/averages.jsonl.gz', partOf(lines));
+        changed.parts['history/averages.jsonl.gz']!.count += 1;
+      });
+      const preview = await receive(withMarkers);
+      expect(preview.counts.averageSamples).toBe(AVERAGES + 2);
+      const result = await backups.restore(preview.id, target, { alertRules: false }, 'admin');
+      expect(result.samples).toBe(14400 + AVERAGES + 2);
+      expect(victoria.valuesIn('chatter_running:avg1m', target.id, NOW - HOUR + 1, NOW)).toEqual([0.5, 0.25]);
     });
 
     it('refuses a file of another machine type', async () => {

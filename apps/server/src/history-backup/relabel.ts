@@ -36,11 +36,19 @@ interface ExportedSeries {
 }
 
 /**
+ * A line as VictoriaMetrics exports it. A value is null for a staleness marker: vmalert writes one when a series of
+ * a recording rule stops (for example when a machine is removed). A marker is not a sample, so Chatter leaves it out.
+ */
+interface ExportedLine extends Omit<ExportedSeries, 'values'> {
+  values: (number | null)[];
+}
+
+/**
  * The line with the machine label of the target machine. No other label changes.
  * Refuses a line that is not a chatter_* series of the same machine type, and a sample in the future.
  */
 export function relabelLine(text: string, target: RelabelTarget): RelabelledLine {
-  const series = parseSeries(text);
+  const series = withoutStaleMarkers(parseSeries(text));
   if (series.metric[TYPE_LABEL] !== target.machineType) throw new ArchiveError('The file has history of another machine type.');
   const keep = series.timestamps.map(time => time >= target.notBefore);
   if (series.timestamps.some(time => time > target.notAfter)) throw new ArchiveError('The file has history with a time in the future.');
@@ -55,32 +63,56 @@ export function relabelLine(text: string, target: RelabelTarget): RelabelledLine
   return { line: JSON.stringify(relabelled), samples, tooOld };
 }
 
-/** The sample count and the first and last time of an exported line, for the manifest */
-export function sampleFacts(text: string): { samples: number; first: number | null; last: number | null } {
-  const { timestamps } = parseSeries(text);
-  if (timestamps.length === 0) return { samples: 0, first: null, last: null };
+/** An exported line for a backup */
+export interface BackupLine {
+  /** The line without staleness markers, or null when it has no sample */
+  line: string | null;
+  samples: number;
+  first: number | null;
+  last: number | null;
+}
+
+/** The line for the backup, its sample count, and its first and last time, for the manifest. The samples need not be in time order. */
+export function sampleFacts(text: string): BackupLine {
+  const parsed = parseSeries(text);
+  const series = withoutStaleMarkers(parsed);
+  const { timestamps } = series;
+  const line = series === parsed ? text : JSON.stringify(series);
+  if (timestamps.length === 0) return { line: null, samples: 0, first: null, last: null };
   let first = timestamps[0];
   let last = timestamps[0];
   for (const time of timestamps) {
     if (time < first) first = time;
     if (time > last) last = time;
   }
-  return { samples: timestamps.length, first, last };
+  return { line, samples: timestamps.length, first, last };
 }
 
-function parseSeries(text: string): ExportedSeries {
+/** The series without its staleness markers. The same object when it has none. */
+function withoutStaleMarkers(series: ExportedLine): ExportedSeries {
+  const { values } = series;
+  if (!values.includes(null)) return series as ExportedSeries;
+  const keep = values.map(value => value !== null);
+  return {
+    metric: series.metric,
+    values: values.filter((value): value is number => value !== null),
+    timestamps: series.timestamps.filter((_time, index) => keep[index]),
+  };
+}
+
+function parseSeries(text: string): ExportedLine {
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch {
     throw new ArchiveError('A line of the history is not JSON.');
   }
-  const { metric, values, timestamps } = (value ?? {}) as Partial<ExportedSeries>;
+  const { metric, values, timestamps } = (value ?? {}) as Partial<ExportedLine>;
   checkMetric(metric);
   if (!Array.isArray(values) || !Array.isArray(timestamps) || values.length !== timestamps.length) {
     throw new ArchiveError('A line of the history has not the same number of values and times.');
   }
-  if (!values.every(item => typeof item === 'number' && Number.isFinite(item))) throw new ArchiveError('A line of the history has a value that is not a number.');
+  if (!values.every(item => item === null || (typeof item === 'number' && Number.isFinite(item)))) throw new ArchiveError('A line of the history has a value that is not a number.');
   if (!timestamps.every(item => Number.isSafeInteger(item) && item >= 0)) throw new ArchiveError('A line of the history has a time that is not correct.');
   return { metric, values, timestamps };
 }
