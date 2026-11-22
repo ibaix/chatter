@@ -97,6 +97,17 @@ describe('FTPClient with a control character in a path', () => {
     expectNothingSent();
   });
 
+  // Each operation gives its refusal in the same form as its other FTP errors
+  it.each([
+    ['download', (client: FTPClient) => client.downloadFile('O1\r\n', new PassThrough()), 'FTP download error: '],
+    ['upload', (client: FTPClient) => client.uploadFile('O1\r\n', 'G00', true), 'FTP upload error: '],
+    ['delete', (client: FTPClient) => client.deleteFile('O1\r\n'), 'FTP delete error: '],
+    ['list', (client: FTPClient) => client.listFiles('O1\r\n'), 'FTP error: '],
+    ['file tree', (client: FTPClient) => client.getFileTree('O1\r\n'), 'FTP error: '],
+  ])('gives the refusal of a %s in its FTP error text', async (_operation, run, prefix) => {
+    await expect(run(ftpClient)).rejects.toHaveProperty('message', `${prefix}The path "O1\\r\\n" ${CONTROL_CHARACTER_ERROR}`);
+  });
+
   it('fails only the file of a batch whose path has a line break, and sends the other files', async () => {
     const result = await ftpClient.uploadFiles([
       { remotePath: 'O1000\r\nDELE O1234', source: 'G00' },

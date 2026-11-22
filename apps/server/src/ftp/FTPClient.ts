@@ -202,8 +202,8 @@ export class FTPClient {
   }
 
   async listFiles(path = ROOT_PATH): Promise<FTPFileInfo[]> {
-    assertSafeFtpArgument(path);
     try {
+      assertSafeFtpArgument(path);
       const list = await this.withConnection({ verbose: false }, client => client.list(path));
       return list.map(item => ({
         name: item.name,
@@ -218,11 +218,11 @@ export class FTPClient {
   }
 
   async getFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FTPTreeNode[]> {
-    assertSafeFtpArgument(path);
-    if (depth <= 0) {
-      return [];
-    }
     try {
+      assertSafeFtpArgument(path);
+      if (depth <= 0) {
+        return [];
+      }
       return await this.withConnection({ verbose: false }, client => this.buildTree(client, path, depth));
     } catch (err) {
       throw new Error(ftpErrorMessage(err, this.host, this.port), { cause: err });
