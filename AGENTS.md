@@ -27,6 +27,7 @@ npm test
 - To add a notification service (a new channel type), first read [.agents/skills/add-notification-channel/SKILL.md](.agents/skills/add-notification-channel/SKILL.md).
 - Before a pull request, review the change with the skills `/chatter-review-code` ([.agents/skills/chatter-review-code/SKILL.md](.agents/skills/chatter-review-code/SKILL.md)) and `/chatter-review-testing` ([.agents/skills/chatter-review-testing/SKILL.md](.agents/skills/chatter-review-testing/SKILL.md)). Both use `npm run quality`, which runs all the checks for the branch and prints one table.
 - Follow [CONTRIBUTING.md](CONTRIBUTING.md): test first, and one kind of change in each commit. Start each commit message with a prefix such as `feat(web):`, `fix(server):`, `docs:` or `ci:`.
+- Do not add AI attribution. A commit message has no `Co-Authored-By` line, and a pull request has no "Generated with" line. `.claude/settings.json` turns off these lines in Claude Code.
 - Write docs and screen text in ASD-STE100 Simplified Technical English: short sentences, active voice, one idea in each sentence.
 - Server logging: use `createLogger('component')` from `apps/server/src/logging/logger.ts`. In tests, read the log with `captureLog()` from `logging/testSupport.ts`.
 - Web colors: text uses `text-primary-text`, so it is easy to read in light mode. Fills and borders use `primary`.
