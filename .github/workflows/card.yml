@@ -4,8 +4,8 @@
 #
 # docker.yml runs it after the release job. To make the card again, or for a release made before this
 # workflow, run it by hand: Actions > Pi card > Run workflow, with the tag. Pick main or a release tag in "Use workflow
-# from". The job does not run from another branch. A run by hand uses the build scripts of main or of the tag,
-# and the published Chatter image of the tag.
+# from". On another branch, the job is skipped with no error. A run by hand uses the build scripts of main or of
+# the tag, and the published Chatter image of the tag.
 
 name: Pi card
 
