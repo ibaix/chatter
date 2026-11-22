@@ -81,7 +81,8 @@ describe('LoginsTab', () => {
     )).toBeInTheDocument();
     expect(screen.getByText(
       'After 30 wrong passwords for one user from all computers in 15 min, nobody can log in as that user. ' +
-      'The lock ends 15 min after the first wrong password. Browsers that are logged in still work. You can unlock the user now.',
+      'The lock ends 15 min after the first wrong password. Browsers that are logged in, and browsers where the user logged in before, ' +
+      'still work. You can unlock the user now.',
     )).toBeInTheDocument();
   });
 
