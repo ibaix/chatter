@@ -7,7 +7,7 @@ import { attachmentHeader, downloadAsStream } from './fileDownload.js';
 import { requirePermission } from '../auth/authRoutes.js';
 import { checkedForm, checkedQuery } from './checks.js';
 import { allowLongUpload } from '../webServerOptions.js';
-import { notFound } from './responses.js';
+import { machineErrorReply, notFound } from './responses.js';
 import { batchUploadForm, filePathQuery, fileTreeQuery, uploadForm } from './schemas.js';
 import { createLogger } from '../logging/logger.js';
 
@@ -100,6 +100,8 @@ async function recordSentFiles(machineId: string, plan: UploadPlan, sentPaths: s
 export function machineFileRoutes(poller: HardwarePoller) {
   const canSendFiles = requirePermission('send-files');
   return new Hono()
+    // The machine refused or failed, so its reply text goes to the user
+    .onError(machineErrorReply)
     .get('/machine/:id/files', checkedQuery(fileTreeQuery), async c => {
       const { path = ROOT_FOLDER, depth = DEFAULT_TREE_DEPTH } = c.req.valid('query');
       const connector = poller.getConnector(c.req.param('id'));

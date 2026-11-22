@@ -8,6 +8,8 @@ import type { UserAccounts } from './auth/userAccounts.js';
 import { loggedInAuth } from './auth/testSupport.js';
 import { SESSION_COOKIE } from './auth/authRoutes.js';
 import { hasLongTimeLimit } from './webServerOptions.js';
+import { captureLog } from './logging/testSupport.js';
+import { UNEXPECTED_ERROR_TEXT } from './routes/responses.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
@@ -1088,7 +1090,21 @@ describe('API Routes', () => {
       const res = await call('GET', `/api/machine/${machine.id}/files/download?path=/PRG/O1000.NC`);
 
       expect(res.status).toBe(500);
+      // The reply of the machine tells the user what went wrong
       expect(res.body.error).toContain('550');
+    });
+
+    it('keeps the text of the machine when it refuses to delete a file, and logs it', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'deleteFile').mockRejectedValue(new Error('FTP delete error: 550 Permission denied'));
+      const log = captureLog();
+
+      const res = await call('DELETE', `/api/machine/${machine.id}/files?path=/PRG/O1000.NC`);
+      log.restore();
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('FTP delete error: 550 Permission denied');
+      expect(log.text('error')).toContain('550 Permission denied');
     });
 
     it('uploads one file and records it', async () => {
@@ -1173,14 +1189,19 @@ describe('API Routes', () => {
   });
 
   describe('errors that a route does not catch', () => {
-    it('returns 500 with the error text', async () => {
+    it('returns 500 with a general text, and logs the error', async () => {
       vi.spyOn(poller, 'getMachines').mockImplementation(() => { throw new Error('database is locked'); });
+      const log = captureLog();
 
       const res = await call('GET', '/api/machines');
+      log.restore();
 
       expect(res.status).toBe(500);
-      expect(res.body.error).toBe('database is locked');
+      expect(res.body.error).toBe(UNEXPECTED_ERROR_TEXT);
+      expect(log.text('error')).toContain('database is locked');
+      expect(log.text('error')).toContain('path=/api/machines');
     });
+
 
     it('returns 400 for a JSON body that is not an object', async () => {
       const res = await send('/api/machines', {
@@ -1194,16 +1215,20 @@ describe('API Routes', () => {
       expect(body.error).toContain('must be an object');
     });
 
-    it('returns 400 for a body that is not JSON', async () => {
+    it('returns 400 for a body that is not JSON, and logs no error', async () => {
+      const log = captureLog();
+
       const res = await send('/api/machines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{not json',
       });
+      log.restore();
 
       const body = await res.json() as { error: string };
       expect(res.status).toBe(400);
       expect(body.error).toContain('Malformed JSON');
+      expect(log.text('error')).toBe('');
     });
   });
 });
