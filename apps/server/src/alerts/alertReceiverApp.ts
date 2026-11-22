@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { checkedJson } from '../routes/checks.js';
+import { errorReply } from '../routes/responses.js';
 import type { Alert, AlertStore } from './AlertStore.js';
 
 /** vmalert sends the alerts of one rule group in one request. More than this is not from vmalert. */
@@ -38,7 +39,7 @@ export interface ReceiverOptions {
  * vmalert thinks that it talks to an Alertmanager: it sends POST /api/v2/alerts.
  */
 export function alertReceiverApp(store: AlertStore, { isKnownMachine, afterSave = () => {}, now = Date.now }: ReceiverOptions) {
-  return new Hono().post(
+  return new Hono().onError(errorReply).post(
     '/api/v2/alerts',
     checkedJson(sentAlerts, MAX_BODY_BYTES),
     c => {

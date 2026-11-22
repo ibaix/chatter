@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { captureLog } from '../logging/testSupport.js';
+import { UNEXPECTED_ERROR_TEXT } from '../routes/responses.js';
 import { AlertStore } from './AlertStore.js';
 import { alertReceiverApp, MAX_ALERTS_PER_REQUEST, MAX_FIRING_AHEAD_MS } from './alertReceiverApp.js';
 
@@ -128,6 +130,18 @@ describe('alertReceiverApp', () => {
 
     expect(response.status).toBe(413);
     expect(store.read(allAlertsQuery)).toEqual([]);
+  });
+
+  it('logs an error that the save did not catch, and does not send its text to vmalert', async () => {
+    vi.spyOn(store, 'save').mockImplementation(() => { throw new Error('database is locked'); });
+    const log = captureLog();
+
+    const response = await send(vmalertBody);
+    log.restore();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: UNEXPECTED_ERROR_TEXT });
+    expect(log.text('error')).toContain('database is locked');
   });
 
   it('has no other routes', async () => {
