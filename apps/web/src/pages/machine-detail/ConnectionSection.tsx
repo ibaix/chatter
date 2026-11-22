@@ -30,29 +30,38 @@ const CLOCK_TICK_MS = 30_000;
 export function ConnectionSection({ machine }: { machine: Machine }) {
   const now = useNow(CLOCK_TICK_MS);
   const canManageMachines = useCan('manage-machines');
-  const { health, reload } = useMachineHealth(machine.id);
+  const { health, clockOffset, reload } = useMachineHealth(machine.id);
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <HealthFacts machine={machine} health={health} now={now} />
+      <HealthFacts machine={machine} health={health} serverNow={now + clockOffset} />
       {canManageMachines && <ConnectionActions machineId={machine.id} onDone={reload} />}
       {health && health.events.length > 0 && <ConnectionEvents events={health.events} />}
     </div>
   );
 }
 
+/**
+ * The health of the machine, and the server clock minus the browser clock, measured when the health came.
+ * The poll times come from the server clock, so the "ago" texts count on the server clock.
+ */
 function useMachineHealth(machineId: string) {
   const [health, setHealth] = useState<MachineHealth | null>(null);
+  const [clockOffset, setClockOffset] = useState(0);
   const reload = useCallback(() => {
     // The health is extra help, so a failed load shows only the live status
-    fetchMachineHealth(machineId).then(setHealth, () => {});
+    fetchMachineHealth(machineId).then(loaded => {
+      const serverTime = Date.parse(loaded.serverTime);
+      if (!Number.isNaN(serverTime)) setClockOffset(serverTime - Date.now());
+      setHealth(loaded);
+    }, () => {});
   }, [machineId]);
   useEffect(reload, [reload]);
-  return { health, reload };
+  return { health, clockOffset, reload };
 }
 
-function HealthFacts({ machine, health, now }: { machine: Machine; health: MachineHealth | null; now: number }) {
-  const facts: [string, string][] = [['Last good poll', formatAgo(machine.lastPollTime, now)]];
+function HealthFacts({ machine, health, serverNow }: { machine: Machine; health: MachineHealth | null; serverNow: number }) {
+  const facts: [string, string][] = [['Last good poll', formatAgo(machine.lastPollTime, serverNow)]];
   if (health?.offlineSince) facts.push(['Offline since', formatDateTime(health.offlineSince)]);
   if (health?.lastError) facts.push(['Last error', `${health.lastError.text} (${formatDateTime(health.lastError.time)})`]);
   return (

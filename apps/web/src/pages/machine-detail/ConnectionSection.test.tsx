@@ -23,10 +23,10 @@ const HEALTH = {
   serverTime: '2026-11-21T10:05:00.000Z',
 };
 
-function renderSection(role: Role = 'admin') {
+function renderSection(role: Role = 'admin', machine = testMachine({ connected: false })) {
   render(
     <CurrentUserContext.Provider value={{ username: role, role }}>
-      <ConnectionSection machine={testMachine({ connected: false })} />
+      <ConnectionSection machine={machine} />
     </CurrentUserContext.Provider>,
   );
 }
@@ -45,6 +45,17 @@ describe('ConnectionSection', () => {
     expect(within(events).getByText('Machine connected')).toBeInTheDocument();
     expect(screen.getByText('Offline since')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['ahead of', 60 * 60_000],
+    ['behind', -60 * 60_000],
+  ])('counts the time since the last good poll on the server clock, also when it is 1 hour %s the browser clock', async (_, skewMs) => {
+    const serverNow = Date.now() + skewMs;
+    vi.mocked(fetchMachineHealth).mockResolvedValue({ ...HEALTH, serverTime: new Date(serverNow).toISOString() });
+    renderSection('viewer', testMachine({ connected: true, lastPollTime: new Date(serverNow - 150_000).toISOString() }));
+
+    expect(await screen.findByText('2 min ago')).toBeInTheDocument();
   });
 
   it('tests the connection, and shows each step with its result and hint', async () => {
