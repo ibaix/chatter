@@ -9,7 +9,7 @@ const MINUTE = 60 * SECOND;
 const TICK_MS = SECOND;
 
 /** Chatter stops during an install. After this long with no answer, the page tells the user what to do. */
-export const RESTART_HELP_AFTER_MS = 20 * MINUTE;
+const RESTART_HELP_AFTER_MS = 20 * MINUTE;
 export const RESTART_HELP_AFTER_MINUTES = RESTART_HELP_AFTER_MS / MINUTE;
 
 /** What the helper does in each step. Only these fixed texts show: never text from status.json. */
