@@ -95,6 +95,14 @@ npm run dup:new         # find code that your branch copied
 npm run dead            # find files, exports and packages that nothing uses
 ```
 
+Some tests of the history backup need a real VictoriaMetrics and vmalert. Without them, these tests do not run. The CI runs them. To run them on your computer (Docker must run):
+
+```bash
+tools/victoria-test/start.sh
+CHATTER_TEST_VICTORIA_URL=http://127.0.0.1:18429 npm run test:run -w apps/server -- src/history-backup src/routes/historyBackup
+tools/victoria-test/stop.sh
+```
+
 To run all the checks for your branch and see one table, run `npm run quality`. Add `-- --coverage` to also list the changed lines that no test runs, or `-- --all` for the whole repo.
 The full output of each check is in `.quality/`. The AI review skills `/chatter-review-code` and `/chatter-review-testing` use the same table.
 

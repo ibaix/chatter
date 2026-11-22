@@ -96,11 +96,13 @@ The file does not have the machine settings: no address, port, user name, passwo
 1. Add the machine again, if it is not in Chatter. It must be the same machine type (for example Brother).
 2. Click the **Settings** tab of the machine. Open **Advanced**.
 3. Click **Restore history**, and choose the file.
-4. Chatter checks all of the file. Then it shows the machine, the time range, and what the file has. Chatter writes nothing yet.
+4. Chatter checks all of the file. Then it shows the machine, the time range, and what the file has. Chatter writes nothing yet. If this machine has history in the time of the file already, Chatter tells you. The restore adds the file to that history, and the charts show the two together.
 5. Choose if Chatter also restores the alert rules. Then the rules of the file replace the rules of the machine. This is on by default.
 6. Click **Restore into** *machine name*.
 
 You can restore the same file two times, or restore it into the machine that it came from. Chatter does not add a value or a period two times.
+
+You cannot undo a restore. Chatter cannot remove the restored history from the machine. Make sure that you restore the correct file into the correct machine.
 
 Some limits:
 - Chatter keeps the history for 1 year. It does not restore history that is older than 1 year. The preview tells how much it leaves out.
