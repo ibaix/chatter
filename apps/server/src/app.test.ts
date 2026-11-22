@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import type Database from 'better-sqlite3';
+import type { IncomingMessage } from 'node:http';
 import { createApp } from './app.js';
 import { HardwarePoller } from './polling/poller.js';
 import type { Auth } from './auth/Auth.js';
 import type { UserAccounts } from './auth/userAccounts.js';
 import { loggedInAuth } from './auth/testSupport.js';
+import { SESSION_COOKIE } from './auth/authRoutes.js';
+import { hasLongTimeLimit } from './webServerOptions.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
@@ -114,6 +117,38 @@ describe('API Routes', () => {
 
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({ version: '1.2.0' });
+    });
+  });
+
+  describe('the time limit of a large upload', () => {
+    /** Each route that takes a large file. "m1" does not need to be a machine: the route marks the request first. */
+    const LARGE_UPLOADS = [
+      '/api/updates/file', '/api/machine/m1/history-restore', '/api/focas/library',
+      '/api/machine/m1/files/upload', '/api/machine/m1/files/upload-batch',
+    ];
+
+    /** True when the route gave the request the long time limit */
+    async function getsLongTime(path: string, headers: Record<string, string>): Promise<boolean> {
+      const incoming = {} as IncomingMessage;
+      await app.request(path, { method: 'POST', headers, body: 'x' }, { incoming });
+      return hasLongTimeLimit(incoming);
+    }
+
+    it('gives the long time to each large upload, but only after the login and the role check', async () => {
+      const viewer = { username: 'time-viewer', password: 'test-password' };
+      await accounts.add({ ...viewer, role: 'viewer' });
+      const viewerCookie = `${SESSION_COOKIE}=${await auth.logIn(viewer, { userAgent: 'test browser', address: '127.0.0.1' })}`;
+
+      for (const path of LARGE_UPLOADS) {
+        expect(await getsLongTime(path, { Cookie: cookie }), path).toBe(true);
+        expect(await getsLongTime(path, { Cookie: viewerCookie }), path).toBe(false);
+        expect(await getsLongTime(path, {}), path).toBe(false);
+      }
+    });
+
+    it('gives the normal time to the other routes', async () => {
+      expect(await getsLongTime('/api/auth/login', { 'Content-Type': 'application/json' })).toBe(false);
+      expect(await getsLongTime('/api/machines', { Cookie: cookie, 'Content-Type': 'application/json' })).toBe(false);
     });
   });
 

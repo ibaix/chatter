@@ -6,6 +6,7 @@ import { recordUpload } from '../storage/database.js';
 import { attachmentHeader, downloadAsStream } from './fileDownload.js';
 import { requirePermission } from '../auth/authRoutes.js';
 import { checkedForm, checkedQuery } from './checks.js';
+import { allowLongUpload } from '../webServerOptions.js';
 import { notFound } from './responses.js';
 import { batchUploadForm, filePathQuery, fileTreeQuery, uploadForm } from './schemas.js';
 import { createLogger } from '../logging/logger.js';
@@ -119,7 +120,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
       });
     })
 
-    .post('/machine/:id/files/upload', canSendFiles, programSizeLimit, checkedForm(uploadForm), async c => {
+    .post('/machine/:id/files/upload', canSendFiles, allowLongUpload, programSizeLimit, checkedForm(uploadForm), async c => {
       const machineId = c.req.param('id');
       const { file, path: remotePath, overwrite, targetName } = c.req.valid('form');
       const connector = poller.getConnector(machineId);
@@ -145,7 +146,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
     })
 
     // Send several files. Each file passes or fails on its own.
-    .post('/machine/:id/files/upload-batch', canSendFiles, programSizeLimit, checkedForm(batchUploadForm), async c => {
+    .post('/machine/:id/files/upload-batch', canSendFiles, allowLongUpload, programSizeLimit, checkedForm(batchUploadForm), async c => {
       const machineId = c.req.param('id');
       const { files, basePath, overwrite, targetNames } = c.req.valid('form');
       const connector = poller.getConnector(machineId);
