@@ -709,14 +709,15 @@ async function* unpackedLines(file: string): AsyncGenerator<string> {
       else done(null, piece);
     },
   });
-  const source = createReadStream(file).pipe(createGunzip()).pipe(limit);
+  // pipeline() and not pipe(): an error of the file or of gunzip reaches the read below, and each stage closes
+  pipelineOf(createReadStream(file), createGunzip(), limit, () => {});
   try {
-    yield* textLines(source, ARCHIVE_LIMITS.lineBytes);
+    yield* textLines(limit, ARCHIVE_LIMITS.lineBytes);
   } catch (error) {
     if (isZlibError(error)) throw new ArchiveError('A part of the file is not correct gzip.');
     throw error;
   } finally {
-    source.destroy();
+    limit.destroy();
   }
 }
 

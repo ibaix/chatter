@@ -306,6 +306,21 @@ describe('HistoryBackup', () => {
       expect((await refusalOf(await pack(new Map([['alert-rules.json', '{"rules":[]}']])))).message).toMatch(/no manifest/);
     });
 
+    it.each(['history/raw.jsonl.gz', 'state-periods.jsonl.gz'])('refuses a part %s that is not correct gzip, and frees the place', async part => {
+      const good = await backUp();
+      for (const broken of [Buffer.from('this is not gzip'), partOf(['{"a":1}', '{"b":2}']).subarray(0, 15)]) {
+        const archive = await changeArchive(good, entries => {
+          entries.set(part, broken);
+        });
+        const error = await refusalOf(archive);
+        expect(error).toMatchObject({ status: 400, message: expect.stringMatching(/not correct gzip/) });
+        expect(filesLeft()).toEqual([]);
+      }
+      const preview = await receive(good);
+      await backups.restore(preview.id, target, { alertRules: false }, 'admin');
+      expect(victoria.samplesOf(target.id)).toHaveLength(14400 + AVERAGES);
+    });
+
     it('refuses a file larger than the limit before it reads it, and when the upload is longer than it said', async () => {
       await expect(backups.receiveRestore(upload(Buffer.from('x')), ARCHIVE_LIMITS.archiveBytes + 1, target, 'admin'))
         .rejects.toMatchObject({ status: 413 });
