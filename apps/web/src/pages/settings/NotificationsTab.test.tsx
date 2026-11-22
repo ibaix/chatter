@@ -302,21 +302,43 @@ describe('NotificationsTab', () => {
     expect(messages.getByText('Ignored by the pattern "In alarm"')).toBeInTheDocument();
   });
 
-  it('fills the time zone from the browser when none is saved', async () => {
+  describe('when no time zone is saved', () => {
     // A time zone that is not the one of the test computer, so the test proves where the value comes from
+    const browserZone = 'America/Chicago';
     const browserOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
-    const resolvedOptions = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(function (this: Intl.DateTimeFormat) {
-      return { ...browserOptions.call(this), timeZone: 'America/Chicago' };
+
+    beforeEach(() => {
+      vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(function (this: Intl.DateTimeFormat) {
+        return { ...browserOptions.call(this), timeZone: browserZone };
+      });
+      vi.mocked(fetchNotificationSettings).mockResolvedValue({ linkBaseUrl: 'http://chatter.local:3001', timeZone: null });
     });
-    vi.mocked(fetchNotificationSettings).mockResolvedValue({ linkBaseUrl: null, timeZone: null });
-    try {
+
+    afterEach(() => {
+      vi.mocked(Intl.DateTimeFormat.prototype.resolvedOptions).mockRestore();
+    });
+
+    it('saves the time zone of the browser one time, and keeps the link address', async () => {
+      vi.mocked(saveNotificationSettings).mockResolvedValue({ linkBaseUrl: 'http://chatter.local:3001', timeZone: browserZone });
       await renderTab();
 
-      expect(screen.getByLabelText('Time zone')).toHaveValue('America/Chicago');
-      expect(screen.getByText(/from this browser/)).toBeInTheDocument();
-    } finally {
-      resolvedOptions.mockRestore();
-    }
+      await waitFor(() => expect(saveNotificationSettings).toHaveBeenCalledTimes(1));
+      expect(saveNotificationSettings).toHaveBeenCalledWith({ linkBaseUrl: 'http://chatter.local:3001', timeZone: browserZone });
+      expect(screen.getByLabelText('Time zone')).toHaveValue(browserZone);
+      await waitFor(() => expect(screen.queryByText(/times in UTC/)).not.toBeInTheDocument());
+    });
+
+    it('shows a warning that the messages use UTC while the time zone is not saved', async () => {
+      vi.mocked(saveNotificationSettings).mockRejectedValue(new Error('The server restarts'));
+      await renderTab();
+
+      const settings = screen.getByRole('region', { name: 'Message settings' });
+      expect(await within(settings).findByText('The server restarts')).toBeInTheDocument();
+      expect(within(settings).getByText(/times in UTC/)).toBeInTheDocument();
+      expect(within(settings).getByLabelText('Time zone')).toHaveValue(browserZone);
+      expect(within(settings).getByText(/from this browser/)).toBeInTheDocument();
+      expect(saveNotificationSettings).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('saves the message settings', async () => {

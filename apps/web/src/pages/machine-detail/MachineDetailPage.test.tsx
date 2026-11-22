@@ -757,7 +757,7 @@ describe('MachineDetailPage', () => {
       expect(screen.getByRole('tab', { name: 'Dashboard' })).toBeInTheDocument();
     });
 
-    it('updates the badge when the alerts load again after 30 seconds', async () => {
+    it('updates the badge when the alerts load again after 15 seconds', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
       try {
@@ -766,7 +766,7 @@ describe('MachineDetailPage', () => {
         expect(screen.queryByRole('link', { name: /firing/ })).not.toBeInTheDocument();
         vi.mocked(fetchMachineAlerts).mockResolvedValue([firingAlert('Offline')]);
 
-        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.advanceTimersByTimeAsync(15_000);
 
         expect(await within(header()).findByRole('link', { name: '1 alert firing' })).toBeInTheDocument();
         expect(fetchMachineAlerts).toHaveBeenCalledTimes(2);

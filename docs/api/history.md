@@ -84,7 +84,7 @@ Query parameters:
 - `state`: `firing` (only the alerts that fire now) or `all` (the default)
 - `machine`: only the alerts of this machine id
 
-The reply is `{ range, data: [{ name, machineId, labels, annotations, start, end, firing }], more }`. An alert that fires now has `end: null`. One reply has at most 500 alerts; `more` is true when older ones were left out.
+The reply is `{ range, data: [{ name, machineId, labels, annotations, start, end, firing }], more }`. An alert that fires now has `end: null`. An alert that vmalert did not send for up to 4 minutes still fires (see [When an alert ends](../guide/alerts.md#when-an-alert-ends)). One reply has at most 500 alerts; `more` is true when older ones were left out.
 Chatter keeps the alerts for 1 year.
 
 ## Alert rules

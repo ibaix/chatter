@@ -17,6 +17,7 @@ import { VmalertClient } from './alert-rules/VmalertClient.js';
 import { VictoriaQueryChecker } from './alert-rules/QueryChecker.js';
 import { AlertStore } from './alerts/AlertStore.js';
 import { alertReceiverApp } from './alerts/alertReceiverApp.js';
+import { VmalertAlertSync } from './alerts/VmalertAlertSync.js';
 import { Notifications } from './notifications/Notifications.js';
 import { TWILIO_ADDRESS } from './notifications/channels/index.js';
 import { getDb, initDatabase, closeDatabase, dataFolder } from './storage/database.js';
@@ -83,7 +84,7 @@ async function start(): Promise<void> {
     const stateRecorder = new StatePeriodRecorder(statePeriods);
     poller.addRecorder(stateRecorder);
     // The alerts of vmalert
-    const alerts = new AlertStore(getDb());
+    const alerts = new AlertStore(getDb(), Date.now());
     poller.addRemovalListener(alerts);
     const settings = new SettingsTable(getDb());
     // The messages that go out when an alert starts or ends, for example a text message or a Slack post
@@ -92,6 +93,9 @@ async function start(): Promise<void> {
     });
     poller.addRemovalListener(notifications);
     notifications.start();
+    // vmalert does not send again a resolve that Chatter could not get, for example during a restart
+    const alertSync = new VmalertAlertSync({ url: VMALERT_URL, store: alerts, afterSync: () => notifications.findAlertChanges() });
+    alertSync.start();
     // The alert rules of each machine. Chatter writes them to a file that vmalert reads.
     const alertRules = new AlertRuleService({
       store: new AlertRuleStore(getDb()),
@@ -152,6 +156,7 @@ async function start(): Promise<void> {
       // After poller.stop(), so the disconnects it sent end first. It takes at most a few seconds.
       const focasStopped = focasThreads.shutDown();
       releases.stop();
+      alertSync.stop();
       alertServer.close();
       alertServer.closeAllConnections();
       await notifications.stop();

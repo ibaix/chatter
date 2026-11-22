@@ -13,7 +13,7 @@ interface NotificationSettingsPanelProps {
   onSave: (settings: NotificationSettings) => Promise<boolean>;
 }
 
-const browserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
+export const browserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 /** The time zones that the browser knows, as suggestions for the time zone box */
 const TIME_ZONES: string[] = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [];
@@ -57,7 +57,7 @@ export function NotificationSettingsPanel({ settings, canSave, error, onSave }: 
           <Field
             id="notification-time-zone"
             label="Time zone"
-            hint={isTimeZoneFromBrowser ? 'Chatter got this time zone from this browser. Save to use it.' : 'The times in the messages use this time zone.'}
+            hint={isTimeZoneFromBrowser ? 'Chatter got this time zone from this browser.' : 'The times in the messages use this time zone.'}
             className="flex-[1_1_14rem]"
           >
             <TextInput
@@ -74,6 +74,11 @@ export function NotificationSettingsPanel({ settings, canSave, error, onSave }: 
             </datalist>
           </Field>
         </div>
+        {isTimeZoneFromBrowser && (
+          <Notice tone="info" title="No time zone is saved">
+            The messages show the times in UTC. Click Save settings to use the time zone above.
+          </Notice>
+        )}
         {error && <Notice tone="error" title={error} />}
         <div className="flex items-center gap-3">
           <Button type="submit" variant="primary" disabled={!canSave}>Save settings</Button>

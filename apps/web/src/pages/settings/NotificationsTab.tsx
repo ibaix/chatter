@@ -1,5 +1,5 @@
 import { cn } from '@toolpath/ui';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   addChannel, fetchChannels, fetchChannelTypes, fetchMessages, fetchNotificationSettings, inputOf, removeChannel, saveNotificationSettings,
   sendTestMessage, updateChannel,
@@ -16,7 +16,7 @@ import { errorMessageOf } from '../../utils/errorMessage';
 import { formatAgo } from '../../utils/formatters';
 import { ChannelForm } from './ChannelForm';
 import { MessagesPanel } from './MessagesPanel';
-import { NotificationSettingsPanel } from './NotificationSettingsPanel';
+import { browserTimeZone, NotificationSettingsPanel } from './NotificationSettingsPanel';
 import { MessageResult } from './MessageResult';
 import { channelSummary, lastMessageOf, LEVEL_LABELS, machinesLabel, type MachineName } from './notificationLabels';
 import { ReportPending } from './ReportPending';
@@ -63,6 +63,10 @@ export function NotificationsTab({ machines }: { machines: MachineName[] }) {
   useRefreshWhileVisible(refreshMessages, MESSAGES_REFRESH_MS);
   const [changedPanel, setChangedPanel] = useState<ChangedPanel | null>(null);
   const [openForm, setOpenForm] = useState<OpenForm>(null);
+  useSaveBrowserTimeZone(report, loaded => {
+    setChangedPanel('settings');
+    void change(async () => ({ ...loaded, settings: await saveNotificationSettings({ ...loaded.settings, timeZone: browserTimeZone() }) }));
+  });
   if (loadError || !report) return <ReportPending loadError={loadError} />;
 
   const changeIn = (panel: ChangedPanel, action: () => Promise<NotificationsReport>) => {
@@ -121,6 +125,19 @@ export function NotificationsTab({ machines }: { machines: MachineName[] }) {
       )}
     </>
   );
+}
+
+/**
+ * The server has no time zone, so the messages use UTC until a time zone is saved. Only an admin opens this tab,
+ * so the first open saves the time zone of the browser, one time. The settings panel shows a warning while none is saved.
+ */
+function useSaveBrowserTimeZone(report: NotificationsReport | null, save: (report: NotificationsReport) => void) {
+  const isTried = useRef(false);
+  useEffect(() => {
+    if (!report || report.settings.timeZone !== null || isTried.current) return;
+    isTried.current = true;
+    save(report);
+  }, [report, save]);
 }
 
 interface ChannelsPanelProps {

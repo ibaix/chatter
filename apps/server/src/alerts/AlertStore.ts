@@ -1,3 +1,4 @@
+import { ALERT_END_GRACE_MS, EVENT_LABEL } from '@local-chatter/shared';
 import Database from 'better-sqlite3';
 
 /** Alerts are kept this long after they end, like the machine history */
@@ -13,6 +14,11 @@ export interface Alert {
   startsAt: number;
   /** While the alert fires, this is in the future. vmalert sends the alert again before this time. */
   endsAt: number;
+  /**
+   * True when the alert ended for sure: vmalert said that it ended, or AlertChangeFinder reported its end after the
+   * grace time. Then `endsAt` is the end. See isAlertFiring().
+   */
+  resolved: boolean;
 }
 
 export interface AlertQuery {
@@ -26,7 +32,42 @@ export interface AlertQuery {
 }
 
 /** The columns that make an AlertRow */
-export const ALERT_COLUMNS = 'name, machine_id, labels, annotations, starts_at, ends_at';
+export const ALERT_COLUMNS = 'name, machine_id, labels, annotations, starts_at, ends_at, resolved';
+
+/**
+ * The SQL of alertFiringUntil() for a row of the "alerts" table: the time from which the alert counts as ended.
+ * An alert fires while this is after now.
+ */
+export const FIRING_UNTIL_SQL = `(CASE WHEN resolved THEN ends_at ELSE ends_at + ${ALERT_END_GRACE_MS} END)`;
+
+/**
+ * vmalert gives a firing alert an end time 4 checks ahead of each send: 1 minute, because the rules file checks every
+ * 15 seconds. So the last send of an alert was this long before its end time.
+ */
+export const VMALERT_LEASE_MS = 60_000;
+
+/**
+ * After a start of Chatter, an alert with a passed end time and no resolve does not end before this time.
+ * vmalert could not send the alert while Chatter was off. It sends each firing alert again at each check (every 15 seconds),
+ * also after its own restart, so this waits 8 checks. A resolve ends an alert at once.
+ */
+export const STARTUP_WAIT_MS = 2 * 60_000;
+
+/**
+ * The SQL test for a row of an alert that can still fire, with the parameters @now and @isStartupWait.
+ * After the startup wait, this is an alert in its grace time. During the startup wait, it is each alert that is not
+ * resolved: vmalert could not send while Chatter was off, so the end time of an alert that still fires can be long ago.
+ * AlertChangeFinder resolves each alert that it reports as ended, so these are only the alerts that fired at the stop.
+ */
+const OPEN_SQL = `(NOT resolved AND (${FIRING_UNTIL_SQL} > @now OR @isStartupWait))`;
+
+/** What vmalert has now: GET /api/v1/rules (see VmalertAlertSync) */
+export interface VmalertState {
+  /** The alerts that fire now */
+  firing: { labels: Record<string, string> }[];
+  /** The time of the last check of each alert rule, by `group name\nrule name` */
+  lastChecks: Map<string, number>;
+}
 
 /** One row of the "alerts" table */
 export interface AlertRow {
@@ -36,6 +77,8 @@ export interface AlertRow {
   annotations: string;
   starts_at: number;
   ends_at: number;
+  /** 1 when the alert ended for sure (see Alert.resolved) */
+  resolved: number;
 }
 
 /**
@@ -43,7 +86,8 @@ export interface AlertRow {
  * vmalert sends a firing alert again and again. One alert is one row: the same labels and the same start time.
  */
 export class AlertStore {
-  constructor(private readonly db: Database.Database) {
+  /** `startedAt` is the start time of Chatter. The first start after the update that adds the "resolved" column also uses it. */
+  constructor(private readonly db: Database.Database, private readonly startedAt: number) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS alerts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,37 +101,124 @@ export class AlertStore {
       );
       CREATE INDEX IF NOT EXISTS alerts_ends_at ON alerts (ends_at);
     `);
+    this.addResolvedColumn(startedAt);
   }
 
-  /** For tests: the alerts are kept in memory only */
-  static inMemory(): AlertStore {
-    return new AlertStore(new Database(':memory:'));
+  /**
+   * Older versions kept no "resolved" flag: an alert ended when its end time passed.
+   * The alerts that ended before the update are marked as resolved, so they do not fire again for the grace time.
+   * An alert that fired when the older version stopped is not resolved: its end time passed during the update,
+   * and vmalert sends it again. A resolved alert ends at once after a start, so it would get a wrong "ended" message.
+   */
+  private addResolvedColumn(now: number): void {
+    const columns = this.db.prepare('PRAGMA table_info(alerts)').all() as { name: string }[];
+    if (columns.some(column => column.name === 'resolved')) return;
+    this.db.transaction(() => {
+      this.db.exec('ALTER TABLE alerts ADD COLUMN resolved INTEGER NOT NULL DEFAULT 0');
+      this.db.prepare(`UPDATE alerts SET resolved = 1 WHERE ${this.endedBeforeUpdateSql()}`).run({ now });
+    })();
   }
 
-  /** Add new alerts, and update the end time and the text of known ones. Also removes alerts older than a year. */
+  /**
+   * With notifications, the older version kept an "ended" note for each alert that it reported as ended
+   * (see AlertChangeFinder). Only these alerts ended: an update can take longer than the grace time.
+   * With no notes, an alert ended when its end time passed by more than the grace time. No channel is set up then,
+   * so no message can be wrong. The update reads the notes only one time, and AlertChangeFinder keeps them.
+   */
+  private endedBeforeUpdateSql(): string {
+    const hasNotes = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'alert_notices'").get();
+    if (hasNotes) return "id IN (SELECT alert_id FROM alert_notices WHERE kind = 'ended')";
+    return `ends_at <= @now - ${ALERT_END_GRACE_MS}`;
+  }
+
+  /** For tests: the alerts are kept in memory only. With no start time, Chatter started long ago. */
+  static inMemory(startedAt = 0): AlertStore {
+    return new AlertStore(new Database(':memory:'), startedAt);
+  }
+
+  /**
+   * Add new alerts, and update the end time and the text of known ones. Also removes alerts older than a year.
+   * A start time that is new for an alert that still fires (with the same labels) updates that alert: after a restart,
+   * vmalert gives a firing alert a new start time when its rule fires at the first check. It is not a new alert.
+   * During the startup wait, this is also true when the end time of the alert passed while Chatter was off.
+   * An event, such as "program ended", is different: each start is a new event.
+   */
   save(alerts: Alert[], now: number): void {
     const upsert = this.db.prepare(`
-      INSERT INTO alerts (name, machine_id, labels, annotations, starts_at, ends_at)
-      VALUES (@name, @machineId, @labels, @annotations, @startsAt, @endsAt)
-      ON CONFLICT (labels, starts_at) DO UPDATE SET annotations = excluded.annotations, ends_at = excluded.ends_at
+      INSERT INTO alerts (name, machine_id, labels, annotations, starts_at, ends_at, resolved)
+      VALUES (@name, @machineId, @labels, @annotations, @startsAt, @endsAt, @resolved)
+      ON CONFLICT (labels, starts_at) DO UPDATE SET
+        annotations = excluded.annotations, ends_at = excluded.ends_at, resolved = excluded.resolved
+    `);
+    const firingWithEarlierStart = this.db.prepare(`
+      SELECT id FROM alerts
+      WHERE labels = @labels AND starts_at < @startsAt AND ${OPEN_SQL}
+      ORDER BY starts_at DESC LIMIT 1
+    `).pluck();
+    const update = this.db.prepare(`
+      UPDATE alerts SET annotations = @annotations, ends_at = @endsAt, resolved = @resolved WHERE id = @id
     `);
     this.db.transaction(() => {
       for (const alert of alerts) {
-        upsert.run(toSqlParameters(alert));
+        const parameters = toSqlParameters(alert);
+        const isEvent = alert.labels[EVENT_LABEL] === 'true';
+        const id = isEvent ? undefined : firingWithEarlierStart.get({ ...parameters, ...this.openParameters(now) }) as number | undefined;
+        if (id === undefined) upsert.run(parameters);
+        else update.run({ ...parameters, id });
       }
       this.removeEndedBefore(now - KEEP_ALERTS_MS);
     })();
   }
 
-  /** Newest first */
+  /** Newest first. An alert in the grace time after its end time still fires (see isAlertFiring). */
   read({ now, machineId, firingOnly, endedAfter, limit }: AlertQuery): Alert[] {
+    // The first test of ends_at can use the index
     const rows = this.db.prepare(`
       SELECT ${ALERT_COLUMNS} FROM alerts
-      WHERE ends_at > @endsAfter AND (@machineId IS NULL OR machine_id = @machineId)
+      WHERE ends_at > @endsAfter - ${ALERT_END_GRACE_MS} AND ${FIRING_UNTIL_SQL} > @endsAfter
+        AND (@machineId IS NULL OR machine_id = @machineId)
       ORDER BY starts_at DESC, id DESC
       LIMIT @limit
     `).all({ endsAfter: firingOnly ? now : endedAfter, machineId: machineId ?? null, limit }) as AlertRow[];
     return rows.map(toAlert);
+  }
+
+  /**
+   * Make the firing alerts match what vmalert has now. vmalert does not send again what it could not send,
+   * for example a resolve while Chatter restarted.
+   * An alert that vmalert still fires gets a new end time. An alert that vmalert does not have any more is resolved,
+   * but only when vmalert checked its rule after the last send. Else vmalert could still be at its first check.
+   * It adds no alert: vmalert sends each firing alert at each check, with its real start time.
+   * During the startup wait, it also checks the alerts whose end time passed while Chatter was off (see OPEN_SQL).
+   */
+  updateFromVmalert({ firing, lastChecks }: VmalertState, now: number): { renewed: number; ended: number } {
+    const firingLabels = new Set(firing.map(alert => labelsText(alert.labels)));
+    const openRows = this.db.prepare(`
+      SELECT id, labels, ends_at FROM alerts WHERE ${OPEN_SQL}
+    `);
+    const renew = this.db.prepare('UPDATE alerts SET ends_at = MAX(ends_at, @endsAt) WHERE id = @id');
+    const resolve = this.db.prepare('UPDATE alerts SET ends_at = MIN(ends_at, @now), resolved = 1 WHERE id = @id');
+    const result = { renewed: 0, ended: 0 };
+    this.db.transaction(() => {
+      for (const row of openRows.all(this.openParameters(now)) as { id: number; labels: string; ends_at: number }[]) {
+        if (firingLabels.has(row.labels)) {
+          renew.run({ id: row.id, endsAt: now + VMALERT_LEASE_MS });
+          result.renewed++;
+          continue;
+        }
+        const labels = parseTextRecord(row.labels);
+        const lastCheck = lastChecks.get(`${labels.alertgroup}\n${labels.alertname}`);
+        if (lastCheck !== undefined && lastCheck > row.ends_at - VMALERT_LEASE_MS) {
+          resolve.run({ id: row.id, now });
+          result.ended++;
+        }
+      }
+    })();
+    return result;
+  }
+
+  private openParameters(now: number) {
+    return { now, isStartupWait: now - this.startedAt < STARTUP_WAIT_MS ? 1 : 0 };
   }
 
   removeMachine(machineId: string): void {
@@ -103,11 +234,11 @@ function toSqlParameters(alert: Alert) {
   return {
     name: alert.name,
     machineId: alert.machineId ?? null,
-    // The labels are sorted, so the same labels in another order are the same alert
-    labels: JSON.stringify(sortedLabels(alert.labels)),
+    labels: labelsText(alert.labels),
     annotations: JSON.stringify(alert.annotations),
     startsAt: alert.startsAt,
     endsAt: alert.endsAt,
+    resolved: alert.resolved ? 1 : 0,
   };
 }
 
@@ -119,11 +250,17 @@ export function toAlert(row: AlertRow): Alert {
     annotations: parseTextRecord(row.annotations),
     startsAt: row.starts_at,
     endsAt: row.ends_at,
+    resolved: row.resolved === 1,
   };
 }
 
 function parseTextRecord(json: string): Record<string, string> {
   return JSON.parse(json) as Record<string, string>;
+}
+
+/** The labels are sorted, so the same labels in another order are the same alert */
+function labelsText(labels: Record<string, string>): string {
+  return JSON.stringify(sortedLabels(labels));
 }
 
 function sortedLabels(labels: Record<string, string>): Record<string, string> {

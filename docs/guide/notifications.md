@@ -30,7 +30,7 @@ The message starts with `CRITICAL` or `WARNING` when an alert starts (`ALERT` wh
 The **Message settings** panel is at the bottom of the tab.
 
 - **Chatter address for links:** the address that people type to open Chatter, for example `http://chatter.local:3001`. Each message then ends with a link to the machine page, or to Chatter when the message is not about one machine. Leave it empty to send no link.
-- **Time zone:** the time zone of the shop, for example `America/Chicago`. The times in the messages use it. The first time, Chatter fills in the time zone of your browser. Click **Save settings** to keep it. Without a time zone, the messages use UTC and say "UTC".
+- **Time zone:** the time zone of the shop, for example `America/Chicago`. The times in the messages use it. When an admin opens the **Notifications** tab for the first time, Chatter saves the time zone of the browser. To use another time zone, type it and click **Save settings**. Without a time zone, the messages use UTC and say "UTC", and the panel shows **No time zone is saved**.
 
 ## Add a channel
 
@@ -363,7 +363,8 @@ The panel shows the newest 10 messages. To see 10 more, click **Show more** at t
 | An "And 7 more alerts" message | A channel gets at most 10 alert messages in 10 minutes. Chatter puts the other alerts in one message. A **Program ended** message counts too. Make fewer alerts fire, or select **Critical only**. |
 | "This happened 20 times since 9:02 AM" | A channel gets at most one **Program ended** message for each machine in 15 minutes. The message tells the program ends since the last message. See [Limits for each channel](#limits-for-each-channel). |
 | "Chatter could not send 14 alerts while the channel was blocked" | The service did not take messages for a time, for example because of its limit. After that, Chatter sent this summary and the newest 3 messages. Open the message list to see each alert. |
-| The times are in UTC | Set the **Time zone** in **Message settings**. |
+| The times are in UTC | Set the **Time zone** in **Message settings**, and click **Save settings**. |
+| An **OK** message comes, but the machine still has the alarm | vmalert saw no alarm at one check. Then the alert starts again, and a new start message comes. Look at the machine history at that time. See [When an alert ends](./alerts.md#when-an-alert-ends). |
 | The messages have no link | Set **Chatter address for links** in **Message settings**. |
 
 ## How it works

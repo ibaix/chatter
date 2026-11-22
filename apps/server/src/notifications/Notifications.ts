@@ -60,7 +60,7 @@ export class Notifications implements MachineRemovalListener {
   /** With no database file: for tests, and for an app that is made without notifications */
   static inMemory(machineName: (machineId: string) => string | null = () => null): Notifications {
     const db = new Database(':memory:');
-    new AlertStore(db);
+    new AlertStore(db, Date.now());
     return new Notifications({ db, settingsTable: new SettingsTable(db), machineName });
   }
 

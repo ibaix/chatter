@@ -1,6 +1,7 @@
 import type { ChannelInput } from '@local-chatter/shared';
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { alertReceiverApp } from '../alerts/alertReceiverApp.js';
 import { type Alert, AlertStore } from '../alerts/AlertStore.js';
 import { SettingsTable } from '../storage/settingsTable.js';
 import { Notifications } from './Notifications.js';
@@ -15,7 +16,7 @@ const slack: ChannelInput = {
 
 const alert: Alert = {
   name: 'In alarm', machineId: 'haas-vf2', labels: { alertname: 'In alarm', machine: 'haas-vf2', severity: 'critical' },
-  annotations: {}, startsAt: NOW, endsAt: NOW + 60_000,
+  annotations: {}, startsAt: NOW, endsAt: NOW + 60_000, resolved: false,
 };
 
 describe('Notifications', () => {
@@ -26,7 +27,7 @@ describe('Notifications', () => {
 
   beforeEach(() => {
     db = new Database(':memory:');
-    alerts = new AlertStore(db);
+    alerts = new AlertStore(db, NOW);
     requests = [];
     const fetch = async (url: string | URL | Request, init?: RequestInit) => {
       requests.push({ url: String(url), body: JSON.parse(String(init?.body)) as { text: string } });
@@ -201,7 +202,7 @@ describe('Notifications', () => {
     expect(sent).toHaveLength(4);
     expect(sent[0]).toMatch(/^Chatter could not send 5 alerts while the channel was blocked: /);
     expect(sent.slice(1)).toEqual([
-      expect.stringContaining('Alarm 5 '), expect.stringContaining('Alarm 6 '), expect.stringContaining('Alarm 7 '),
+      expect.stringContaining('Alarm 5'), expect.stringContaining('Alarm 6'), expect.stringContaining('Alarm 7'),
     ]);
   });
 
@@ -254,6 +255,78 @@ describe('Notifications', () => {
 
     expect(notifications.outbox.list({})).toEqual([]);
     expect(notifications.channels.get(id)?.machineIds).toEqual(['haas-st10']);
+  });
+
+  describe('when an admin removes a machine with a firing alert', () => {
+    let now: number;
+    let removable: Notifications;
+    const knownMachines = new Set(['haas-vf2']);
+    /** The removal listeners, in the order of index.ts: the poller forgets the machine first */
+    const removeMachine = () => {
+      knownMachines.delete('haas-vf2');
+      alerts.removeMachine('haas-vf2');
+      removable.removeMachine('haas-vf2');
+    };
+    /** vmalert finds no data after the delete of the history, so it sends a resolve */
+    const sendResolve = () => alertReceiverApp(alerts, {
+      isKnownMachine: id => knownMachines.has(id), now: () => now, afterSave: () => removable.findAlertChanges(),
+    }).request('/api/v2/alerts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([{
+        labels: alert.labels, annotations: {}, startsAt: new Date(NOW).toISOString(), endsAt: new Date(now - 30_000).toISOString(),
+      }]),
+    });
+
+    beforeEach(async () => {
+      now = NOW;
+      knownMachines.add('haas-vf2');
+      removable = new Notifications({
+        db, settingsTable: new SettingsTable(db), machineName: () => 'Haas VF-2', now: () => now,
+        fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+          requests.push({ url: String(url), body: JSON.parse(String(init?.body)) as { text: string } });
+          return new Response(null, { status: 200 });
+        }) as typeof globalThis.fetch,
+      });
+      addChannel(slack);
+      alerts.save([alert], NOW);
+      removable.findAlertChanges();
+      await removable.sendDue();
+    });
+
+    const sentTexts = () => requests.map(request => request.body.text);
+
+    it('sends no "ended" message for a resolve of vmalert that comes after the removal', async () => {
+      removeMachine();
+      now = NOW + 45_000;
+
+      expect((await sendResolve()).status).toBe(200);
+      await removable.sendDue();
+
+      expect(sentTexts()).toEqual(['CRITICAL - Haas VF-2: In alarm. Started 9:02 AM.']);
+      expect(alerts.read({ now, firingOnly: false, endedAfter: 0, limit: 10 })).toEqual([]);
+    });
+
+    it('sends no "ended" message when vmalert sends nothing more', async () => {
+      removeMachine();
+      now = NOW + 10 * 60_000;
+
+      removable.findAlertChanges();
+      await removable.sendDue();
+
+      expect(sentTexts()).toHaveLength(1);
+    });
+
+    it('deletes an "ended" message that still waits', async () => {
+      now = NOW + 45_000;
+      await sendResolve();
+      expect(removable.outbox.list({}).map(message => `${message.kind} ${message.status}`)).toEqual(['ended waiting', 'started sent']);
+
+      removeMachine();
+      await removable.sendDue();
+
+      expect(removable.outbox.list({}).map(message => `${message.kind} ${message.status}`)).toEqual(['started sent']);
+      expect(sentTexts()).toHaveLength(1);
+    });
   });
 
   it('stops all its timers', async () => {

@@ -46,7 +46,22 @@ describe('alertReceiverApp', () => {
       annotations: { summary: 'Spindle speed is 14998' },
       startsAt: Date.parse('2026-11-09T17:50:20Z'),
       endsAt: Date.parse('2026-11-09T17:51:11.65Z'),
+      resolved: false,
     }]);
+  });
+
+  it('marks an alert as resolved when vmalert sends it with an end time in the past, because then it ended', async () => {
+    // vmalert checks 30 seconds back in time, so the end of a resolved alert is about 30 seconds before the send
+    await send([{ ...vmalertAlert, endsAt: '2026-11-09T17:50:30Z' }]);
+
+    expect(store.read(allAlertsQuery)).toMatchObject([{ endsAt: Date.parse('2026-11-09T17:50:30Z'), resolved: true }]);
+  });
+
+  it('keeps an alert as firing again when vmalert sends it as firing after a resolve', async () => {
+    await send([{ ...vmalertAlert, endsAt: '2026-11-09T17:50:30Z' }]);
+    await send(vmalertBody);
+
+    expect(store.read(allAlertsQuery)).toMatchObject([{ resolved: false }]);
   });
 
   it('tells the listener after it saved the alerts, so the notifications can find the changes', async () => {

@@ -15,6 +15,7 @@ function anAlert(values: Partial<Alert> = {}): Alert {
     annotations: { summary: 'Spindle load is 92%' },
     startsAt: STARTED,
     endsAt: ENDED,
+    resolved: true,
     ...values,
   };
 }

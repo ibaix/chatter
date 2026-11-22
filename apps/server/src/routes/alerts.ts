@@ -1,3 +1,4 @@
+import { isAlertFiring } from '@local-chatter/shared';
 import { Hono } from 'hono';
 import type { Alert, AlertStore } from '../alerts/AlertStore.js';
 import { checkedQuery } from './checks.js';
@@ -9,7 +10,7 @@ const DEFAULT_ALERT_RANGE = '-7d';
 const MAX_ALERTS = 500;
 
 function alertReply(alert: Alert, now: number) {
-  const firing = alert.endsAt > now;
+  const firing = isAlertFiring(alert, now);
   return {
     name: alert.name,
     machineId: alert.machineId ?? null,
