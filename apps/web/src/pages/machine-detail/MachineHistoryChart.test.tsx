@@ -280,6 +280,19 @@ describe('MachineHistoryChart', () => {
     fireEvent.click(button, { detail: 0 });
   }
 
+  /** The button is off, but it keeps the focus: it has aria-disabled, not disabled */
+  function expectOff(button: HTMLElement) {
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(button).not.toBeDisabled();
+  }
+
+  function expectOn(button: HTMLElement) {
+    expect(button).not.toHaveAttribute('aria-disabled', 'true');
+    expect(button).not.toBeDisabled();
+  }
+
+  const nowButton = () => screen.getByRole('button', { name: 'Now' });
+
   /** Two sideways scroll steps on the chart, of a quarter of the range each: -1 goes back half the range, 1 goes on */
   function scrollHalfARange(direction: -1 | 1) {
     for (let step = 0; step < 2; step++) fireEvent.wheel(chartBody(), { deltaX: direction * 80, deltaY: 0 });
@@ -296,17 +309,35 @@ describe('MachineHistoryChart', () => {
   describe('moving in time', () => {
     it('goes back half a range with a sideways scroll, and back to the live chart with Now', async () => {
       render(<ChartWithMenu machine={runningMachine()} />);
-      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
+      expectOff(nowButton());
 
       scrollHalfARange(-1);
 
       expect(await screen.findByText(`How fast the spindle turned ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Now' })).toBeEnabled();
+      expectOn(nowButton());
 
-      fireEvent.click(screen.getByRole('button', { name: 'Now' }));
+      fireEvent.click(nowButton());
 
       expect(await screen.findByText('How fast the spindle turned in the last 10 minutes.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
+      expectOff(nowButton());
+    });
+
+    it('keeps the keyboard focus on Now after Enter, and does nothing for one more Enter', async () => {
+      await overviewOfStateView();
+      scrollHalfARange(-1);
+      await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`);
+
+      pressEnter(nowButton());
+      expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(nowButton()).toHaveFocus();
+      expectOff(nowButton());
+
+      pressEnter(nowButton());
+      expect(screen.getByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
+      expect(nowButton()).toHaveFocus();
+      // The history did not change: one undo goes back to the time before Now
+      fireEvent.click(screen.getByRole('button', { name: 'Previous view' }));
+      expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
     });
 
     it('moves the time with a sideways scroll, but not with an up or down scroll', async () => {
@@ -461,18 +492,18 @@ describe('MachineHistoryChart', () => {
 
       scrollHalfARange(1);
       expect(await screen.findByText('What the machine did in the last 10 minutes.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
+      expectOff(nowButton());
     });
 
     it('goes back to the live chart when the user picks another range', async () => {
       render(<ChartWithMenu machine={runningMachine()} />);
       scrollHalfARange(-1);
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Now' })).toBeEnabled());
+      await waitFor(() => expectOn(nowButton()));
 
       fireEvent.click(screen.getByRole('button', { name: '1h' }));
 
       expect(await screen.findByText('How fast the spindle turned in the last hour.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
+      expectOff(nowButton());
     });
   });
 
@@ -549,7 +580,7 @@ describe('MachineHistoryChart', () => {
       drag(overview, BOX_WIDTH / 2, BOX_WIDTH);
 
       expect(await screen.findByText('What the machine did in the last 5 minutes.')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Now' })).toBeDisabled();
+      expectOff(nowButton());
     });
 
     it('does not move a live chart into the past for a click on the strip, also when the clock of Chatter is ahead', async () => {
@@ -655,7 +686,7 @@ describe('MachineHistoryChart', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Clear the zoom' }));
 
       expect(await screen.findByText(`What the machine did ${pastText(10 * MINUTE, NOW - 5 * MINUTE)}.`)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Now' })).toBeEnabled();
+      expectOn(nowButton());
     });
   });
 
@@ -780,7 +811,7 @@ describe('MachineHistoryChart', () => {
       await zoomInOnTheMiddle();
       fireEvent.click(screen.getByRole('button', { name: 'Use as full range' }));
 
-      fireEvent.click(screen.getByRole('button', { name: 'Now' }));
+      fireEvent.click(nowButton());
 
       expect(await screen.findByText('What the machine did in the last 5 minutes.')).toBeInTheDocument();
       expect(screen.getByRole('img', { name: /^Overview of the last 5 minutes/ })).toBeInTheDocument();
@@ -801,12 +832,6 @@ describe('MachineHistoryChart', () => {
   describe('undo and redo', () => {
     const undoButton = () => screen.getByRole('button', { name: 'Previous view' });
     const redoButton = () => screen.getByRole('button', { name: 'Next view' });
-    /** The button is off, but it keeps the focus: it has aria-disabled, not disabled */
-    const expectOff = (button: HTMLElement) => {
-      expect(button).toHaveAttribute('aria-disabled', 'true');
-      expect(button).not.toBeDisabled();
-    };
-    const expectOn = (button: HTMLElement) => expect(button).not.toHaveAttribute('aria-disabled', 'true');
 
     it('has buttons for the previous and the next view in place of Earlier and Later', async () => {
       await overviewOfStateView();

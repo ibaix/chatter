@@ -35,7 +35,7 @@ export function ChartTooltip({ style, className, children }: { style: CSSPropert
 }
 
 const PAN_BUTTON_CLASS =
-  'inline-flex min-h-8 items-center gap-1 rounded-md border-0 bg-transparent px-2 font-semibold text-zinc-200 hover:text-zinc-50 disabled:cursor-default disabled:text-zinc-500';
+  'inline-flex min-h-8 items-center gap-1 rounded-md border-0 bg-transparent px-2 font-semibold text-zinc-200 hover:text-zinc-50';
 
 interface ViewButtonsProps {
   canUndo: boolean;
@@ -51,31 +51,32 @@ interface ViewButtonsProps {
 export function ViewButtons({ canUndo, canRedo, canGoToNow, onUndo, onRedo, onNow }: ViewButtonsProps) {
   return (
     <div role="group" aria-label="Move in time" className="inline-flex gap-0.5 rounded-lg bg-zinc-950 p-[0.1875rem]">
-      <HistoryButton label="Previous view" enabled={canUndo} onClick={onUndo}>
+      <TimeButton label="Previous view" enabled={canUndo} onClick={onUndo}>
         <UndoIcon size={16} />
-      </HistoryButton>
-      <HistoryButton label="Next view" enabled={canRedo} onClick={onRedo}>
+      </TimeButton>
+      <TimeButton label="Next view" enabled={canRedo} onClick={onRedo}>
         <RedoIcon size={16} />
-      </HistoryButton>
-      <button type="button" onClick={onNow} disabled={!canGoToNow} className={PAN_BUTTON_CLASS}>
+      </TimeButton>
+      <TimeButton enabled={canGoToNow} onClick={onNow}>
         Now
-      </button>
+      </TimeButton>
     </div>
   );
 }
 
-interface HistoryButtonProps {
-  label: string;
+interface TimeButtonProps {
+  /** The name and the tooltip of a button that shows only an icon */
+  label?: string;
   enabled: boolean;
   onClick: () => void;
   children: ReactNode;
 }
 
 /**
- * The previous view or the next view button. At the end of the history it is off with aria-disabled, not disabled:
+ * A button that changes the time of the chart. When it can do nothing, it is off with aria-disabled, not disabled:
  * the browser takes the focus away from a disabled button, and the next Tab then starts at the top of the page.
  */
-function HistoryButton({ label, enabled, onClick, children }: HistoryButtonProps) {
+function TimeButton({ label, enabled, onClick, children }: TimeButtonProps) {
   return (
     <button
       type="button"
