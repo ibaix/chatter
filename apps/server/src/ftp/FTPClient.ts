@@ -505,24 +505,27 @@ export class FTPClient {
     const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
 
     return new Promise((resolve, reject) => {
-      let bytesReceived = 0;
+      // Stops a download that gets no data. The first byte, an error or the close stops this timer.
+      const noDataTimer = setTimeout(() => {
+        dataSocket.destroy();
+        reject(new Error('Download timeout'));
+      }, DOWNLOAD_NO_DATA_TIMEOUT_MS);
 
       dataSocket.on('data', chunk => {
-        bytesReceived += chunk.length;
+        clearTimeout(noDataTimer);
         destination.write(chunk);
       });
-      dataSocket.on('close', () => resolve());
-      dataSocket.on('error', reject);
+      dataSocket.on('close', () => {
+        clearTimeout(noDataTimer);
+        resolve();
+      });
+      dataSocket.on('error', err => {
+        clearTimeout(noDataTimer);
+        reject(err);
+      });
 
       // Written straight to the control socket without waiting for the reply, so data can flow on the data socket
       client.ftp.socket.write(`RETR ${filePath}\r\n`);
-
-      setTimeout(() => {
-        if (bytesReceived === 0) {
-          dataSocket.destroy();
-          reject(new Error('Download timeout'));
-        }
-      }, DOWNLOAD_NO_DATA_TIMEOUT_MS);
     });
   }
 
