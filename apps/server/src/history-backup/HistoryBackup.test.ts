@@ -256,6 +256,14 @@ describe('HistoryBackup', () => {
       expect(filesLeft()).toEqual([]);
     });
 
+    it('refuses a backup larger than the free space of the disk, and deletes what it wrote', async () => {
+      freeBytes = ARCHIVE_LIMITS.freeSpaceReserveBytes + 10_000;
+      await expect(backups.prepareBackup(source, ALL, 'admin')).rejects.toMatchObject({ status: 507, message: expect.stringMatching(/free space/) });
+      expect(filesLeft()).toEqual([]);
+      freeBytes = 100 * 1024 ** 3;
+      await backups.prepareBackup(source, ALL, 'admin');
+    });
+
     it('logs who made and downloaded it', async () => {
       const log = captureLog();
       await backUp();

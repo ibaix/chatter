@@ -38,6 +38,7 @@ const PERIOD_BATCH = 1000;
 const CLOCK_SKEW_MS = 60 * 60_000;
 /** The rest of the file name when the machine name has no letter or digit */
 const FALLBACK_NAME = 'machine';
+const NO_FREE_SPACE_MESSAGE = 'The disk of Chatter does not have enough free space for this.';
 const DISK_FULL_MESSAGE = 'The disk of Chatter is full. Make free space, then try again.';
 
 /** The machine of a backup or a restore */
@@ -186,9 +187,7 @@ export class HistoryBackup {
     try {
       if (signal?.aborted) throw signal.reason;
       await mkdir(folder, { recursive: true });
-      const budget = new ByteBudget(ARCHIVE_LIMITS.archiveBytes, () => new BackupRefusedError(
-        `The backup is larger than ${gigabytes(ARCHIVE_LIMITS.archiveBytes)}. Choose a shorter time range, or 1-minute averages only.`, 413,
-      ));
+      const budget = await this.backupBudget();
       const manifest = await this.writeBackupParts(folder, machine, options, budget, abort.signal);
       abort.signal.throwIfAborted();
       const fileName = `chatter-history-${fileNamePart(machine.name)}-${new Date(this.now()).toISOString().slice(0, 10)}.tar.gz`;
@@ -346,8 +345,20 @@ export class HistoryBackup {
   private async requireFreeBytes(needed: number): Promise<void> {
     const free = await this.freeBytes(this.folder);
     if (free < needed + ARCHIVE_LIMITS.freeSpaceReserveBytes) {
-      throw new BackupRefusedError('The disk of Chatter does not have enough free space for this.', 507);
+      throw new BackupRefusedError(NO_FREE_SPACE_MESSAGE, 507);
     }
+  }
+
+  /** The bytes that the parts of a backup can use: at most the file limit, and only the free space of the disk */
+  private async backupBudget(): Promise<ByteBudget> {
+    const room = (await this.freeBytes(this.folder)) - ARCHIVE_LIMITS.freeSpaceReserveBytes;
+    if (room < ARCHIVE_LIMITS.archiveBytes) {
+      if (room <= 0) throw new BackupRefusedError(NO_FREE_SPACE_MESSAGE, 507);
+      return new ByteBudget(room, () => new BackupRefusedError(`${NO_FREE_SPACE_MESSAGE} Choose a shorter time range, or 1-minute averages only.`, 507));
+    }
+    return new ByteBudget(ARCHIVE_LIMITS.archiveBytes, () => new BackupRefusedError(
+      `The backup is larger than ${gigabytes(ARCHIVE_LIMITS.archiveBytes)}. Choose a shorter time range, or 1-minute averages only.`, 413,
+    ));
   }
 
   private relabelTarget(target: BackupMachine, manifest: Manifest): RelabelTarget {
@@ -368,7 +379,6 @@ export class HistoryBackup {
       ? [['history/averages.jsonl.gz', AVERAGE_SERIES]]
       : [['history/raw.jsonl.gz', RAW_SERIES], ['history/averages.jsonl.gz', AVERAGE_SERIES]];
     for (const [name, pattern] of series) {
-      await this.requireFreeBytes(0);
       const exported = await this.history.exportSeries(machine.id, pattern, range, signal);
       parts[name] = await writeGzipPart(path.join(folder, localName(name)), countedSeries(exported, span), budget, signal);
     }
