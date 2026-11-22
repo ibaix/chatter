@@ -182,8 +182,9 @@ async function getText(url: string, timeoutMs: number): Promise<string> {
     // 'manual', not 'error', so that the error can tell the user that the agent sent a redirect
     const response = await fetch(url, { signal: controller.signal, redirect: 'manual' });
     if (response.status >= 300 && response.status < 400) {
-      await response.body?.cancel();
-      throw new Error(`The agent sent a redirect (HTTP ${response.status}). Chatter does not follow redirects.`);
+      // Do not wait for the cancel: a body that breaks must not hide the redirect error
+      response.body?.cancel().catch(() => {});
+      throw new Error(`The agent sent a redirect (HTTP ${response.status}). Chatter does not follow redirects. Set the address and port of the agent itself.`);
     }
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
