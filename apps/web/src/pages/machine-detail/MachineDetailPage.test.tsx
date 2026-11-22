@@ -476,7 +476,7 @@ describe('MachineDetailPage', () => {
       }
     });
 
-    it('shows an admin four panels, Machine, Connection, Alert rules and Delete machine, with no side menu', async () => {
+    it('shows an admin five panels, Machine, Connection, Alert rules, Advanced and Delete machine, with no side menu', async () => {
       vi.mocked(fetchAlertRules).mockResolvedValue([OFFLINE_RULE]);
       renderPage();
 
@@ -487,9 +487,30 @@ describe('MachineDetailPage', () => {
       const rulesSection = screen.getByRole('region', { name: 'Alert rules' });
       expect(await within(rulesSection).findByText(/Click a word in a rule to change it/)).toBeInTheDocument();
       const panel = screen.getByRole('tabpanel', { name: 'Settings' });
-      expect(within(panel).getAllByRole('region').map(region => region.id))
-        .toEqual([machineSection.id, SETTINGS_SECTION_IDS.connection, rulesSection.id, SETTINGS_SECTION_IDS.deleteMachine]);
+      expect(within(panel).getAllByRole('region').map(region => region.id).filter(Boolean)).toEqual([
+        machineSection.id, SETTINGS_SECTION_IDS.connection, rulesSection.id, SETTINGS_SECTION_IDS.advanced, SETTINGS_SECTION_IDS.deleteMachine,
+      ]);
       expect(screen.queryByRole('navigation', { name: 'Settings sections' })).not.toBeInTheDocument();
+    });
+
+    it('keeps the backup and restore of the history closed under Advanced, until the admin opens it', () => {
+      renderPage();
+      fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+
+      const advanced = within(screen.getByRole('region', { name: 'Advanced' }));
+      const disclosure = advanced.getByText('Advanced').closest('details')!;
+      expect(disclosure.open).toBe(false);
+      fireEvent.click(advanced.getByText('Advanced'));
+      expect(disclosure.open).toBe(true);
+      expect(advanced.getByRole('button', { name: 'Back up history' })).toBeInTheDocument();
+      expect(advanced.getByRole('button', { name: 'Restore history' })).toBeInTheDocument();
+    });
+
+    it.each(['operator', 'viewer'] as const)('has no Advanced panel for a user who cannot manage machines (%s)', role => {
+      renderPage({ role });
+      fireEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+      expect(screen.queryByRole('region', { name: 'Advanced' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Back up history' })).not.toBeInTheDocument();
     });
 
     it('shows a viewer only the alert rules, and they cannot change them', async () => {

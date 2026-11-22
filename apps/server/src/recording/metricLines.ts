@@ -62,6 +62,7 @@ function labelsOf(snapshot: MachineDataSnapshot): string {
   return `machine="${escapeLabelValue(snapshot.machineId)}",type="${escapeLabelValue(snapshot.machineType)}"`;
 }
 
-function escapeLabelValue(value: string): string {
+/** A label value for a selector or a metric line, with its quotes, backslashes and newlines escaped */
+export function escapeLabelValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
 }

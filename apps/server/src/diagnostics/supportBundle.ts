@@ -9,7 +9,8 @@ import type { ServerLog } from '../logging/ServerLog.js';
 import type { ConnectionHealth } from '../logging/ConnectionLog.js';
 import type { BaseMachineStatus } from '../types/index.js';
 import type { UpdateService } from '../updates/UpdateService.js';
-import { tarBytes, type TarEntry } from './tar.js';
+import { tarBytes, type TarEntry } from '../archive/tar.js';
+import { webStreamOf } from '../archive/webStream.js';
 
 /** The time limit for each health check of VictoriaMetrics and vmalert */
 const HEALTH_TIMEOUT_MS = 2000;
@@ -44,25 +45,7 @@ export async function supportBundle(sources: BundleSources): Promise<ReadableStr
   const now = sources.now?.() ?? new Date();
   const entries = await bundleEntries(sources, now);
   const gzip = Readable.from(tarBytes(entries, now)).pipe(createGzip());
-  return streamOf(gzip);
-}
-
-/**
- * A web stream that reads the next part only when the browser takes it, so the bundle never waits whole in memory.
- * (Node's Readable.toWeb() is not used: it throws when data comes after the browser stopped early.)
- */
-function streamOf(source: Readable): ReadableStream<Uint8Array> {
-  const parts = source[Symbol.asyncIterator]() as AsyncIterator<Buffer>;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      const { value, done } = await parts.next();
-      if (done) controller.close();
-      else controller.enqueue(new Uint8Array(value));
-    },
-    cancel() {
-      source.destroy();
-    },
-  });
+  return webStreamOf(gzip);
 }
 
 async function bundleEntries(sources: BundleSources, now: Date): Promise<TarEntry[]> {

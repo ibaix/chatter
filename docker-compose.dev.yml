@@ -11,6 +11,8 @@ services:
     command:
       - "-storageDataPath=/storage"
       - "-retentionPeriod=1y"
+      # The same as docker-compose.yml: a second history restore does not double the samples
+      - "-dedup.minScrapeInterval=1ms"
     ports:
       # Only this computer can connect, because VictoriaMetrics has no login.
       - "127.0.0.1:8428:8428"

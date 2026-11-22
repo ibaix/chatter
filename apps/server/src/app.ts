@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { Hono } from 'hono';
 import type { HardwarePoller } from './polling/poller.js';
 import type { HistorySource } from './recording/MetricsReader.js';
@@ -43,6 +44,9 @@ import { systemRoutes, type SystemOptions } from './routes/system.js';
 import { supportBundleRoutes } from './routes/supportBundle.js';
 import { dataFolder } from './storage/database.js';
 import { INSTANCE_ID } from './diagnostics/instance.js';
+import { HistoryBackup } from './history-backup/HistoryBackup.js';
+import { VictoriaHistory } from './history-backup/victoriaHistory.js';
+import { historyBackupRoutes } from './routes/historyBackup.js';
 
 /** Every API address starts with this */
 export const API_PREFIX = '/api';
@@ -80,6 +84,8 @@ export interface AppParts {
   system?: Omit<SystemOptions, 'version'>;
   /** The health addresses of VictoriaMetrics and vmalert, for the support bundle */
   historyHealthUrls?: Record<string, string>;
+  /** The backup and restore of the history of one machine. Without it, the files go to data/history-backup. */
+  historyBackup?: HistoryBackup;
 }
 
 /**
@@ -101,6 +107,10 @@ export function createApp({
   version = chatterVersion(),
   updates = new UpdateService(UpdateFolder.fromEnvironment(), version, new ReleaseWatcher({ repo: releasesRepo(), store: memoryCheckSettingStore() })),
   notifications = Notifications.inMemory(),
+  historyBackup = new HistoryBackup({
+    // Read at the first backup, from DATABASE_PATH
+    folder: historyBackupFolder, history: new VictoriaHistory(DEFAULT_VICTORIA_METRICS_URL), statePeriods, alertRules, version,
+  }),
   ...diagnostics
 }: AppParts) {
   const loginGuard = { auth, limiter: new LoginLimiter(), loginLog, proxySettings };
@@ -118,6 +128,7 @@ export function createApp({
     .route('/', uploadHistoryRoutes())
     .route('/', historyRoutes(poller, history, statePeriods))
     .route('/', reportRoutes(poller, history, statePeriods))
+    .route('/', historyBackupRoutes(poller, historyBackup))
     .route('/', alertRoutes(alerts))
     .route('/', alertRuleRoutes(poller, alertRules))
     .route('/', machineEventRoutes(new MachineChangeFeed(poller)))
@@ -161,9 +172,17 @@ function diagnosticRoutes(
 const BUNDLE_MESSAGE_DAYS = 7;
 const DAY_MS = 24 * 60 * 60_000;
 
+/** VictoriaMetrics in development. docker-compose.yml gives the address on the compose network. */
+const DEFAULT_VICTORIA_METRICS_URL = process.env.VICTORIA_METRICS_URL || 'http://localhost:8428';
+
+/** The folder for the files of a history backup or restore, in the data volume. Chatter deletes it at each start. */
+export function historyBackupFolder(): string {
+  return path.join(dataFolder(), 'history-backup');
+}
+
 /** VictoriaMetrics and vmalert in development. docker-compose.yml gives the addresses on the compose network. */
 const DEFAULT_HISTORY_HEALTH_URLS = {
-  victoriaMetrics: `${process.env.VICTORIA_METRICS_URL || 'http://localhost:8428'}/health`,
+  victoriaMetrics: `${DEFAULT_VICTORIA_METRICS_URL}/health`,
   vmalert: `${process.env.VMALERT_URL || 'http://localhost:8880'}/health`,
 };
 

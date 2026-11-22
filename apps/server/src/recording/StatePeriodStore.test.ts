@@ -54,3 +54,71 @@ describe('StatePeriodStore.read', () => {
     expect(planOf(PERIODS_BEFORE_SQL)).toMatch(/USING INDEX state_periods_machine_kind_start \(machine_id=\? AND kind=\? AND started_at<\?\)/);
   });
 });
+
+describe('StatePeriodStore backup and restore', () => {
+  function storeWithPeriods() {
+    const store = StatePeriodStore.inMemory();
+    store.open('m1', 'tool', '1', 0);
+    store.close('m1', 'tool', 10 * MINUTE);
+    store.open('m1', 'tool', '2', 10 * MINUTE);
+    store.markSeen('m1', 15 * MINUTE);
+    store.open('m1', 'program', 'O1', 30 * MINUTE);
+    store.open('m2', 'tool', '9', 5 * MINUTE);
+    return store;
+  }
+
+  it('gives the periods of one machine that overlap the range, page by page, and an open period ends at its last seen time', () => {
+    const store = storeWithPeriods();
+    const first = store.periodsForBackup({ machineId: 'm1', from: 5 * MINUTE, to: 40 * MINUTE, afterId: 0, limit: 2 });
+    const second = store.periodsForBackup({ machineId: 'm1', from: 5 * MINUTE, to: 40 * MINUTE, afterId: first.at(-1)!.id, limit: 2 });
+    expect([...first, ...second].map(row => row.period)).toEqual([
+      { kind: 'tool', value: '1', start: 0, end: 10 * MINUTE },
+      { kind: 'tool', value: '2', start: 10 * MINUTE, end: 15 * MINUTE },
+      { kind: 'program', value: 'O1', start: 30 * MINUTE, end: 30 * MINUTE },
+    ]);
+    expect(store.periodsForBackup({ machineId: 'm1', from: 11 * MINUTE, to: 20 * MINUTE, afterId: 0, limit: 10 }).map(row => row.period.value))
+      .toEqual(['2']);
+    expect(store.periodsForBackup({ machineId: 'm1', from: null, to: 5 * MINUTE, afterId: 0, limit: 10 }).map(row => row.period.value))
+      .toEqual(['1']);
+  });
+
+  it('adds restored periods to another machine in one step, and a second restore adds nothing', () => {
+    const store = storeWithPeriods();
+    const periods = store.periodsForBackup({ machineId: 'm1', from: null, to: 60 * MINUTE, afterId: 0, limit: 10 }).map(row => row.period);
+    const restore = () => {
+      const stage = store.startRestore();
+      try {
+        stage.add(periods);
+        return stage.commit('m3', () => {});
+      } finally {
+        stage.drop();
+      }
+    };
+
+    expect(restore()).toEqual({ added: 3, known: 0 });
+    expect(restore()).toEqual({ added: 0, known: 3 });
+    const read = store.read({ machineId: 'm3', from: 0, to: 60 * MINUTE, limit: 10 });
+    expect(read.map(period => `${period.kind} ${period.value} ${period.start}-${period.end}`).sort())
+      .toEqual(['program O1 1800000-1800000', 'tool 1 0-600000', 'tool 2 600000-900000']);
+  });
+
+  it('adds each restored period, also two with the same kind and start', () => {
+    const store = storeWithPeriods();
+    const stage = store.startRestore();
+    stage.add([{ kind: 'tool', value: '5', start: 0, end: 1 }, { kind: 'tool', value: '6', start: 0, end: 2 }]);
+    expect(stage.commit('m3', () => {})).toEqual({ added: 2, known: 0 });
+    stage.drop();
+    expect(store.read({ machineId: 'm3', from: 0, to: 60 * MINUTE, limit: 10 }).map(period => period.value).sort()).toEqual(['5', '6']);
+  });
+
+  it('adds nothing when the work in the same step fails', () => {
+    const store = storeWithPeriods();
+    const stage = store.startRestore();
+    stage.add([{ kind: 'tool', value: '5', start: 0, end: 1 }]);
+    expect(() => stage.commit('m3', () => {
+      throw new Error('rules failed');
+    })).toThrow('rules failed');
+    stage.drop();
+    expect(store.read({ machineId: 'm3', from: 0, to: 60 * MINUTE, limit: 10 })).toEqual([]);
+  });
+});

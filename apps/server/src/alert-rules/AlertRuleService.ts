@@ -6,6 +6,7 @@ import {
   ruleQuery,
   STARTER_RULES,
   type AlertRule,
+  type NewAlertRule,
 } from '@local-chatter/shared';
 import { createLogger } from '../logging/logger.js';
 import type { MachineAddListener, MachineRemovalListener } from '../polling/poller.js';
@@ -101,6 +102,19 @@ export class AlertRuleService implements MachineAddListener, MachineRemovalListe
       notCopied += Math.max(0, missing.length - room);
     }
     return { copied, notCopied, vmalertReloaded: await this.publish() };
+  }
+
+  /** For a history restore: the first rule that cannot be saved on this machine, or null. It saves nothing. */
+  checkRules(machineId: string, rules: NewAlertRule[]): Promise<{ error: string; ruleIndex: number } | null> {
+    return this.firstQueryProblem(machineId, rules);
+  }
+
+  /**
+   * For a history restore: put the rules in place of the machine's rules, with no check and no new file.
+   * The restore calls it in its own transaction, after checkRules(), then calls publish().
+   */
+  replaceWithoutPublish(machineId: string, rules: NewAlertRule[]): void {
+    this.store.replaceRules(machineId, rules);
   }
 
   /** Run a custom query on one machine now, for the Test button */

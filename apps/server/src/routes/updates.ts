@@ -1,35 +1,12 @@
 import { Hono, type Context } from 'hono';
-import { bodyLimit } from 'hono/body-limit';
-import { createMiddleware } from 'hono/factory';
 import { UPDATE_FILE_LIMIT_BYTES } from '@local-chatter/shared';
 import { requirePermission, type LoggedInEnv } from '../auth/authRoutes.js';
 import { checkedJson } from './checks.js';
+import { rawFileUpload } from './rawFileUpload.js';
 import { updateSettingsSchema } from './schemas.js';
 import { LIMIT_MESSAGE, UpdateRefusedError, type UpdateService, type UpdatesReport } from '../updates/UpdateService.js';
 
-const RAW_FILE_TYPE = 'application/octet-stream';
-const WHOLE_NUMBER = /^\d+$/;
-
-/** The browser sends the update file as the raw body, not as a form */
-const requireRawFile = createMiddleware(async (c, next) => {
-  const mediaType = (c.req.header('Content-Type') ?? '').split(';')[0].trim().toLowerCase();
-  if (mediaType !== RAW_FILE_TYPE) return c.json({ error: `Send the update file as ${RAW_FILE_TYPE}` }, 415);
-  return next();
-});
-
-/**
- * bodyLimit reads a body with no length into memory to count it. The Pi has only 512 MB.
- * So the request must give its length first, and bodyLimit then checks only that number.
- */
-const requireLengthFirst = createMiddleware(async (c, next) => {
-  const length = c.req.header('Content-Length') ?? '';
-  if (!WHOLE_NUMBER.test(length) || c.req.header('Transfer-Encoding') !== undefined) {
-    return c.json({ error: 'Send the length of the update file (Content-Length)' }, 411);
-  }
-  return next();
-});
-
-const updateFileSizeLimit = bodyLimit({ maxSize: UPDATE_FILE_LIMIT_BYTES, onError: c => c.json({ error: LIMIT_MESSAGE }, 413) });
+const [requireRawFile, requireLengthFirst, updateFileSizeLimit] = rawFileUpload('the update file', UPDATE_FILE_LIMIT_BYTES, LIMIT_MESSAGE);
 
 /** The new report, or the reply for a request that Chatter cannot do now */
 async function reportOrRefusal(c: Context, action: () => Promise<UpdatesReport>) {

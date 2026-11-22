@@ -55,6 +55,8 @@ An older version of Chatter cannot always read the data of a newer version. So i
 
 On the Raspberry Pi card, the update makes a backup for you. You only need these steps on a computer.
 
+These steps back up all of Chatter. To back up the history of one machine only, see [Back up and restore the history of a machine](./get-started.md#back-up-and-restore-the-history-of-a-machine).
+
 ### Make a backup
 
 Open a terminal in the `chatter` folder. Run these commands. They stop Chatter, copy your data into 2 files in this folder, and start Chatter again.

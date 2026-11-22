@@ -14,6 +14,7 @@ const trackedFiles = () =>
   execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n').filter(Boolean);
 
 interface ComposeService {
+  command?: string[];
   ports?: ComposePort[];
   volumes?: string[];
 }
@@ -95,6 +96,14 @@ describe('closed ports', () => {
         .map(port => `${service}: ${JSON.stringify(port)}`),
     );
     expect(opened).toEqual([]);
+  });
+});
+
+describe('history restore', () => {
+  // A history restore writes the samples of a backup file into VictoriaMetrics. When it runs two times, the
+  // deduplication keeps one sample for each time, so the charts and the reports do not count a sample two times.
+  it.each(['docker-compose.yml', 'docker-compose.dev.yml'])('keeps the deduplication of VictoriaMetrics in %s', file => {
+    expect(compose(file).services.victoriametrics.command).toContain('-dedup.minScrapeInterval=1ms');
   });
 });
 

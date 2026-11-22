@@ -2,7 +2,9 @@ import 'dotenv/config';
 import path from 'path';
 import { serve } from '@hono/node-server';
 import type { Server } from 'node:http';
-import { createApp } from './app.js';
+import { createApp, historyBackupFolder } from './app.js';
+import { HistoryBackup } from './history-backup/HistoryBackup.js';
+import { VictoriaHistory } from './history-backup/victoriaHistory.js';
 import { WEB_SERVER_OPTIONS } from './webServerOptions.js';
 import { webAppRoutes } from './webApp.js';
 import { HardwarePoller } from './polling/poller.js';
@@ -127,6 +129,11 @@ async function start(): Promise<void> {
     const updateFolder = UpdateFolder.fromEnvironment();
     await updateFolder.removeLeftovers();
     const version = chatterVersion();
+    // The backup and restore of the history of one machine. A backup or a restore that a stop cut off leaves files.
+    const historyBackup = new HistoryBackup({
+      folder: historyBackupFolder(), history: new VictoriaHistory(VICTORIA_METRICS_URL), statePeriods, alertRules, version,
+    });
+    await historyBackup.removeLeftovers();
     log.info('Chatter started', { version, logLevel: process.env.LOG_LEVEL || 'info' });
     if (TWILIO_ADDRESS.warning) log.warn(TWILIO_ADDRESS.warning);
     // Asks GitHub once a day for the newest release, while the Admin has the check on (the default)
@@ -135,7 +142,7 @@ async function start(): Promise<void> {
     const updates = new UpdateService(updateFolder, version, releases);
     const app = createApp({
       poller, auth, accounts, history, statePeriods, alerts, alertRules, proxySettings, loginLog: new LoginLog(getDb()), version, updates,
-      notifications, serverLog, connections,
+      notifications, serverLog, connections, historyBackup,
       historyHealthUrls: { victoriaMetrics: `${VICTORIA_METRICS_URL}/health`, vmalert: `${VMALERT_URL}/health` },
     });
     if (WEB_DIR) app.route('/', webAppRoutes(WEB_DIR));
