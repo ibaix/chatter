@@ -992,7 +992,8 @@ describe('Brother tool sync: the tool table and the tool data, read apart from t
     await vi.waitFor(() => expect(machine.held.release).toBeDefined());
 
     const sync = machine.connector.requestToolSync();
-    await new Promise(resolve => setTimeout(resolve, 10));
+    // Each promise that can settle now settles before setImmediate. Then a read that did not wait has sent ATCTL.
+    await new Promise(resolve => setImmediate(resolve));
     expect(machine.sent).not.toContain('ATCTL');
 
     machine.held.release!();
