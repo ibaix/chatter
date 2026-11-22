@@ -292,7 +292,7 @@ describe('basic-ftp data connection with a PASV reply that names another host (a
   it('opens no data connection when the address of the control connection is not known', async () => {
     forgetControlAddressAfterPasv();
 
-    await expect(ftpClient.listFiles('/')).rejects.toThrow();
+    await expect(ftpClient.listFiles('/')).rejects.toThrow('The control connection is closed');
 
     expect(machine.dataConnections).toBe(0);
     expect(connectHosts()).toEqual([NAT_CONTROL_HOST]);
