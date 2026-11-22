@@ -100,6 +100,38 @@ describe('streamed replies on a real web server', () => {
       expect(reply.endsWith(LAST_CHUNK)).toBe(false);
     });
 
+    it('logs no error and stops the source when the browser cancels the download in the middle', async () => {
+      const cancelSource = vi.fn();
+      let sentParts = 0;
+      // Sends one part, then waits for a slow machine that does not reply
+      const slowSource = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sentParts++ === 0) controller.enqueue(new TextEncoder().encode('part 0;'));
+          else return new Promise<void>(() => {});
+        },
+        cancel: cancelSource,
+      });
+      const port = await start(new Hono().get('/slow', c => c.body(streamWithoutErrorText(c, slowSource, 'The test download'))));
+
+      const socket = connect(port, '127.0.0.1');
+      socket.on('error', () => {});
+      await once(socket, 'connect');
+      socket.write('GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n');
+      let reply = '';
+      await new Promise<void>(resolve => socket.on('data', chunk => {
+        reply += chunk.toString();
+        if (reply.includes('part 0;')) resolve();
+      }));
+      // The browser cancels the download
+      socket.destroy();
+      await vi.waitFor(() => expect(cancelSource).toHaveBeenCalled());
+      // The read that waited ends after the cancel. Give it time to log.
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(errorLines(log)).toEqual([]);
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
     it('sends a stream with no error as it is', async () => {
       const port = await start(new Hono().get('/ok', c => {
         const stream = new ReadableStream<Uint8Array>({
