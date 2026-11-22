@@ -203,7 +203,7 @@ describe('workflow permissions', () => {
   // Only these jobs can write, each with exactly these scopes. A new job that writes must be added here in review.
   const writers: Record<string, Record<string, string[]>> = {
     'card.yml': { card: ['contents'] },
-    'docker.yml': { publish: ['packages'], release: ['contents'], card: ['contents'] },
+    'docker.yml': { publish: ['packages'], sign: ['contents'], release: ['contents'], card: ['contents'] },
     'docs.yml': { deploy: ['id-token', 'pages'] },
     'ghcr-cleanup.yml': { cleanup: ['packages'] },
     'release-tags.yml': { tags: ['packages'] },
