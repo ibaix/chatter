@@ -24,8 +24,6 @@ export interface PollTimings {
     totalMs: number;
     /** The time of each command that this poll sent */
     commands: Record<string, number>;
-    /** The optional commands that this poll did not send, because too little time was left */
-    skipped: string[];
   };
   /** The times that Chatter closed the connection on purpose and opened it again, to renew the session on the control */
   plannedReconnects: { count: number; lastAt: string | null };

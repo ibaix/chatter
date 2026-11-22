@@ -66,49 +66,6 @@ describe('PollTimingRecorder', () => {
     expect(recorder.snapshot()!.commands.PANEL.lastMs).toBe(250);
   });
 
-  it('starts each poll with no skipped command', async () => {
-    recorder.startPoll();
-    recorder.skip('ATCTL');
-    recorder.skip('MCRNI1');
-    recorder.endPoll(LIMIT_MS);
-    await poll(recorder, clock, { PANEL: 10 });
-
-    expect(recorder.snapshot()!.lastPoll.skipped).toEqual([]);
-  });
-
-  it('gives the skipped commands of the poll that skipped them', () => {
-    recorder.startPoll();
-    recorder.skip('ATCTL');
-    recorder.endPoll(LIMIT_MS);
-
-    expect(recorder.snapshot()!.lastPoll.skipped).toEqual(['ATCTL']);
-  });
-
-  it('gives the time since the poll started', () => {
-    recorder.startPoll();
-    clock.advance(1234);
-
-    expect(recorder.elapsedMs()).toBe(1234);
-  });
-
-  it('estimates a command from its last and average time, the longer of the two', async () => {
-    await poll(recorder, clock, { PANEL: 300 });
-    await poll(recorder, clock, { PANEL: 100 });
-
-    expect(recorder.estimateMs('PANEL')).toBe(200);
-    expect(recorder.estimateMs('MEM')).toBeUndefined();
-  });
-
-  it('gives the time of the slowest command of this poll so far, and 0 before the first command', async () => {
-    recorder.startPoll();
-    expect(recorder.slowestInPollMs()).toBe(0);
-
-    await recorder.time('PANEL', async () => { clock.advance(300); });
-    await recorder.time('MEM', async () => { clock.advance(100); });
-
-    expect(recorder.slowestInPollMs()).toBe(300);
-  });
-
   it('counts the planned reconnects, with the time of the last one', async () => {
     await poll(recorder, clock, { PANEL: 10 });
     expect(recorder.snapshot()!.plannedReconnects).toEqual({ count: 0, lastAt: null });

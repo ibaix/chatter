@@ -50,7 +50,7 @@ export class PollTimingRecorder {
   private readonly commands = new Map<string, RecentTimes>();
   private readonly polls = new RecentTimes();
   private pollStart = 0;
-  private current: { commands: Record<string, number>; skipped: string[] } = { commands: {}, skipped: [] };
+  private current: { commands: Record<string, number> } = { commands: {} };
   private lastPoll: PollTimings['lastPoll'] | null = null;
   private limitMs = 0;
   private lastWarningAt = -Infinity;
@@ -61,12 +61,7 @@ export class PollTimingRecorder {
 
   startPoll(): void {
     this.pollStart = this.now();
-    this.current = { commands: {}, skipped: [] };
-  }
-
-  /** The time since the poll started */
-  elapsedMs(): number {
-    return this.now() - this.pollStart;
+    this.current = { commands: {} };
   }
 
   /** Run one command and record how long it took, also when it fails */
@@ -81,35 +76,14 @@ export class PollTimingRecorder {
     }
   }
 
-  /** The poll did not send this optional command, because too little time was left */
-  skip(command: string): void {
-    this.current.skipped.push(command);
-  }
-
-  /**
-   * How long the command will probably take: the longer of its last and its average time.
-   * The last time follows a machine that becomes slow at once, and the average keeps one fast reply from counting too much.
-   */
-  estimateMs(command: string): number | undefined {
-    const times = this.commands.get(command);
-    if (!times) return undefined;
-    const { lastMs, avgMs } = times.stats();
-    return Math.max(lastMs, avgMs);
-  }
-
   /** The connector closed the connection on purpose, and opens it again */
   recordPlannedReconnect(): void {
     this.plannedReconnects.count++;
     this.plannedReconnects.lastAt = new Date(this.now()).toISOString();
   }
 
-  /** The time of the slowest command of this poll so far. A machine that is slow now is slow for the next command too. */
-  slowestInPollMs(): number {
-    return Math.max(0, ...Object.values(this.current.commands));
-  }
-
   endPoll(limitMs: number): void {
-    const totalMs = this.elapsedMs();
+    const totalMs = this.now() - this.pollStart;
     this.polls.add(totalMs);
     this.limitMs = limitMs;
     this.lastPoll = { at: new Date(this.now()).toISOString(), totalMs, ...this.current };
@@ -119,7 +93,6 @@ export class PollTimingRecorder {
       machine: this.machineId,
       totalMs,
       commands: Object.entries(this.current.commands).map(([command, ms]) => `${command}=${ms}`).join(' '),
-      skipped: this.current.skipped.length > 0 ? this.current.skipped.join(' ') : undefined,
     });
     if (totalMs > limitMs * WARN_SHARE) this.warnSlowPoll(timings);
   }
@@ -131,7 +104,7 @@ export class PollTimingRecorder {
       limitMs: this.limitMs,
       poll: this.polls.stats(),
       commands: Object.fromEntries([...this.commands].map(([command, times]) => [command, times.stats()])),
-      lastPoll: { ...this.lastPoll, commands: { ...this.lastPoll.commands }, skipped: [...this.lastPoll.skipped] },
+      lastPoll: { ...this.lastPoll, commands: { ...this.lastPoll.commands } },
       plannedReconnects: { ...this.plannedReconnects },
     };
   }

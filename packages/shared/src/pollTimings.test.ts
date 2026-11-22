@@ -6,7 +6,7 @@ function timingsWith(commands: Record<string, number>): PollTimings {
     limitMs: 10000,
     poll: { lastMs: 0, avgMs: 0, maxMs: 0, samples: 1 },
     commands: {},
-    lastPoll: { at: '2026-01-01T00:00:00.000Z', totalMs: 0, commands, skipped: [] },
+    lastPoll: { at: '2026-01-01T00:00:00.000Z', totalMs: 0, commands },
     plannedReconnects: { count: 0, lastAt: null },
   };
 }

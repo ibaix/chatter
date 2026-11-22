@@ -103,8 +103,8 @@ describe('a Brother poll that runs out of time in the scheduler', () => {
   });
 });
 
-describe('a slow Brother in the scheduler', () => {
-  /** The limits of a real Chatter, 10 times shorter: a 1 s poll limit, and 170 ms for each reply (1.7 s on a real machine) */
+describe('a slow Brother tool read in the scheduler', () => {
+  /** The limits of a real Chatter, 10 times shorter: a 1 s poll limit */
   const SCALED = { pollTimeoutMs: 1000, stuckPollMs: 6000, intervalMs: 20 };
   let scheduler: PollScheduler | null = null;
   let fake: FakeBrother | null = null;
@@ -127,11 +127,11 @@ describe('a slow Brother in the scheduler', () => {
     fake = await startFakeBrother(replyDelayMs, replyDelayMs, toolDelayMs);
     const port = (fake.server.address() as net.AddressInfo).port;
     connector = new BrotherConnector({ id: 'speedio', name: 'Speedio', host: '127.0.0.1', dataPort: port, timeout: 900 });
-    const results: { connected: boolean; errors: string[]; skipped: string[] }[] = [];
+    const results: { connected: boolean; errors: string[] }[] = [];
     scheduler = new PollScheduler({
       afterPoll: (machine: BaseMachineConnector) => {
-        const { connected, errors, pollTimings } = machine.getStatus();
-        results.push({ connected, errors: [...errors], skipped: pollTimings?.lastPoll.skipped ?? [] });
+        const { connected, errors } = machine.getStatus();
+        results.push({ connected, errors: [...errors] });
       },
       connectingEnded: () => {},
     }, SCALED);
@@ -143,15 +143,6 @@ describe('a slow Brother in the scheduler', () => {
     return results.slice(0, count);
   }
 
-  it('stays online when each reply takes 17 % of the poll limit, and reads each command within a few polls', async () => {
-    const results = await pollSlowBrother(170, 6, 0);
-
-    expect(results.every(result => result.connected && result.errors.length === 0)).toBe(true);
-    expect(results[0].skipped.length).toBeGreaterThan(0);
-    expect(new Set(fake!.commands.filter(command => !TOOL_COMMANDS.includes(command))))
-      .toEqual(new Set(['PANEL', 'MEM', 'ALARM', 'WKCNTR', 'PDSP']));
-  }, 10_000);
-
   it('stays online while a tool read takes longer than the poll limit, and then shows the tool table', async () => {
     // The two tool replies take 1.4 s together, more than the 1 s poll limit
     const results = await pollSlowBrother(5, 60, 700);
@@ -161,10 +152,4 @@ describe('a slow Brother in the scheduler', () => {
     expect(fake!.commands).toEqual(expect.arrayContaining(TOOL_COMMANDS));
     expect(connector!.getStatus().data.toolTable?.[1]).toMatchObject({ toolNum: 1, length: 1.5 });
   }, 10_000);
-
-  it('skips nothing when the machine answers fast', async () => {
-    const results = await pollSlowBrother(5, 4);
-
-    expect(results.every(result => result.connected && result.skipped.length === 0)).toBe(true);
-  });
 });

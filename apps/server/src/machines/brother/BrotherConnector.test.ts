@@ -428,7 +428,6 @@ describe('Brother poll times in the status', () => {
       .toEqual(['ALARM', 'MEM', 'PANEL', 'PDSP', 'WKCNTR']);
     expect(status.pollTimings?.commands.PANEL.samples).toBe(1);
     expect(status.pollTimings?.poll.samples).toBe(1);
-    expect(status.pollTimings?.lastPoll.skipped).toEqual([]);
   });
 
   it('records a poll that fails, so a slow machine shows its times', async () => {
@@ -779,12 +778,11 @@ const MEM_RUNNING = "RLOD    MEM     00\r\nA01,'/       ',1001,1,0,0,0,0\r\n\r\n
 const MEM_NO_RUN_STATE = "RLOD    MEM     00\r\nA01,'/       ',1001\r\n\r\n00%";
 
 /**
- * A connected connector on a fake clock. Each reply takes `speed.msPerCommand` on that clock, and the test can change it.
+ * A connected connector on a fake clock. Each reply takes `msPerCommand` on that clock.
  * `sent` lists the commands since the last poll started, and `replies` can change between polls.
  * `held` holds back the reply to a command until the test calls the function it puts there.
  */
 function machineThatTakes(msPerCommand: number) {
-  const speed = { msPerCommand };
   const replies: Record<string, string> = { ...MOCK_RESPONSES, MCRNI1: MACRO_REPLY };
   const sent: string[] = [];
   const held: { command?: string; release?: () => void } = {};
@@ -793,7 +791,7 @@ function machineThatTakes(msPerCommand: number) {
   vi.spyOn(connector, 'sendCommand').mockImplementation(async command => {
     sent.push(command);
     if (held.command === command) await new Promise<void>(resolve => { held.release = resolve; });
-    vi.setSystemTime(Date.now() + speed.msPerCommand);
+    vi.setSystemTime(Date.now() + msPerCommand);
     if (!replies[command]) throw new Error(`No reply for ${command}`);
     return connector.parseResponse(replies[command]);
   });
@@ -807,7 +805,7 @@ function machineThatTakes(msPerCommand: number) {
     await connector.toolSyncEnded();
     return status;
   };
-  return { connector, speed, replies, sent, held, poll, pollAndSync };
+  return { connector, replies, sent, held, poll, pollAndSync };
 }
 
 describe('Brother tool sync: the tool table and the tool data, read apart from the state polls', () => {
@@ -1004,110 +1002,6 @@ describe('Brother tool sync that does not end', () => {
 
     expect(await sync).toEqual({ outcome: 'failed', toolSync: expect.objectContaining({ error: expect.stringContaining('20 seconds') }) });
     expect(connector.connected).toBe(false);
-  });
-});
-
-describe('Brother time budget in a poll', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-11-21T08:00:00Z'));
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('skips nothing when the machine answers in time', async () => {
-    const machine = machineThatTakes(100);
-
-    for (let i = 0; i < 3; i++) {
-      const status = await machine.poll();
-      expect(status.pollTimings?.lastPoll.skipped).toEqual([]);
-    }
-  });
-
-  it('sends the mode, the program and run state, and the alarm first', async () => {
-    const machine = machineThatTakes(100);
-
-    await machine.poll();
-
-    expect(machine.sent.slice(0, 3)).toEqual(['PANEL', 'MEM', 'ALARM']);
-  });
-
-  it('skips the optional commands that do not fit in the poll limit, and the poll is still good', async () => {
-    // 1.5 s for each answer: the 6 commands of a poll take 9 s, more than 8 s, the limit less the margin
-    const machine = machineThatTakes(1500);
-    machine.replies.MEM = MEM_RUNNING;
-
-    const status = await machine.poll();
-
-    expect(status.errors).toEqual([]);
-    expect(status.connected).toBe(true);
-    expect(status.data.mode).toBe('MANUAL');
-    expect(status.pollTimings!.lastPoll.totalMs).toBeLessThanOrEqual(8000);
-    expect(status.pollTimings!.lastPoll.skipped).toEqual(['MCRNI1']);
-  });
-
-  it('starts the next poll with the commands that the last poll skipped, so no command is left out for long', async () => {
-    const machine = machineThatTakes(1500);
-    machine.replies.MEM = MEM_RUNNING;
-    await machine.poll();
-
-    await machine.poll();
-
-    expect(machine.sent).toEqual(['PANEL', 'MEM', 'ALARM', 'MCRNI1', 'WKCNTR']);
-  });
-
-  it('reads each command within a few polls when the machine is slow', async () => {
-    const machine = machineThatTakes(1500);
-    machine.replies.MEM = MEM_RUNNING;
-    const read = new Set<string>();
-
-    for (let i = 0; i < 3; i++) {
-      const status = await machine.poll();
-      machine.sent.forEach(command => read.add(command));
-      expect(status.errors).toEqual([]);
-    }
-
-    expect([...read].sort()).toEqual([...STATE_COMMANDS].sort());
-  });
-
-  it('keeps the values of the skipped commands, so they stay on the screen', async () => {
-    const machine = machineThatTakes(100);
-    await machine.pollAndSync();
-    machine.speed.msPerCommand = 3000;
-
-    const status = await machine.poll();
-
-    expect(machine.sent).toEqual(['PANEL', 'MEM', 'ALARM']);
-    expect(status.errors).toEqual([]);
-    expect(status.data.partCount).toBe(78);
-    expect(status.data.Count).toBe(42);
-    expect(status.data.toolTable?.[1]).toMatchObject({ toolNum: 1, length: 1.5, name: 'ENDMILL' });
-  });
-
-  it('writes the skipped commands in the debug log, not as a machine error', async () => {
-    const log = captureLog();
-    try {
-      const machine = machineThatTakes(3000);
-      machine.replies.MEM = MEM_RUNNING;
-      const status = await machine.poll();
-
-      expect(status.errors).toEqual([]);
-      expect(log.text('debug')).toMatch(/Poll times.*skipped=/);
-    } finally {
-      log.restore();
-    }
-  });
-
-  it('uses the poll limit that the scheduler gives', async () => {
-    const machine = machineThatTakes(1500);
-    machine.replies.MEM = MEM_RUNNING;
-    machine.connector.pollTimeLimitMs = 20000;
-
-    const status = await machine.poll();
-
-    expect(status.pollTimings!.lastPoll.skipped).toEqual([]);
   });
 });
 

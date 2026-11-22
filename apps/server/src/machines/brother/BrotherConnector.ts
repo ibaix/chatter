@@ -178,16 +178,6 @@ const MAX_TOOL_NUMBER = 99;
 /** The position of each value in a row of the tool data reply */
 const TOOL_DATA_COLUMN = { length: 0, lengthWear: 1, diameter: 2, diameterWear: 3, name: 8 } as const;
 
-/** The mode, the program and run state, and the alarm. Each poll sends these first, and never skips them. */
-const CORE_COMMANDS = ['PANEL', 'MEM', ALARM_COMMAND];
-
-/**
- * A poll sends an optional command only when it fits in the poll limit less this margin: 20 %, which is 2 s
- * of the 10 s limit. The margin is for a reply that is slower than its estimate: it is more than one
- * reply of a slow but working Brother (about 1.5 s), so the poll ends in time.
- */
-const BUDGET_MARGIN_SHARE = 0.2;
-
 /** What a Sync request gives */
 export type ToolSyncResult =
   | { outcome: 'synced' | 'failed'; toolSync: ToolSyncState }
@@ -246,8 +236,6 @@ export class BrotherConnector extends BaseMachineConnector {
   private runningPoll: Promise<void> | null = null;
   /** The tool read that runs now. A state poll does not use the connection while it runs. */
   private runningToolSync: Promise<ToolSyncResult> | null = null;
-  /** The optional commands that the last poll skipped. The next poll sends them first. */
-  private skippedLastPoll: string[] = [];
 
   constructor(config: BrotherMachineConfig) {
     super(config);
@@ -620,14 +608,13 @@ export class BrotherConnector extends BaseMachineConnector {
     return this.timings.time(command, () => this.sendCommand(command));
   }
 
-  /** Send the poll commands, and get the replies by command. Gives null when a command fails. */
+  /** Send each command of the machine state once, and get the replies by command. Gives null when a command fails. */
   private async readMachine(): Promise<Record<string, ParsedResponse> | null> {
     try {
       const responses: Record<string, ParsedResponse> = {};
-      for (const command of CORE_COMMANDS) {
+      for (const command of new Set([...this.dataItems.map(([, command]) => command), ALARM_COMMAND])) {
         responses[command] = await this.send(command);
       }
-      await this.sendOptionalCommands(responses);
       return responses;
     } catch (err) {
       if (err instanceof NoReplyError) {
@@ -638,39 +625,6 @@ export class BrotherConnector extends BaseMachineConnector {
       }
       return null;
     }
-  }
-
-  /**
-   * Send the other commands of the machine state.
-   * A machine that answers slowly can run out of poll time. Then the poll skips the commands that do not fit,
-   * keeps their last values, and the next poll sends them first. The poll is still a good poll.
-   */
-  private async sendOptionalCommands(responses: Record<string, ParsedResponse>): Promise<void> {
-    const budgetMs = this.pollTimeLimitMs * (1 - BUDGET_MARGIN_SHARE);
-    const skipped: string[] = [];
-    for (const command of this.optionalCommands()) {
-      if (skipped.length > 0 || !this.fitsInTime(command, budgetMs)) {
-        skipped.push(command);
-        this.timings.skip(command);
-        continue;
-      }
-      responses[command] = await this.send(command);
-    }
-    this.skippedLastPoll = skipped;
-  }
-
-  /** The optional commands of this poll, the ones that the last poll skipped first */
-  private optionalCommands(): string[] {
-    const commands = [...new Set(this.dataItems.map(([, command]) => command))]
-      .filter(command => !CORE_COMMANDS.includes(command));
-    const first = this.skippedLastPoll.filter(command => commands.includes(command));
-    return [...first, ...commands.filter(command => !first.includes(command))];
-  }
-
-  /** A machine that is slow now is slow for the next command too, so the estimate is never below the slowest reply of this poll */
-  private fitsInTime(command: string, budgetMs: number): boolean {
-    const estimateMs = Math.max(this.timings.estimateMs(command) ?? 0, this.timings.slowestInPollMs());
-    return this.timings.elapsedMs() + estimateMs <= budgetMs;
   }
 
   private saveDataItems(responses: Record<string, ParsedResponse>): void {
