@@ -79,7 +79,7 @@ The scan finds only machines that are not added yet. To add a found machine, sen
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/machine/:id/files` | List files. Query: `path` (default `.`) and `depth` (default `2`) |
-| GET | `/api/machine/:id/files/download` | Download a file. Query: `path` |
+| GET | `/api/machine/:id/files/download` | Download a file (Operator or Admin). Query: `path` |
 | POST | `/api/machine/:id/files/upload` | Upload a single file (Operator or Admin). Form fields: `file`, `path`, `overwrite`, `targetName`. `409` when the file exists and `overwrite` is not `true` |
 | POST | `/api/machine/:id/files/upload-batch` | Upload multiple files (Operator or Admin). Form fields: `files`, `basePath`, `overwrite`, `targetNames`. The reply is `{ success, failed }` |
 | DELETE | `/api/machine/:id/files` | Delete a file (Operator or Admin). Query: `path` |
@@ -95,4 +95,4 @@ The upload form fields:
 |--------|----------|-------------|
 | GET | `/api/machine/:id/uploads` | Get upload history for a machine. Query: `limit` (default `50`) |
 | GET | `/api/machine/:id/uploads/:fileId/events` | Get upload events for a file |
-| GET | `/api/machine/:id/uploads/events/:eventId` | Get specific upload event with content |
+| GET | `/api/machine/:id/uploads/events/:eventId` | Get specific upload event with content (Operator or Admin) |

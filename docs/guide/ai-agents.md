@@ -33,7 +33,7 @@ For another agent, see its docs for the name of its skills folder.
 
 ## Give the agent a login
 
-The agent reads Chatter through the [API](../api/). Make an account for it in **Settings > Users and roles**, with the role **Viewer**. A Viewer can only look, so the agent cannot change your machines or your users.
+The agent reads Chatter through the [API](../api/). Make an account for it in **Settings > Users and roles**, with the role **Viewer**. A Viewer can only look, so the agent cannot change your machines or your users. The agent also cannot download or read your programs. It sees only their names.
 To test an alert query, the `alert-query` skill needs an Admin login. With a Viewer login, it asks you to click **Test** in the app.
 
 The agent asks you to set the login in the terminal, so that the password does not go in the chat:
