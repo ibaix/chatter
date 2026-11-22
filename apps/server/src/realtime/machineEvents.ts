@@ -60,11 +60,13 @@ export function machineEventRoutes(feed: MachineChangeFeed, loginOf: (c: Context
       void stream.write(RECONNECT_AFTER_CLOSE);
       stop();
     });
-    // Subscribe before the first wait, so no change is lost while the list is sent.
-    // The writes go out in the order they are made, so the list is still first.
-    const listSent = sendEvent(stream, MACHINE_EVENTS.list, feed.currentMachines());
-    const unsubscribe = feed.subscribe(changes => sendChanges(stream, changes));
+    // Empty until the subscription starts. Every step after add() is in the try, so the slot is always freed.
+    let unsubscribe = () => {};
     try {
+      // Subscribe before the first wait, so no change is lost while the list is sent.
+      // The writes go out in the order they are made, so the list is still first.
+      const listSent = sendEvent(stream, MACHINE_EVENTS.list, feed.currentMachines());
+      unsubscribe = feed.subscribe(changes => sendChanges(stream, changes));
       await listSent;
       while (!stopped) {
         await Promise.race([stream.sleep(KEEP_ALIVE_MS), whenStopped]);
