@@ -984,6 +984,22 @@ describe('Brother tool sync: the tool table and the tool data, read apart from t
     await sync;
   });
 
+  it('refuses a second Sync as busy while the first one waits for the state poll', async () => {
+    const machine = machineThatTakes(100);
+    machine.replies.MEM = MEM_RUNNING;
+    machine.held.command = 'PDSP';
+    const poll = machine.poll();
+    await vi.waitFor(() => expect(machine.held.release).toBeDefined());
+
+    const first = machine.connector.requestToolSync();
+
+    expect(await machine.connector.requestToolSync()).toEqual({ outcome: 'busy' });
+    machine.held.release!();
+    await poll;
+    expect((await first).outcome).toBe('synced');
+    expect(machine.sent.filter(command => command === 'ATCTL')).toHaveLength(1);
+  });
+
   it('waits for a state poll that runs before it starts a tool read', async () => {
     const machine = machineThatTakes(100);
     machine.replies.MEM = MEM_RUNNING;
