@@ -394,6 +394,25 @@ describe('HistoryBackup', () => {
       expect(victoria.samplesOf(target.id).length).toBeGreaterThan(0);
     });
 
+    it('sends the history to VictoriaMetrics in batches of at most the batch size', async () => {
+      const archive = await backUp();
+      const batched = new HistoryBackup({
+        folder: path.join(folder, 'history-backup'), history: victoria, statePeriods: periods, alertRules: rules, version: '1.4.0',
+        now: () => NOW, freeBytes: async () => freeBytes, importBatchBytes: 100_000,
+      });
+      const bodies: number[] = [];
+      const importLines = victoria.importLines.bind(victoria);
+      victoria.importLines = async body => {
+        bodies.push(Buffer.byteLength(body));
+        return importLines(body);
+      };
+      const preview = await batched.receiveRestore(upload(archive), archive.length, target, 'admin');
+      await batched.restore(preview.id, target, { alertRules: false }, 'admin');
+      expect(bodies.length).toBeGreaterThan(2);
+      expect(Math.max(...bodies)).toBeLessThanOrEqual(100_000);
+      expect(victoria.samplesOf(target.id)).toHaveLength(14400 + AVERAGES);
+    });
+
     it('refuses a file of another machine type', async () => {
       const error = await refusalOf(await backUp(), { ...target, type: 'haas' });
       expect(error.message).toMatch(/type brother.*type haas/);

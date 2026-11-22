@@ -30,7 +30,7 @@ const WAIT_FOR_NEXT_STEP_MS = 30 * 60_000;
 const IDLE_LIMIT_MS = 5 * 60_000;
 /** The periods that a backup reads from SQLite at one time */
 const PERIOD_PAGE = 5000;
-/** The most bytes of lines in one request to /api/v1/import */
+/** The most bytes of lines in one request to /api/v1/import. A line is at most ARCHIVE_LIMITS.lineBytes. */
 const IMPORT_BATCH_BYTES = 4 * 1024 * 1024;
 /** Periods put in the temporary table at one time */
 const PERIOD_BATCH = 1000;
@@ -74,6 +74,8 @@ export interface HistoryBackupParts {
   now?: () => number;
   /** The free bytes on the disk of the folder */
   freeBytes?: (folder: string) => Promise<number>;
+  /** For tests: the most bytes in one import request */
+  importBatchBytes?: number;
 }
 
 /** A request that Chatter does not do. The message tells the user why. */
@@ -146,6 +148,7 @@ export class HistoryBackup {
   private readonly version: string;
   private readonly now: () => number;
   private readonly freeBytes: (folder: string) => Promise<number>;
+  private readonly importBatchBytes: number;
 
   private get folder(): string {
     return this.folderOf();
@@ -156,7 +159,9 @@ export class HistoryBackup {
   private prepared: Prepared | null = null;
   private pending: PendingRestore | null = null;
 
-  constructor({ folder, history, statePeriods, alertRules, version, now = Date.now, freeBytes = freeBytesOf }: HistoryBackupParts) {
+  constructor({
+    folder, history, statePeriods, alertRules, version, now = Date.now, freeBytes = freeBytesOf, importBatchBytes = IMPORT_BATCH_BYTES,
+  }: HistoryBackupParts) {
     this.folderOf = typeof folder === 'string' ? () => folder : folder;
     this.history = history;
     this.statePeriods = statePeriods;
@@ -164,6 +169,7 @@ export class HistoryBackup {
     this.version = version;
     this.now = now;
     this.freeBytes = freeBytes;
+    this.importBatchBytes = importBatchBytes;
   }
 
   /** At the start: delete the files of a backup or a restore that a stop or a crash left */
@@ -483,9 +489,11 @@ export class HistoryBackup {
       const result = relabelLine(line, relabel);
       if (result.line === null) continue;
       samples += result.samples;
+      const bytes = Buffer.byteLength(result.line) + 1;
+      // Send the batch before it becomes larger than the limit, so the memory of one batch stays small
+      if (batchBytes + bytes > this.importBatchBytes) await send();
       batch.push(result.line);
-      batchBytes += result.line.length;
-      if (batchBytes >= IMPORT_BATCH_BYTES) await send();
+      batchBytes += bytes;
     }
     await send();
     return samples;
