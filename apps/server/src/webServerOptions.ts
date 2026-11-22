@@ -44,7 +44,12 @@ export const allowLongUpload = createMiddleware(async (c, next) => {
   return next();
 });
 
-/** True when a route allowed this request to take the full Node time limit */
+/**
+ * True when a route allowed this request to take the full Node time limit.
+ * Only the route tests use this. They check that each large upload route marks the request after the login and the role check.
+ * A test on a real socket cannot see this: a refused login, a refused role or an unknown machine gets its reply before
+ * the route reads the body, and the end of the reply stops the time limit. The tests of startWebServer test the limit itself.
+ */
 export const hasLongTimeLimit = (incoming: IncomingMessage): boolean => longRequests.has(incoming);
 
 /**
