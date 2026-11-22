@@ -72,10 +72,12 @@ describe('POST /api/machine/:id/tools/sync', () => {
     expect(await errorOf(offline)).toContain('not connected');
   });
 
-  it('gives 404 for a machine that is not there, and 400 for a machine with no tool sync', async () => {
+  it('gives 404 for a machine that is not there, and 400 with the reason for a machine type with no tool table', async () => {
     vi.spyOn(poller, 'syncTools').mockResolvedValueOnce({ outcome: 'not-found' }).mockResolvedValueOnce({ outcome: 'not-supported' });
 
     expect((await sync()).status).toBe(404);
-    expect((await sync()).status).toBe(400);
+    const unsupported = await sync();
+    expect(unsupported.status).toBe(400);
+    expect(await errorOf(unsupported)).toBe('This machine type has no tool table to read.');
   });
 });

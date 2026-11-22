@@ -45,7 +45,7 @@ export function machineRoutes(poller: HardwarePoller) {
           return c.json({ error: `Chatter read the tool table a short time ago. Try again in ${result.retryAfterSeconds} seconds.` }, 429);
         case 'busy': return c.json({ error: 'A read of the tool table runs now. Wait until it is done.' }, 409);
         case 'not-connected': return c.json({ error: 'The machine is not connected. Chatter can read its tool table when it is online.' }, 409);
-        case 'not-supported': return c.json({ error: 'Chatter reads the tool table of this machine in each poll. It has no Sync.' }, 400);
+        case 'not-supported': return c.json({ error: 'This machine type has no tool table to read.' }, 400);
         case 'not-found': return notFound(c);
       }
     })
