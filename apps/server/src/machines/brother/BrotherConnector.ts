@@ -253,6 +253,11 @@ export class BrotherConnector extends BaseMachineConnector {
    * then, because Chatter closed the connection on purpose. If the new connect fails, the machine shows offline.
    */
   private reconnecting = false;
+  /**
+   * Counts the calls of disconnect(), so the planned reconnect opens no new connection after a disconnect or a removal
+   * during its orderly close. The orderly close itself does not count.
+   */
+  private disconnects = 0;
 
   constructor(config: BrotherMachineConfig) {
     super(config);
@@ -348,6 +353,7 @@ export class BrotherConnector extends BaseMachineConnector {
   }
 
   disconnect(): void {
+    this.disconnects++;
     if (this.socket) {
       this.socket.destroy();
       this.socket = null;
@@ -516,7 +522,8 @@ export class BrotherConnector extends BaseMachineConnector {
     try {
       await run;
     } finally {
-      this.runningPoll = null;
+      // A poll that the scheduler left behind must not clear the promise of the poll that came after it
+      if (this.runningPoll === run) this.runningPoll = null;
       this.timings.endPoll(this.pollTimeLimitMs);
     }
     if (this.connected && this.lastPollTime && isIdle(this.data) && this.toolSync.autoSyncDue(Date.now())) {
@@ -629,9 +636,16 @@ export class BrotherConnector extends BaseMachineConnector {
   private async connectForPoll(): Promise<boolean> {
     if (!this.plannedReconnectDue()) return this.ensureConnected();
 
+    const disconnects = this.disconnects;
     this.reconnecting = true;
     try {
       await this.closeInOrder();
+      if (disconnects !== this.disconnects) {
+        // Chatter disconnected or removed the machine during the orderly close. After a removal, no poll and no
+        // disconnect comes again, so a new connection would hold the one client slot of the control.
+        this.addError(`Unable to connect: ${CLOSED_BEFORE_OPEN_ERROR}`);
+        return false;
+      }
       if (!(await this.ensureConnected())) return false;
     } finally {
       this.reconnecting = false;

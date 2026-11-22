@@ -1080,6 +1080,31 @@ describe('Brother tool sync that does not end', () => {
     expect(sentCommands(connector)).not.toContain('ATCTL');
     expect(sentCommands(connector)).not.toContain('TOLNI1');
   });
+
+  it('keeps a Sync waiting for the poll that runs now when an older poll, which the scheduler left behind, ends', async () => {
+    const connector = connectorWithReplies({ ...MOCK_RESPONSES, MEM: MEM_RUNNING });
+    const answer = vi.mocked(connector.sendCommand).getMockImplementation()!;
+    const releasePanel: Array<() => void> = [];
+    vi.mocked(connector.sendCommand).mockImplementation(async command => {
+      if (command === 'PANEL') await new Promise<void>(resolve => { releasePanel.push(resolve); });
+      return answer(command);
+    });
+    const leftBehindPoll = connector.poll();
+    const newPoll = connector.poll();
+    await vi.waitFor(() => expect(releasePanel).toHaveLength(2));
+
+    releasePanel[0]();
+    await leftBehindPoll;
+    const sync = connector.requestToolSync();
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(sentCommands(connector)).not.toContain('ATCTL');
+    releasePanel[1]();
+    await newPoll;
+    expect((await sync).outcome).toBe('synced');
+    const sent = sentCommands(connector);
+    expect(sent.indexOf('ATCTL')).toBeGreaterThan(sent.lastIndexOf('ALARM'));
+  });
 });
 
 describe('Brother planned reconnect every 60 seconds, with a real TCP connection', () => {
@@ -1396,16 +1421,41 @@ describe('Brother planned reconnect when the control does not close its side', (
     });
   });
 
-  it('shows the machine offline at once when Chatter disconnects it during the reconnect', async () => {
+  it.each([
+    ['disconnects it', (brother: BrotherConnector) => brother.disconnect()],
+    ['removes it', (brother: BrotherConnector) => brother.dispose()],
+  ])('shows the machine offline at once when Chatter %s during the reconnect, and opens no new connection', async (_, close) => {
     const brother = await brotherThatKeepsItsSideOpen();
     const poll = brother.poll();
     await vi.advanceTimersByTimeAsync(1000);
 
-    brother.disconnect();
+    close(brother);
 
     expect(brother.getStatus().connected).toBe(false);
     await vi.advanceTimersByTimeAsync(1000);
+    const status = await poll;
+    expect(status.connected).toBe(false);
+    expect(brother.getStatus().connected).toBe(false);
+    // The scheduler polls a removed machine no more, so a new connection would hold the one client slot of the control
+    expect(machineSides).toHaveLength(1);
+  });
+
+  it('ends a Sync that waits for the reconnect with the reason when Chatter removes the machine, and reads no tools', async () => {
+    const brother = await brotherThatKeepsItsSideOpen();
+    const lastSyncAt = brother.getStatus().data.toolSync?.lastSyncAt;
+    const poll = brother.poll();
+    await vi.advanceTimersByTimeAsync(1000);
+    const sync = brother.requestToolSync();
+
+    brother.dispose();
+    await vi.advanceTimersByTimeAsync(1000);
     await poll;
+
+    expect(await sync).toEqual({
+      outcome: 'failed',
+      toolSync: expect.objectContaining({ error: 'Unable to connect: The connection closed before it opened', lastSyncAt, running: false }),
+    });
+    expect(machineSides).toHaveLength(1);
   });
 
   it('reads the tools after the reconnect when a user presses Sync during it', async () => {
