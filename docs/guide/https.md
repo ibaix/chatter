@@ -17,7 +17,8 @@ A reverse proxy is a server that takes the HTTPS requests from the browsers, and
    Do not trust a wide range, like `172.16.0.0/12`, if normal users also have addresses in it.
 3. Reload the page. At the bottom, **This page came** shows **Over HTTPS**, and **Through the proxy** shows the address of the proxy.
 4. Let only the proxy reach port 3001. This step is part of the security: a computer that reaches port 3001 directly, from a trusted address, can send a false user address.
-   If the proxy runs on the same computer, change `"3001:3001"` to `"127.0.0.1:3001:3001"`, then run `docker compose up -d`. Else, use a firewall rule.
+   If the proxy runs on the same computer, change `"3001:3001"` to `"127.0.0.1:3001:3001"`, then run `docker compose up -d`. Do this change again after each update, because an update replaces `docker-compose.yml`.
+   Else, use a rule in the `DOCKER-USER` chain. A ufw or firewalld rule does not limit a port that Docker publishes. See [Limit who can reach Chatter](../security.md#limit-who-can-reach-chatter).
 
 Chatter believes the `X-Forwarded-*` headers only from the trusted addresses, because any computer can send them.
 Only one proxy in front of Chatter is supported.

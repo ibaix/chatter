@@ -17,17 +17,21 @@ Chatter is made for a **shop network that you trust**, behind a firewall. Do not
 
 These limits are known. They are not bugs, but you must know them:
 
-- **Every computer on the network can open Chatter** on port 3001. Use a firewall rule if only some computers must reach it.
+- **Every computer on the network can open Chatter** on port 3001. On Linux, a ufw or firewalld rule does not stop them, because Docker sends the traffic of a published port around these rules. To let only some computers reach Chatter, see [Limit who can reach Chatter](#limit-who-can-reach-chatter).
+- **Docker can also publish port 3001 on the IPv6 addresses of the computer.** Then other computers can open Chatter on an IPv6 address, also when a rule for IPv4 stops them. To see the addresses, run `docker port chatterbox`. A line with `[::]` is for IPv6. To stop this, publish the port on one IPv4 address (see [Limit who can reach Chatter](#limit-who-can-reach-chatter)).
 - **No HTTPS by itself.** Other people on the network can read the login cookie, and the password that a program sends. To use HTTPS, put a reverse proxy in front of Chatter (see [Use HTTPS](./guide/https.md)).
 - **Trust only the address of your proxy** in **Settings > HTTPS and proxy**, or with `TRUST_PROXY`. A wrong address lets a computer hide its real address, and so get around the 15 minute wait after 10 wrong passwords. An Admin can end the wait for a computer in **Settings > Logins**.
 - **FTP is not encrypted.** The FTP username, the FTP password, and the files go over the network as plain text.
 - **The machines have no login on their data ports** (Brother, Haas, MTConnect, FANUC). Anyone on the network can read the machine data from those ports. A Siemens control has a login only if you set one up for OPC UA (see [Siemens machines](./guide/siemens.md)).
+- **A saved password goes to the address that you type.** Chatter sends the FTP password, and the OPC UA password of a Siemens control, to the device that answers at the address of the machine. Chatter does not check that this device is your machine. When you change the address of a machine, Chatter keeps the saved password and sends it to the new address. So check the address before you save it. A notification channel also keeps its saved secret when you change its address.
+- **Chatter accepts each certificate of a Siemens control.** It does not check that the certificate is the same as before. So a device that answers at the address of the control can get the OPC UA username and password.
 - **A login lasts 1 year.** Log out stops the login of that browser, also a copy of its cookie. To stop your other logins, use **Log out all other browsers** in **Settings > Your account**, or change your password. To log out a different user, an Admin sets a new password for that user.
 - **Give each person their own account, with the smallest role that they need.** A Viewer can see the machines and their history, and change their own password. A Viewer sees the names of the program files, but cannot download or read a program. An Operator can also read, send, and delete files. An Admin can do everything.
-- **The first visit sets up the first Admin.** Until an Admin exists, the first person who opens Chatter can make the Admin account. So set it up at once after you install.
+- **The first visit sets up the first Admin.** Until an Admin exists, the first person who opens Chatter can make the Admin account. A web page from the internet that a person opens on a computer in the shop network can also use this step (with DNS rebinding). So set up Chatter at once after you install. After `npm run reset-password` (see [Forgot a password](#forgot-a-password)), no Admin exists. Then each person who can open Chatter can make the Admin account, also a Viewer or an Operator. So make the new Admin at once.
 - **Anyone on the network can see the Chatter version** at `/api/health`, with no login. The update helper needs it. It also gives a random name of the server process, which changes at each start. The network scan uses it to tell this Chatter from another one.
 - **Chatter asks GitHub once a day for the newest version.** It sends no machine data. To stop this, turn off **Check for updates on GitHub** in **Settings > Updates**.
-- **Chatter runs the FANUC FOCAS2 library as program code.** In **Settings > FANUC library**, upload only the files that you got from FANUC.
+- **Chatter runs the FANUC FOCAS2 library as program code.** The library can read each secret that Chatter keeps, such as the passwords and the tokens in `chatter.db`. Chatter keeps the file in the data folder, so the file stays after an update, and a backup and a restore of the data folder include it. In **Settings > FANUC library**, upload only the files that you got from FANUC. Then compare the SHA-256 fingerprint on that page with the fingerprint of your file from FANUC (for example, `sha256sum <file>` on Linux).
+- **SSH on the Pi card is off, until you turn it on** in the Customisation of Raspberry Pi Imager. The user that you make there can use `sudo` with no password. So an SSH login gives full control of the Pi, of Chatter, and of `chatter.db`. If you turn on SSH, select a public key only, or use a strong password. **Settings > Diagnostics** shows if SSH is on. To turn it off, run `sudo systemctl disable --now ssh` on the Pi.
 - **Notifications send alert text out of the shop network.** A message has the machine name, the alert, and the value, and can have the Chatter address. It goes to Twilio, to the web address of a webhook channel, to Discord, to Telegram, to an ntfy server, or to your Apprise server, which sends it on to your services. Only an Admin can add a channel. See [Notifications](./guide/notifications.md).
 
 ## Updates on the Pi card
@@ -79,10 +83,23 @@ Do not share these files. Keep their backups private, and also the backups of th
 
 VictoriaMetrics (the machine history database) and vmalert have no login. Anyone who reaches them can read and delete the machine history. Chatter's alert port 3002 has no login either: anyone who reaches it can add false alerts.
 
-- `docker-compose.yml` does not publish these ports, so only Chatter can reach them. Do not add a `ports:` line for `victoriametrics` or `vmalert`, or for port 3002 of `chatterbox`.
+- `docker-compose.yml` does not publish these ports. Do not add a `ports:` line for `victoriametrics` or `vmalert`, or for port 3002 of `chatterbox`.
+- This keeps other computers out only with Docker Engine 28 or later. On Linux, an older Docker Engine lets a computer on the same network send packets directly to the address of a container. So that computer can reach these ports. Use Docker Engine 28 or later (see [Install on a computer](./install/computer.md)). The Pi card has a newer Docker.
+- Each container on the same Docker network can reach these ports. Do not add other services to this `docker-compose.yml`, and do not connect other containers to its network.
 - Without Docker, Chatter listens on port 3002 only on `127.0.0.1`. Change `ALERT_HOST` only to an address that other computers cannot reach.
 
 Only an Admin can change the alert rules. A custom alert query can only read the machine history. It cannot change or delete data.
+
+## Limit who can reach Chatter
+
+On Linux, Docker sends the traffic of a published port around the rules of ufw and firewalld. So these rules do not limit port 3001. Use one of these two ways:
+
+- **A rule in the `DOCKER-USER` chain.** Docker sends this traffic through that chain first. For example, this rule stops each computer that is not in `192.168.1.0/24`:
+  ```bash
+  sudo iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdstport 3001 --ctdir ORIGINAL ! -s 192.168.1.0/24 -j DROP
+  ```
+  Put your own network in place of `192.168.1.0/24`. The rule is lost when the computer restarts. To keep it, save it, for example with the package `iptables-persistent`. This rule does not stop IPv6.
+- **Publish the port on one address only.** In `docker-compose.yml`, change `"3001:3001"` to `"<address>:3001:3001"`, for example `"192.168.1.20:3001:3001"`, then run `docker compose up -d`. Chatter then answers only on that address of the computer, and not on IPv6. Each computer that can reach that address can still open Chatter. An update replaces `docker-compose.yml`, so do the change again after each update (see [Update Chatter](./guide/update.md)). On the Pi card, the update helper replaces the file, so use the `DOCKER-USER` rule.
 
 ## Forgot a password
 
