@@ -40,6 +40,7 @@ import { ReleaseWatcher, releasesRepo, sqliteCheckSettingStore } from './updates
 import { createLogger } from './logging/logger.js';
 import { ConnectionLog } from './logging/ConnectionLog.js';
 import { ServerLog } from './logging/ServerLog.js';
+import { stopOnCrash } from './logging/crashHandlers.js';
 
 const log = createLogger('server');
 
@@ -67,6 +68,8 @@ const VMALERT_URL = process.env.VMALERT_URL || 'http://localhost:8880';
 /** The last lines of the log, in memory and in data/logs, for Settings > Diagnostics */
 const serverLog = ServerLog.forDataFolder(dataFolder());
 serverLog.listen();
+// An error that nothing caught is logged. Then Chatter stops, and Docker starts it again.
+stopOnCrash({ flushLog: async () => serverLog.file?.close() });
 
 async function start(): Promise<void> {
   try {
