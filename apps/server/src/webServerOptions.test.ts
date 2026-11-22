@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { connect, type AddressInfo, type Socket } from 'node:net';
 import { once } from 'node:events';
@@ -96,5 +96,36 @@ describe('startWebServer', () => {
     socket.write('GET /quiet HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n');
 
     expect(await reply).toMatch(/first [\s\S]*last/);
+  });
+});
+
+describe('startWebServer with the default request time limit', () => {
+  let server: Server;
+
+  afterEach(() => {
+    vi.useRealTimers();
+    server.closeAllConnections();
+    server.close();
+  });
+
+  it('gives a request 2 minutes to send its whole body', async () => {
+    // Only the timers of the time limit are fake. The sockets stay real.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    server = startWebServer(new Hono().post('/short', async c => c.text(await c.req.text())), 0);
+    await once(server, 'listening');
+    const socket = connect((server.address() as AddressInfo).port, '127.0.0.1');
+    await once(socket, 'connect');
+    const closed = once(socket, 'close');
+    const requestIn = once(server, 'request');
+    socket.write('POST /short HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nabc');
+    await requestIn;
+
+    await vi.advanceTimersByTimeAsync(119_000);
+    await wait(50);
+    expect(socket.destroyed).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await closed;
+    expect(socket.destroyed).toBe(true);
   });
 });
