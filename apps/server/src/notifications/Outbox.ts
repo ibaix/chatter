@@ -253,9 +253,16 @@ export class Outbox implements MachineRemovalListener {
    * The hold of the channel ends now, for example after a test that went, or after the admin saved the channel.
    * The hold row stays, so the messages that waited during the hold still go as one summary and the newest
    * BACKLOG_SEND (see summaryAfterHold). The row goes when the next queued message goes (see markSent).
+   * A message that failed waits for its next try. It becomes due now, so no other message goes past it.
+   * An event message that waits for EVENT_REPEAT_MS did not fail, so it continues to wait.
    */
   endHold(channelId: string, now: number): void {
-    this.db.prepare('UPDATE notification_channel_holds SET until = MIN(until, ?) WHERE channel_id = ?').run(now, channelId);
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE notification_channel_holds SET until = MIN(until, ?) WHERE channel_id = ?').run(now, channelId);
+      this.db.prepare(`
+        UPDATE notification_messages SET next_try_at = MIN(next_try_at, ?) WHERE channel_id = ? AND status = 'waiting' AND attempts > 0
+      `).run(now, channelId);
+    })();
   }
 
   /** The first waiting message of each channel, when its time came and the channel is not at its limit */

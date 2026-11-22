@@ -37,7 +37,7 @@ export function notificationRoutes(notifications: Notifications, now: () => numb
     .put('/notification-channels/:id', canManageChatter, smallBody, checkedParam(channelIdParam), checkedJson(channelInputSchema), c => {
       const { id } = c.req.valid('param');
       if (!channels.get(id)) return c.json({ error: CHANNEL_NOT_THERE }, 404);
-      const result = channels.update(id, c.req.valid('json'));
+      const result = notifications.updateChannel(id, c.req.valid('json'));
       return result.ok ? c.json(result.channel) : c.json({ error: result.error }, 400);
     })
 

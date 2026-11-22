@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { AlertStore } from '../alerts/AlertStore.js';
 import { loggedInAuth } from '../auth/testSupport.js';
 import type { UserAccounts } from '../auth/userAccounts.js';
+import { WARNING_MESSAGE } from '../notifications/channels/testSupport.js';
 import { Notifications } from '../notifications/Notifications.js';
 import { SettingsTable } from '../storage/settingsTable.js';
 import { errorOf, testApp, type TestApp } from './testSupport.js';
@@ -20,6 +21,7 @@ describe('notification routes', () => {
   let accounts: UserAccounts;
   let adminCookie: string;
   let sentBodies: string[];
+  let notifications: Notifications;
 
   beforeEach(async () => {
     const parts = await loggedInAuth();
@@ -32,7 +34,7 @@ describe('notification routes', () => {
       sentBodies.push(String(init?.body));
       return new Response(null, { status: 200 });
     };
-    const notifications = new Notifications({
+    notifications = new Notifications({
       db, settingsTable: new SettingsTable(db), machineName: () => null, fetch: fetch as typeof globalThis.fetch,
     });
     app = testApp({ auth: parts.auth, accounts, notifications });
@@ -130,6 +132,19 @@ describe('notification routes', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ id, name: 'Night shift', hasSecret: { secret: true } });
+  });
+
+  it('ends the hold of a channel when the admin saves it, so the waiting messages go now', async () => {
+    const { id } = await addedChannel();
+    const { outbox } = notifications;
+    const now = Date.now();
+    const message = outbox.queue({ channelId: id, alertId: 1, message: WARNING_MESSAGE }, now);
+    outbox.takeDue(now);
+    outbox.markRetry(message, 'Too many requests.', now + 60 * 60_000);
+
+    await asAdmin('PUT', `/notification-channels/${id}`, { ...slack, values: { ...slack.values, secret: '' } });
+
+    expect(outbox.takeDue(Date.now()).map(entry => entry.id)).toEqual([message]);
   });
 
   describe('ignore patterns', () => {

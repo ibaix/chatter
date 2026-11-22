@@ -164,6 +164,47 @@ describe('Notifications', () => {
     ]);
   });
 
+  it('ends the hold of an ntfy channel when the admin saves an access token, and then sends a summary and the newest messages', async () => {
+    let now = NOW;
+    const sent: string[] = [];
+    const fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+      if (!new Headers(init?.headers).has('authorization')) {
+        return new Response(JSON.stringify({ code: 42908, http: 429, error: 'limit reached: daily message quota reached' }), {
+          status: 429, headers: { 'retry-after': String(6 * 3600) },
+        });
+      }
+      sent.push((JSON.parse(String(init?.body)) as { message: string }).message);
+      return new Response('{"id":"x"}', { status: 200 });
+    };
+    const ntfy = new Notifications({
+      db, settingsTable: new SettingsTable(db), machineName: () => 'Haas VF-2', now: () => now, fetch: fetch as typeof globalThis.fetch,
+    });
+    const input: ChannelInput = { ...slack, type: 'ntfy', name: 'Phones', values: { topic: 'chatter-test' } };
+    const added = ntfy.channels.add(input, NOW);
+    if (!added.ok) throw new Error(added.error);
+    const alarms = Array.from({ length: 8 }, (_, index) => ({
+      ...alert, name: `Alarm ${index}`, labels: { ...alert.labels, alertname: `Alarm ${index}` },
+    }));
+    alerts.save(alarms.slice(0, 1), now);
+    ntfy.findAlertChanges();
+    await ntfy.sendDue();
+    now = NOW + 60_000;
+    alerts.save(alarms, now);
+    ntfy.findAlertChanges();
+    await ntfy.sendDue();
+    expect(sent).toEqual([]);
+
+    now = NOW + 2 * 60_000;
+    expect(ntfy.updateChannel(added.channel.id, { ...input, values: { topic: 'chatter-test', token: 'tk_new' } })).toMatchObject({ ok: true });
+    for (let round = 0; round < 10; round += 1) await ntfy.sendDue();
+
+    expect(sent).toHaveLength(4);
+    expect(sent[0]).toMatch(/^Chatter could not send 5 alerts while the channel was blocked: /);
+    expect(sent.slice(1)).toEqual([
+      expect.stringContaining('Alarm 5 '), expect.stringContaining('Alarm 6 '), expect.stringContaining('Alarm 7 '),
+    ]);
+  });
+
   it('sends a "program ended" event of a machine at most one time in 15 minutes, with the count of the others', async () => {
     let now = NOW;
     const events = new Notifications({

@@ -6,7 +6,7 @@ import type { MachineRemovalListener } from '../polling/poller.js';
 import { SettingsTable } from '../storage/settingsTable.js';
 import { AlertChangeFinder } from './AlertChangeFinder.js';
 import { AlertNotifier } from './AlertNotifier.js';
-import { ChannelStore } from './ChannelStore.js';
+import { type ChannelSaveResult, ChannelStore } from './ChannelStore.js';
 import type { TextOptions } from './messageText.js';
 import { Outbox } from './Outbox.js';
 import { OutboxSender, SEND_TIMEOUT_MS, sendWithTimeLimit } from './OutboxSender.js';
@@ -108,6 +108,18 @@ export class Notifications implements MachineRemovalListener {
     // The browser needs no retry flag: a test is tried one time only
     const result: ChannelTestResult = sent.ok ? sent : { ok: false, error: sent.error };
     if (savedId !== undefined) this.outbox.keepTestResult(savedId, message, result, this.now());
+    return result;
+  }
+
+  /**
+   * Saves the changes of the admin, and ends the hold of the channel (see Outbox.endHold). So the waiting messages go now,
+   * as one summary and the newest. Each save ends the hold, also a save with no change: the admin can fix the problem
+   * in the service, for example with a paid account, and the settings in Chatter stay the same. When the problem stays,
+   * the next message gets the same answer, and the service holds the channel again.
+   */
+  updateChannel(id: string, input: ChannelInput): ChannelSaveResult {
+    const result = this.channels.update(id, input);
+    if (result.ok) this.outbox.endHold(id, this.now());
     return result;
   }
 

@@ -165,6 +165,30 @@ describe('Outbox', () => {
       expect(outbox.takeDue(NOW)).toHaveLength(1);
     });
 
+    it('gives the message of the hold first and at once, when the hold ends early', () => {
+      const first = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markRetry(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      queue('phones', 2, alertMessage('started'), NOW + MINUTE);
+
+      outbox.endHold('phones', NOW + 2 * MINUTE);
+
+      expect(outbox.takeDue(NOW + 2 * MINUTE).map(entry => entry.id)).toEqual([first]);
+    });
+
+    it('does not make an event message that waits for its repeat time due, when the hold ends early', () => {
+      const first = queue('phones', 1);
+      outbox.takeDue(NOW);
+      outbox.markRetry(first, 'ntfy: the limit is used.', NOW + 60 * MINUTE);
+      const event = outbox.queue({ channelId: 'slack', alertId: 2, message: alertMessage('started'), event: true }, NOW);
+      outbox.markSent(outbox.takeDue(NOW).find(entry => entry.id === event)!.id, 'Sent', NOW);
+      const next = outbox.queue({ channelId: 'slack', alertId: 3, message: alertMessage('started'), event: true }, NOW + MINUTE);
+
+      outbox.endHold('slack', NOW + MINUTE);
+
+      expect(outbox.takeDue(NOW + MINUTE).map(entry => entry.id)).not.toContain(next);
+    });
+
     it('ends the hold of a removed channel', () => {
       const id = queue('phones', 1);
       outbox.takeDue(NOW);
