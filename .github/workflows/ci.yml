@@ -7,6 +7,10 @@ on:
   # a new run when it moves a stacked pull request to main, so the checks must run from the first push.
   pull_request:
 
+# The jobs only read the repo
+permissions:
+  contents: read
+
 # A new push to a pull request stops the run of the push before it. Runs on main always finish.
 concurrency:
   group: ci-${{ github.ref }}

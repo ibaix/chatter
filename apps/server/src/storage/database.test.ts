@@ -115,6 +115,25 @@ describe('database', () => {
     });
   });
 
+  // A Viewer can read both lists. Only getUploadEventById gives the text of a program.
+  describe('the lists of uploads, without the program text', () => {
+    beforeEach(async () => {
+      await recordUpload('machine1', 'part.nc', 'O0100.NC', '/PRG/O0100.NC', 'G00 X0');
+    });
+
+    it('gives only the name, the dates, the count and the last path of each file', async () => {
+      const [file] = await getUploadFiles('machine1');
+      expect(Object.keys(file).sort()).toEqual(['created_at', 'event_count', 'file_name', 'id', 'last_path', 'updated_at']);
+      expect(JSON.stringify(file)).not.toContain('G00 X0');
+    });
+
+    it('gives only the name, the path and the date of each upload', async () => {
+      const [event] = await getUploadEvents('machine1', uploadFileId('part.nc'));
+      expect(Object.keys(event).sort()).toEqual(['id', 'remote_path', 'target_name', 'uploaded_at']);
+      expect(JSON.stringify(event)).not.toContain('G00 X0');
+    });
+  });
+
   describe('getUploadEventById', () => {
     it('returns the upload with its content decompressed', async () => {
       const originalContent = 'G00 X0 Y0\nM30';

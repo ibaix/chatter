@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MTConnectConnector } from './MTConnectConnector.js';
 import type { MTConnectMachineConfig } from '../../types/index.js';
@@ -197,6 +199,110 @@ describe('MTConnect HTTP errors', () => {
     await connector.connect();
 
     expect(connector.getStatus().errors).toEqual(['Connection failed: Request timeout after 5000ms']);
+  });
+});
+
+/** A web server on 127.0.0.1 that answers each request with `answer`. Gives its port, its request count and a way to stop it. */
+async function localServer(answer: (response: import('node:http').ServerResponse) => void) {
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests++;
+    answer(response);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  return {
+    port: (server.address() as AddressInfo).port,
+    requests: () => requests,
+    close: () => new Promise(resolve => server.close(resolve)),
+  };
+}
+
+describe('MTConnect redirects', () => {
+  /** Connect to an agent that answers with `status` and a Location of a second server. Gives the result and the request counts. */
+  async function connectToAgentThatSends(status: number) {
+    const target = await localServer(response => response.end(PROBE));
+    const agent = await localServer(response => {
+      response.writeHead(status, { Location: `http://127.0.0.1:${target.port}/probe` });
+      response.end();
+    });
+    const connector = newConnector({ host: '127.0.0.1', mtConnectPort: agent.port });
+    try {
+      await connector.connect();
+      return {
+        connected: connector.connected,
+        errors: connector.getStatus().errors,
+        agentRequests: agent.requests(),
+        targetRequests: target.requests(),
+      };
+    } finally {
+      await Promise.all([agent.close(), target.close()]);
+    }
+  }
+
+  it.each([301, 302, 303, 307, 308])(
+    'does not follow a %i redirect from the agent to another address, and says why it did not connect',
+    async status => {
+      const result = await connectToAgentThatSends(status);
+
+      expect(result.agentRequests).toBe(1);
+      expect(result.targetRequests).toBe(0);
+      expect(result.connected).toBe(false);
+      expect(result.errors).toEqual([
+        `Connection failed: The agent sent a redirect (HTTP ${status}). Chatter does not follow redirects. Set the address and port of the agent itself.`,
+      ]);
+    },
+  );
+
+  it('treats a 304 Not Modified as a redirect, and does not connect', async () => {
+    const result = await connectToAgentThatSends(304);
+
+    expect(result.agentRequests).toBe(1);
+    expect(result.targetRequests).toBe(0);
+    expect(result.connected).toBe(false);
+    expect(result.errors).toEqual([
+      'Connection failed: The agent sent a redirect (HTTP 304). Chatter does not follow redirects. Set the address and port of the agent itself.',
+    ]);
+  });
+
+  it('still gives the normal HTTP error for a 400, which is not a redirect', async () => {
+    const result = await connectToAgentThatSends(400);
+
+    expect(result.targetRequests).toBe(0);
+    expect(result.connected).toBe(false);
+    expect(result.errors).toEqual(['Connection failed: HTTP 400: Bad Request']);
+  });
+
+  it('keeps the redirect error when the agent closes the connection before the end of the body', async () => {
+    // A real socket cannot fix the order of the close and the cancel. A body stream with an error
+    // gives the same state each time: the agent sent the 302 headers, and then the body broke.
+    const brokenBody = new ReadableStream({ start: controller => controller.error(new TypeError('terminated')) });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(brokenBody, { status: 302, headers: { Location: 'http://127.0.0.1:1/probe' } }),
+    );
+    const connector = newConnector({ host: '127.0.0.1', mtConnectPort: 5000 });
+
+    await connector.connect();
+
+    expect(connector.connected).toBe(false);
+    expect(connector.getStatus().errors).toEqual([
+      'Connection failed: The agent sent a redirect (HTTP 302). Chatter does not follow redirects. Set the address and port of the agent itself.',
+    ]);
+  });
+
+  it('does not find an agent on a port that sends a redirect, and does not follow it', async () => {
+    const target = await localServer(response => response.end(PROBE));
+    const agent = await localServer(response => {
+      response.writeHead(302, { Location: `http://127.0.0.1:${target.port}/probe` });
+      response.end();
+    });
+
+    try {
+      expect(await MTConnectConnector.probePort('127.0.0.1', agent.port)).toBe(false);
+      expect(agent.requests()).toBe(1);
+      expect(target.requests()).toBe(0);
+    } finally {
+      await Promise.all([agent.close(), target.close()]);
+    }
   });
 });
 

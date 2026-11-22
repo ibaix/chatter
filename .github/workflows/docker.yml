@@ -21,13 +21,17 @@ on:
     branches: [main]
     tags: ['v[0-9]*']
 
+# Each job gets only the permissions that it needs
 permissions:
   contents: read
-  packages: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # packages: write pushes the images of a tag. A push to main only builds.
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout repository

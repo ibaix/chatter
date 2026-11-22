@@ -39,8 +39,7 @@ import { chatterVersion } from './updates/chatterVersion.js';
 import { ReleaseWatcher, releasesRepo, sqliteCheckSettingStore } from './updates/ReleaseWatcher.js';
 import { createLogger } from './logging/logger.js';
 import { ConnectionLog } from './logging/ConnectionLog.js';
-import { ServerLog } from './logging/ServerLog.js';
-import { stopOnCrash } from './logging/crashHandlers.js';
+import { startServerLog } from './logging/startServerLog.js';
 
 const log = createLogger('server');
 
@@ -65,11 +64,11 @@ const ALERT_RULES_DIR = process.env.ALERT_RULES_DIR || path.join(dataFolder(), '
 /** Chatter asks vmalert here to read the rules file again. vmalert has no login, so it must stay on the inside network. */
 const VMALERT_URL = process.env.VMALERT_URL || 'http://localhost:8880';
 
-/** The last lines of the log, in memory and in data/logs, for Settings > Diagnostics */
-const serverLog = ServerLog.forDataFolder(dataFolder());
-serverLog.listen();
-// An error that nothing caught is logged. Then Chatter stops, and Docker starts it again.
-stopOnCrash({ flushLog: async () => serverLog.file?.close() });
+/**
+ * The last lines of the log, in memory and in data/logs, for Settings > Diagnostics.
+ * An error that nothing caught is logged. Then Chatter stops, and Docker starts it again.
+ */
+const { serverLog } = startServerLog(dataFolder());
 
 async function start(): Promise<void> {
   try {
