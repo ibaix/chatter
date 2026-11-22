@@ -1,7 +1,8 @@
 import net from 'net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BROTHER_RECONNECT_MS, BrotherConnector, NO_REPLY_ERROR, REPLY_STATUS_KEY, TRANSFORMS, brotherCommand, parseValue } from './BrotherConnector.js';
-import type { BrotherMachineConfig, DataItemTransform } from '../../types/index.js';
+import type { BrotherMachineConfig, BrotherMachineStatus, DataItemTransform } from '../../types/index.js';
+import { TOOL_SYNC_TIMEOUT_MS } from './toolSync.js';
 import { captureLog, type CapturedLog } from '../../logging/testSupport.js';
 import { ConnectionLog } from '../../logging/ConnectionLog.js';
 
@@ -1008,10 +1009,16 @@ describe('Brother tool sync that does not end', () => {
     const connector = connectorWithReplies(MOCK_RESPONSES);
     vi.mocked(connector.sendCommand).mockImplementation(() => new Promise(() => {}));
 
-    const sync = connector.requestToolSync();
-    await vi.advanceTimersByTimeAsync(20_000);
+    let result: unknown;
+    void connector.requestToolSync().then(value => { result = value; });
 
-    expect(await sync).toEqual({ outcome: 'failed', toolSync: expect.objectContaining({ error: expect.stringContaining('20 seconds') }) });
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(result).toBeUndefined();
+    expect(connector.getStatus().data.toolSync?.running).toBe(true);
+    expect(connector.connected).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(result).toEqual({ outcome: 'failed', toolSync: expect.objectContaining({ error: expect.stringContaining('20 seconds'), running: false }) });
     expect(connector.connected).toBe(false);
   });
 
@@ -1167,6 +1174,34 @@ describe('Brother planned reconnect every 60 seconds, with a real TCP connection
     expect(status.pollTimings?.plannedReconnects).toEqual({ count: 1, lastAt: new Date(Date.now()).toISOString() });
   });
 
+  it.each([
+    ['Chatter disconnects', (brother: BrotherConnector) => brother.disconnect()],
+    ['the user removes the machine', (brother: BrotherConnector) => brother.dispose()],
+  ])('ends a tool read with the reason when %s during it, clears its 20 s timer, and the next poll connects again', async (_, close) => {
+    await startRecordingBrother();
+    await pollAndSync();
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    holdReply = command => command === 'TOLNI1' ? new Promise<void>(() => {}) : null;
+    const sync = connector.requestToolSync();
+    await vi.waitFor(() => expect(commands.filter(command => command === 'TOLNI1')).toHaveLength(2));
+
+    close(connector);
+    const result = await sync;
+
+    expect(result).toEqual({
+      outcome: 'failed',
+      toolSync: expect.objectContaining({ error: 'The connection closed before the machine answered', running: false }),
+    });
+    const timerCall = setTimeoutSpy.mock.calls.findIndex(([, ms]) => ms === TOOL_SYNC_TIMEOUT_MS);
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[timerCall].value);
+    holdReply = () => null;
+    const status = await connector.poll();
+    expect(status.connected).toBe(true);
+    expect(status.errors).toEqual([]);
+    expect(events).toEqual(expect.arrayContaining(['connect 2']));
+  });
+
   it('does not reconnect while a tool read runs', async () => {
     await startRecordingBrother();
     await pollAndSync();
@@ -1197,6 +1232,51 @@ describe('Brother planned reconnect every 60 seconds, with a real TCP connection
     onCommand = () => {};
     await pollAndSync();
     await vi.waitFor(() => expect(events).toEqual(['connect 1', 'end 1', 'connect 2']));
+  });
+});
+
+describe('Brother planned reconnect when the control does not close its side', () => {
+  let server: net.Server | null = null;
+  let connector: BrotherConnector | undefined;
+  const machineSides: net.Socket[] = [];
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    connector?.disconnect();
+    machineSides.forEach(socket => socket.destroy());
+    machineSides.length = 0;
+    await new Promise(resolve => (server ? server.close(resolve) : resolve(undefined)));
+    server = null;
+  });
+
+  it('destroys the old connection after 2 s, and the poll ends connected on a new connection', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(new Date('2026-11-21T08:00:00Z'));
+    // allowHalfOpen: the machine side gets the FIN of Chatter, and keeps its own side open
+    server = net.createServer({ allowHalfOpen: true }, socket => {
+      machineSides.push(socket);
+      socket.on('error', () => {});
+      answerLikeABrother(socket);
+    });
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: portOf(server), timeout: 1000 });
+    await connector.poll();
+    await connector.toolSyncEnded();
+
+    vi.setSystemTime(Date.now() + BROTHER_RECONNECT_MS);
+    let status: BrotherMachineStatus | undefined;
+    const poll = connector.poll().then(result => { status = result; });
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(status).toBeUndefined();
+    expect(machineSides).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await poll;
+
+    expect(machineSides).toHaveLength(2);
+    expect(status?.connected).toBe(true);
+    expect(status?.errors).toEqual([]);
+    expect(status?.data.partCount).toBe(78);
   });
 });
 
