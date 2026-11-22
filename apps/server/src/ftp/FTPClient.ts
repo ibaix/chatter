@@ -145,12 +145,6 @@ function joinRemotePath(dirPath: string, name: string): string {
   return dirPath === ROOT_PATH ? `/${name}` : `${dirPath}/${name}`;
 }
 
-/** Run `stop` when the signal aborts, also when it aborted before this call */
-function onAbort(signal: AbortSignal | undefined, stop: () => void): void {
-  if (signal?.aborted) stop();
-  else signal?.addEventListener('abort', stop, { once: true });
-}
-
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error';
 }
@@ -167,6 +161,12 @@ async function toBuffer(source: Buffer | string | NodeJS.ReadableStream): Promis
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
   }
   return Buffer.concat(chunks);
+}
+
+/** Run `stop` when the signal aborts, also when it aborted before this call */
+function onAbort(signal: AbortSignal | undefined, stop: () => void): void {
+  if (signal?.aborted) stop();
+  else signal?.addEventListener('abort', stop, { once: true });
 }
 
 /** Binary mode stops line ending changes. Some machine FTP servers reject TYPE I, so the transfer is tried anyway. */
