@@ -264,6 +264,35 @@ describe('HistoryBackup', () => {
       await backups.prepareBackup(source, ALL, 'admin');
     });
 
+    it('stops an export that does not end at the size limit, and deletes what it wrote', async () => {
+      const exported = endlessExport(victoria);
+      const limit = ARCHIVE_LIMITS.archiveBytes;
+      ARCHIVE_LIMITS.archiveBytes = 1024 * 1024;
+      try {
+        await expect(backups.prepareBackup(source, ALL, 'admin')).rejects.toMatchObject({ status: 413 });
+      } finally {
+        ARCHIVE_LIMITS.archiveBytes = limit;
+      }
+      expect(exported.signals).toHaveLength(1);
+      expect(exported.signals[0].aborted).toBe(true);
+      expect(filesLeft()).toEqual([]);
+    });
+
+    it('reads the parts for the download only when the browser takes the bytes', async () => {
+      // Many random values, so the parts are much larger than the buffers of the streams
+      const speed = { __name__: 'chatter_spindle_speed', machine: source.id, type: 'brother' };
+      for (let index = 0; index < 200_000; index += 1) victoria.add(speed, NOW - 4 * HOUR + index * 10, Math.random());
+      const prepared = await backups.prepareBackup(source, ALL, 'admin');
+      fsHooks.readStreams.length = 0;
+      const reader = backups.download(prepared.id, source.id, 'admin').stream.getReader();
+      await reader.read();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const opened = fsHooks.readStreams.map(({ file }) => path.basename(file));
+      expect(opened).toContain('part-0');
+      expect(opened).not.toContain('part-3');
+      await reader.cancel();
+    });
+
     it('logs who made and downloaded it', async () => {
       const log = captureLog();
       await backUp();
