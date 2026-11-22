@@ -147,11 +147,16 @@ interface FakeMachineOptions {
   programText?: string;
 }
 
+const MACHINE_DEFAULTS = {
+  controlHost: CONTROL_HOST, pasvReplyHost: PASV_REPLY_HOST, supportsEpsv: false, bareAddress: false, refuseFirstPasv: false,
+  programText: PROGRAM_TEXT
+};
+
 /** A decoy listens at the host of the PASV reply only when that host is on this computer */
-async function startFakeMachine({
-  controlHost = CONTROL_HOST, pasvReplyHost = PASV_REPLY_HOST, supportsEpsv = false, bareAddress = false, pasvReplyFor, refuseFirstPasv = false,
-  programText = PROGRAM_TEXT
-}: FakeMachineOptions = {}): Promise<FakeMachine> {
+async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeMachine> {
+  const {
+    controlHost, pasvReplyHost, supportsEpsv, bareAddress, pasvReplyFor, refuseFirstPasv, programText
+  } = { ...MACHINE_DEFAULTS, ...options };
   const dataSockets: net.Socket[] = [];
   const dataWaiters: Array<(socket: net.Socket) => void> = [];
   const machine = { dataConnections: 0, decoyConnections: 0, uploadedText: '', commands: [] as string[] };
