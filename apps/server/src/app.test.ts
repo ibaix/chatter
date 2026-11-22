@@ -1370,7 +1370,7 @@ describe('API Routes', () => {
       const res = await send(`/api/machine/${id}/files/download?path=${encodeURIComponent('/PRG/Teil A €.v2.nc')}`);
 
       expect(res.status).toBe(200);
-      expect(downloadFile).toHaveBeenCalledWith('/PRG/Teil A €.v2.nc', expect.anything());
+      expect(downloadFile).toHaveBeenCalledWith('/PRG/Teil A €.v2.nc', expect.anything(), expect.any(AbortSignal));
     });
   });
 
