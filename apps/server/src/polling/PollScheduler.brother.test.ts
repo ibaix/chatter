@@ -1,6 +1,6 @@
-import net from 'net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BrotherConnector } from '../machines/brother/BrotherConnector.js';
+import { closeFakeBrothers, startFakeBrother, type FakeBrother } from '../machines/brother/testSupport.js';
 import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
 import { PollScheduler } from './PollScheduler.js';
 
@@ -15,22 +15,6 @@ const COMMAND_TIMEOUT_MS = 250;
 /** Each reply of a slow connection takes this long. A poll sends about 8 commands, so it takes longer than the poll limit. */
 const SLOW_REPLY_MS = 100;
 
-/** A reply with the values that a poll reads */
-const REPLIES: Record<string, string> = {
-  PANEL: 'RLOD    PANEL   00\r\nK01,0,5,0,0,0,0,0,0,0,1,0\r\n\r\n10%',
-  WKCNTR: 'RLOD    WKCNTR  00\r\nA01,  1,    78,   200,     0\r\n\r\n08%',
-  MEM: "RLOD    MEM     00\r\nA01,'/       ',1001,0,0,0,0,0\r\n\r\n00%",
-  ATCTL: 'RLOD    ATCTL   00\r\nM02,  1,0,0\r\nM03,  2,0,0\r\n\r\n00%',
-  TOLNI1: "RLOD    TOLNI1  00\r\nT01, 1.5000, 0.0000, 0.2500, 0.0000, 0, 0, 0, 0, 'ENDMILL '\r\n\r\n00%",
-};
-
-interface FakeBrother {
-  server: net.Server;
-  sockets: Set<net.Socket>;
-  /** Each command that the fake got, in order */
-  commands: string[];
-}
-
 /** The tool table and the tool data */
 const TOOL_COMMANDS = ['ATCTL', 'TOLNI1'];
 
@@ -38,28 +22,14 @@ const TOOL_COMMANDS = ['ATCTL', 'TOLNI1'];
  * A fake Brother. Each reply of the first connection takes `firstDelayMs`, and each reply of a later one `laterDelayMs`.
  * A reply to a tool command takes `toolDelayMs` when it is given.
  */
-function startFakeBrother(firstDelayMs = SLOW_REPLY_MS, laterDelayMs = 0, toolDelayMs?: number): Promise<FakeBrother> {
-  const sockets = new Set<net.Socket>();
-  const commands: string[] = [];
-  let connections = 0;
-  const server = net.createServer(socket => {
-    sockets.add(socket);
-    socket.on('close', () => sockets.delete(socket));
-    socket.on('error', () => {});
-    const connectionDelayMs = ++connections === 1 ? firstDelayMs : laterDelayMs;
-    // Like a real control, it answers one command at a time
-    let replyQueue = Promise.resolve();
-    socket.on('data', chunk => {
-      const command = /CLOD\s+(\S+)/.exec(chunk.toString('ascii'))?.[1] ?? '';
-      commands.push(command);
-      const reply = '%' + (REPLIES[command] ?? `RLOD    ${command.padEnd(8)}00\r\n\r\n00%`);
+function startSlowBrother(firstDelayMs = SLOW_REPLY_MS, laterDelayMs = 0, toolDelayMs?: number): Promise<FakeBrother> {
+  return startFakeBrother({
+    hold: (command, connection) => {
+      const connectionDelayMs = connection === 1 ? firstDelayMs : laterDelayMs;
       const delayMs = toolDelayMs !== undefined && TOOL_COMMANDS.includes(command) ? toolDelayMs : connectionDelayMs;
-      replyQueue = replyQueue
-        .then(() => new Promise(resolve => setTimeout(resolve, delayMs)))
-        .then(() => { if (!socket.destroyed) socket.write(reply); });
-    });
+      return new Promise(resolve => setTimeout(resolve, delayMs));
+    },
   });
-  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ server, sockets, commands })));
 }
 
 describe('a Brother poll that runs out of time in the scheduler', () => {
@@ -70,18 +40,15 @@ describe('a Brother poll that runs out of time in the scheduler', () => {
   afterEach(async () => {
     scheduler?.stopAll();
     connector?.disconnect();
-    if (fake) {
-      for (const socket of fake.sockets) socket.destroy();
-      await new Promise(resolve => fake!.server.close(resolve));
-    }
+    await closeFakeBrothers();
     scheduler = null;
     fake = null;
     connector = null;
   });
 
   it('gives a reason, ends the poll, and connects again, so the machine comes back', async () => {
-    fake = await startFakeBrother();
-    const port = (fake.server.address() as net.AddressInfo).port;
+    fake = await startSlowBrother();
+    const { port } = fake;
     connector = new BrotherConnector({ id: 'speedio', name: 'Speedio', host: '127.0.0.1', dataPort: port, timeout: COMMAND_TIMEOUT_MS });
     const results: { connected: boolean; errors: string[]; partCount: unknown }[] = [];
     scheduler = new PollScheduler({
@@ -113,10 +80,7 @@ describe('a slow Brother tool read in the scheduler', () => {
   afterEach(async () => {
     scheduler?.stopAll();
     connector?.disconnect();
-    if (fake) {
-      for (const socket of fake.sockets) socket.destroy();
-      await new Promise(resolve => fake!.server.close(resolve));
-    }
+    await closeFakeBrothers();
     scheduler = null;
     fake = null;
     connector = null;
@@ -124,8 +88,8 @@ describe('a slow Brother tool read in the scheduler', () => {
 
   /** Poll the fake Brother with a real scheduler until `count` polls ended, and give the result of each poll */
   async function pollSlowBrother(replyDelayMs: number, count: number, toolDelayMs?: number) {
-    fake = await startFakeBrother(replyDelayMs, replyDelayMs, toolDelayMs);
-    const port = (fake.server.address() as net.AddressInfo).port;
+    fake = await startSlowBrother(replyDelayMs, replyDelayMs, toolDelayMs);
+    const { port } = fake;
     connector = new BrotherConnector({ id: 'speedio', name: 'Speedio', host: '127.0.0.1', dataPort: port, timeout: 900 });
     const results: { connected: boolean; errors: string[] }[] = [];
     scheduler = new PollScheduler({
