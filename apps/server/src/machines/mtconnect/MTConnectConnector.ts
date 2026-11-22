@@ -169,13 +169,23 @@ function findSpindleLoadId(device: unknown, speedId: string): string | null {
   return pickSpindleLoadId(spindleItems, speed);
 }
 
-/** GET a URL and read its body. Throws when the reply is not OK, or takes longer than timeoutMs. */
+/**
+ * GET a URL and read its body. Throws when the reply is not OK, or takes longer than timeoutMs.
+ * Does not follow a redirect: an agent must not send Chatter to another address,
+ * for example to VictoriaMetrics, which has no login.
+ */
 async function getText(url: string, timeoutMs: number): Promise<string> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    // 'manual', not 'error', so that the error can tell the user that the agent sent a redirect
+    const response = await fetch(url, { signal: controller.signal, redirect: 'manual' });
+    if (response.status >= 300 && response.status < 400) {
+      // Do not wait for the cancel: a body that breaks must not hide the redirect error
+      response.body?.cancel().catch(() => {});
+      throw new Error(`The agent sent a redirect (HTTP ${response.status}). Chatter does not follow redirects. Set the address and port of the agent itself.`);
+    }
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
