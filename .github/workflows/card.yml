@@ -54,7 +54,7 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # build.sh saves the images for one processor type with "docker save --platform", which needs this store
       - name: Turn on the containerd image store
@@ -69,11 +69,11 @@ jobs:
 
       # customize.sh runs the setup scripts in the Pi's files. QEMU emulates the Pi's 32-bit ARM chip.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       # A login is not needed for a public package, but it avoids the pull limits of ghcr.io
       - name: Log in to the GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
