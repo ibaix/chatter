@@ -491,6 +491,21 @@ describe('MachineDetailPage', () => {
       expect(fetchFileBytes).toHaveBeenCalledWith('m1', '/O1000.NC', expect.any(Number), expect.any(AbortSignal));
     });
 
+    it.each([
+      ['a viewer', 'viewer' as Role, 1],
+      ['an operator', 'operator' as Role, 0],
+    ])('says once above the files on the machine why %s has no download', async (_who, role, count) => {
+      vi.mocked(fetchFileTree).mockResolvedValue([
+        { name: 'O1000.NC', path: '/O1000.NC', type: 'file', size: 6 } as FTPTreeNode,
+        { name: 'O2000.NC', path: '/O2000.NC', type: 'file', size: 6 } as FTPTreeNode,
+      ]);
+      renderPage({ role, address: '/machine/m1?tab=files' });
+      const table = (await screen.findByRole('cell', { name: 'O1000.NC' })).closest('table') as HTMLElement;
+
+      expect(screen.queryAllByText('Your role cannot read the text of a program. Ask an admin.')).toHaveLength(count);
+      expect(within(table).queryByText(/Your role cannot read/)).not.toBeInTheDocument();
+    });
+
     it('shows no Send files button to a viewer', async () => {
       renderPage({ role: 'viewer' });
       await openFilesTab();
