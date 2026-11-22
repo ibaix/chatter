@@ -836,3 +836,86 @@ describe('Brother control type, found once by the reply status', () => {
     expect(sentCommands(connector).some(command => command.startsWith('MCRN'))).toBe(false);
   });
 });
+
+/** The first send of `command` fails: `fail` runs, and its error is the result */
+function failFirstSend(connector: BrotherConnector, command: string, fail: () => Error): void {
+  const answer = vi.mocked(connector.sendCommand).getMockImplementation()!;
+  let failed = false;
+  vi.mocked(connector.sendCommand).mockImplementation(async sent => {
+    if (sent === command && !failed) {
+      failed = true;
+      throw fail();
+    }
+    return answer(sent);
+  });
+}
+
+describe('Brother control type when a send fails during the detection', () => {
+  it.each([
+    ['"Not connected", after the machine closed its side and before the close event', () => () => new Error('Not connected')],
+    ['a closed connection', (connector: BrotherConnector) => () => {
+      connector.connected = false;
+      return new Error('The connection closed before the machine answered');
+    }],
+  ])('does not remember "knows neither" after %s on ATCTL, and finds C00 later', async (_, failure) => {
+    const connector = connectorWithReplies({ ...MOCK_RESPONSES, ATCTLD: UNKNOWN_ATCTLD });
+    connectWithNoSocket(connector);
+    failFirstSend(connector, 'ATCTL', failure(connector));
+
+    const failed = await connector.poll();
+    await pollWithReconnects(connector, 1);
+
+    expect(failed.errors.join('; ')).toMatch(/Poll failed/);
+    expect(sentCommands(connector)).not.toContain('ATCTLD');
+    expect(connector.getStatus().data.controlType).toBe('C00');
+    expect(connector.getStatus().data.hasPocketInfo).toBe(true);
+  });
+
+  it('on a D00, finds D00 later when ATCTLD gets "Not connected", and does not send ATCTL again', async () => {
+    const connector = connectorWithReplies({ ...MOCK_RESPONSES, ATCTL: UNKNOWN_ATCTL, ATCTLD: D00_ATCTLD });
+    connectWithNoSocket(connector);
+    failFirstSend(connector, 'ATCTLD', () => new Error('Not connected'));
+
+    await connector.poll();
+    await pollWithReconnects(connector, 2);
+
+    expect(sentCommands(connector).filter(command => command === 'ATCTL')).toHaveLength(1);
+    expect(connector.getStatus().data.controlType).toBe('D00');
+    expect(connector.getStatus().data.hasPocketInfo).toBe(true);
+    expect(connector.getStatus().data.toolTable?.[1]).toMatchObject({ toolNum: 1 });
+  });
+});
+
+describe('Brother control type when the machine does not answer ATCTL, with a real TCP connection', () => {
+  let server: net.Server | null = null;
+  let connector: BrotherConnector | undefined;
+
+  afterEach(async () => {
+    connector?.disconnect();
+    if (server) await closeServer(server);
+    server = null;
+  });
+
+  it('sends ATCTL again at the next detection, finds C00, and sends no ATCTLD after the timeout', async () => {
+    const commands: string[] = [];
+    server = await startServer(socket => {
+      socket.on('data', chunk => {
+        const command = /CLOD\s+(\S+)/.exec(chunk.toString('ascii'))?.[1] ?? '';
+        commands.push(command);
+        // The first ATCTL gets no reply
+        if (command === 'ATCTL' && commands.filter(sent => sent === 'ATCTL').length === 1) return;
+        socket.write('%' + (MOCK_RESPONSES[command] ?? UNKNOWN_ATCTLD));
+      });
+    });
+    connector = newConnector({ id: 'b1', host: '127.0.0.1', dataPort: portOf(server), timeout: SHORT_TIMEOUT_MS });
+
+    const first = await connector.poll();
+    const next = await connector.poll();
+
+    expect(first.errors).toEqual([NO_REPLY_ERROR]);
+    expect(next.errors).toEqual([]);
+    expect(next.data.controlType).toBe('C00');
+    expect(commands).not.toContain('ATCTLD');
+    expect(commands.filter(sent => sent === 'ATCTL').length).toBeGreaterThanOrEqual(2);
+  });
+});

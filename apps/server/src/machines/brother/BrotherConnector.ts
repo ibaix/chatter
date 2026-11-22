@@ -192,10 +192,10 @@ export class BrotherConnector extends BaseMachineConnector {
   private controlType: ControlType | null = null;
   private atcCommand: AtcCommand | null = null;
   /**
-   * True after Chatter found the ATC command, or found that the control knows neither. It stays for the life of the
-   * connector, also after a reconnect, so Chatter never sends a command that the control does not know.
+   * The ATC commands that the control does not know (a reply status other than 00). This stays for the life of the
+   * connector, also after a reconnect, so Chatter never sends a command that the control does not know again.
    */
-  private atcDetectionDone = false;
+  private unknownAtcCommands = new Set<AtcCommand>();
   private toolDataCommand: string;
   private macroCommand: string;
   private dataItems: DataItem[];
@@ -338,23 +338,27 @@ export class BrotherConnector extends BaseMachineConnector {
     return result;
   }
 
-  /** Find which ATC command this control knows, by the reply status. With neither, the tool table has no pots. */
+  /** True when Chatter found the ATC command, or found that the control knows neither command */
+  private get atcDetectionDone(): boolean {
+    return this.atcCommand !== null || ATC_COMMANDS.every(({ command }) => this.unknownAtcCommands.has(command));
+  }
+
+  /**
+   * Find which ATC command this control knows. Only the reply status decides. An error from a send (no reply, or a
+   * closed connection) tells nothing about the control: the poll fails, and the next poll asks again.
+   * Chatter does not ask a command again when the control did not know it: an unknown command adds a CM entry to
+   * its alarm list. With neither command, the tool table has no pots.
+   */
   private async detectControlType(): Promise<void> {
     for (const { command, controlType } of ATC_COMMANDS) {
-      try {
-        if (isKnownAtcReply(await this.sendCommand(command))) {
-          this.atcCommand = command;
-          this.controlType = controlType;
-          this.atcDetectionDone = true;
-          return;
-        }
-      } catch (err) {
-        // A control that does not know this command; try the next one. With no reply or no connection, stop.
-        if (err instanceof NoReplyError || !this.connected) throw err;
+      if (this.unknownAtcCommands.has(command)) continue;
+      if (isKnownAtcReply(await this.sendCommand(command))) {
+        this.atcCommand = command;
+        this.controlType = controlType;
+        return;
       }
+      this.unknownAtcCommands.add(command);
     }
-    // The control knows neither command. Ask neither again: an unknown command adds a CM entry to its alarm list.
-    this.atcDetectionDone = true;
   }
 
   /** The tool in each pot, from the ATC reply */
