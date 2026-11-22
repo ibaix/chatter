@@ -63,7 +63,9 @@ export function machineRoutes(poller: HardwarePoller) {
           } satisfies ToolSyncErrorBody, 409);
         case 'address-changed':
           return c.json({
-            error: 'The address of the machine changed during the read. Press Sync again to read the tools at the new address.', ...result,
+            error: 'The address of the machine changed during the read. Chatter did not keep the result. '
+              + 'Press Sync again when the machine is online at the new address.',
+            ...result,
           } satisfies ToolSyncErrorBody, 409);
         case 'not-supported':
           return c.json({ error: 'This machine type has no tool table to read.', ...result } satisfies ToolSyncErrorBody, 400);

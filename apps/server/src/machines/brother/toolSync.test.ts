@@ -56,9 +56,29 @@ describe('ToolSyncTracker', () => {
     tracker.ended(START, null);
     tracker.started(START + 20 * MINUTE, 'auto');
 
-    tracker.abandoned();
+    tracker.abandoned('auto');
 
     expect(tracker.state()).toEqual({ lastSyncAt: new Date(START).toISOString(), lastAttemptAt: new Date(START).toISOString(), error: null, running: false });
+  });
+
+  it('accepts a Sync at once after a Sync whose read was abandoned, so the user can press Sync again', () => {
+    const tracker = new ToolSyncTracker();
+    tracker.started(START, 'manual');
+
+    tracker.abandoned('manual');
+
+    expect(tracker.manualRefusal(START + 1000)).toBeNull();
+  });
+
+  it('keeps the limit of the Sync button when an automatic read is abandoned', () => {
+    const tracker = new ToolSyncTracker();
+    tracker.started(START, 'manual');
+    tracker.ended(START + 1000, null);
+    tracker.started(START + 2000, 'auto');
+
+    tracker.abandoned('auto');
+
+    expect(tracker.manualRefusal(START + 3000)).toEqual({ outcome: 'too-soon', retryAfterSeconds: 27 });
   });
 
   it('is not due while a read runs', () => {

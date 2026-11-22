@@ -590,7 +590,7 @@ export class BrotherConnector extends BaseMachineConnector {
       clearTimeout(timer);
     }
     if (generation !== this.controlGeneration) {
-      this.toolSync.abandoned();
+      this.toolSync.abandoned(trigger);
       log.debug('Tool read of the old address ignored', { machine: this.id, trigger });
       return { outcome: 'address-changed' };
     }

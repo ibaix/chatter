@@ -55,9 +55,13 @@ export class ToolSyncTracker {
     if (error === null) this.lastSyncAt = now;
   }
 
-  /** The read ended, but its result is not kept (the address changed during it). Only `running` changes. */
-  abandoned(): void {
+  /**
+   * The read ended, but its result is not kept (the address changed during it). The state of the last read stays.
+   * A Sync whose read was abandoned does not count in the limit of 30 seconds, so the user can press Sync again.
+   */
+  abandoned(trigger: 'auto' | 'manual'): void {
     this.running = false;
+    if (trigger === 'manual') this.lastManualAt = null;
   }
 
   /**

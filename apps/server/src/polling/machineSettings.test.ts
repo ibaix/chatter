@@ -219,6 +219,10 @@ describe('Brother address update', () => {
 
     expect(await sync).toEqual({ outcome: 'address-changed' });
     expect(connector.getStatus().data.toolSync).toMatchObject({ error: null, lastAttemptAt: null, running: false });
+    // The user can press Sync again at once: the abandoned Sync does not count in the limit of 30 seconds
+    held.command = undefined;
+    await pollAndReadTools(connector);
+    expect(await connector.requestToolSync()).toMatchObject({ outcome: 'synced' });
   });
 
   it('keeps nothing of a reply of the old control that came just before the address changed', async () => {

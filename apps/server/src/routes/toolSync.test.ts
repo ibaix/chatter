@@ -82,7 +82,11 @@ describe('POST /api/machine/:id/tools/sync', () => {
     const res = await sync();
 
     expect(res.status).toBe(409);
-    expect(await res.json()).toEqual({ error: expect.stringContaining('address of the machine changed'), outcome: 'address-changed' });
+    expect(await res.json()).toEqual({
+      error: 'The address of the machine changed during the read. Chatter did not keep the result. '
+        + 'Press Sync again when the machine is online at the new address.',
+      outcome: 'address-changed',
+    });
   });
 
   it('gives 404 for a machine that is not there, and 400 with the reason for a machine type with no tool table', async () => {
