@@ -892,11 +892,15 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
     await until(() => text() === firstPart);
     let isClosed = false;
     transfer?.data.on('close', () => { isClosed = true; });
+    let isSettled = false;
+    void outcome.then(() => { isSettled = true; });
 
     transfer?.control.write('426 Connection closed; transfer aborted\r\n');
 
-    // The download must end at the reply, not wait for the data connection to end
-    expect(await hasSettled(outcome)).toBe(true);
+    // The download must end at the reply, not wait for the data connection to end. The wait has a limit, so a
+    // client that waits for the data fails here, and not at the timeout of the test.
+    await until(() => isSettled).catch(() => undefined);
+    expect(isSettled).toBe(true);
     expect(await outcome).toBe('FTP download error: 426 Connection closed; transfer aborted');
     // write(), not end(): the machine keeps its side open, so only the client can close the data connection
     transfer?.data.write('LATE');
