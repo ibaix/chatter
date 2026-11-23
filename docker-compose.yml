@@ -113,7 +113,7 @@ services:
 
 networks:
   # Docker Compose makes "default" by itself. ChatterBox uses it for port 3001 and to reach the machines.
-  # "history" is internal: no computer can reach the containers on it from outside Docker,
+  # "history" is internal: no other computer on the network can reach the containers on it,
   # and these containers cannot connect to the shop network or to the internet.
   history:
     internal: true
