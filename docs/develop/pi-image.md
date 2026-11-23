@@ -53,7 +53,7 @@ CHATTER_VERSION=1.0.0 CHATTER_IMAGE_URL=https://github.com/toolpath/chatter/rele
 
 ### The card of a release
 
-You do not build the card of a release by hand. For a release tag, `.github/workflows/docker.yml` adds the update file to the GitHub Release, and then runs `.github/workflows/card.yml`. That workflow builds the card and adds `chatter.img.xz` and `chatter-imager.json` to the release. A tag with a `-`, such as `v1.2.0-rc1`, gets no card and no update file. To make the card again, or for an older release, run it by hand: **Actions > Pi card > Run workflow**, with the tag (for example `v1.0.0`).
+You do not build the card of a release by hand. For a release tag, `.github/workflows/docker.yml` adds the update file to the GitHub Release, and then runs `.github/workflows/card.yml`. That workflow builds the card and adds `chatter.img.xz` and `chatter-imager.json` to the release. A tag with a `-`, such as `v1.2.0-rc1`, gets no card and no update file. To make the card again, or for an older release, run it by hand: **Actions > Pi card > Run workflow**, with the tag (for example `v1.0.0`). In **Use workflow from**, pick `main` or a release tag. On another branch, the run starts, but the job is skipped with no error. The job has this gate because its token can change the release.
 
 The workflow sets `CHATTER_VERSION` from the tag, and `CHATTER_IMAGE_URL` to the download link of `chatter.img.xz` in the release of its own repo. It also sets `CHATTER_USE_RELEASE_IMAGE=1`. Then `build.sh` builds no Chatter container: it downloads the published `ghcr.io/toolpath/chatter:<CHATTER_VERSION>` for `linux/arm/v7`. So the card has the same Chatter as the update file of the release.
 

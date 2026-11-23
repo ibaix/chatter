@@ -19,11 +19,15 @@ These limits are known. They are not bugs, but you must know them:
 
 - **Every computer on the network can open Chatter** on port 3001. Use a firewall rule if only some computers must reach it.
 - **No HTTPS by itself.** Other people on the network can read the login cookie, and the password that a program sends. To use HTTPS, put a reverse proxy in front of Chatter (see [Use HTTPS](./guide/https.md)).
-- **Trust only the address of your proxy** in **Settings > HTTPS and proxy**, or with `TRUST_PROXY`. A wrong address lets a computer hide its real address, and so get around the 15 minute wait after 10 wrong passwords. An Admin can end the wait for a computer in **Settings > Logins**.
+- **Wrong passwords cause a wait.** After 10 wrong passwords for one user from one computer in 15 minutes, that computer must wait before it can try that user again. The other users of that computer can still log in. After 30 wrong passwords for one user from all computers in 15 minutes, nobody can log in as that user. Each wait ends 15 minutes after the first wrong password, so it can be shorter than 15 minutes. Good logins do not count. A good login does not end the wait for a different user. Chatter counts all IPv6 addresses in one /64 network as one computer. Browsers that are logged in, and programs whose login worked before, keep working during a wait. An Admin can end a wait in **Settings > Logins**. A restart of Chatter also ends each wait.
+- **Anyone on the network can lock a user.** A person who knows a username, for example `admin`, can send 30 wrong passwords from 3 or more computers. Then nobody can log in as that user for up to 15 minutes. The person can do this again after each lock. Chatter writes a warning in the server log when a user lock starts, with the username and the address of the last try. To get in again, see [Locked out after wrong passwords](#locked-out-after-wrong-passwords).
+- **Some setups show one address for all computers.** On Docker Desktop (Mac and Windows), and for IPv6 through the Docker port, Chatter sees the same address for each computer. Then the wait of one computer applies to each person in the shop, for that user. Do not trust the Docker network gateway as a proxy to fix this, because each computer can then send a false address.
+- **Trust only the address of your proxy** in **Settings > HTTPS and proxy**, or with `TRUST_PROXY`. A wrong address lets a computer hide its real address, and so get around the wait after wrong passwords.
 - **FTP is not encrypted.** The FTP username, the FTP password, and the files go over the network as plain text.
+- **A machine can send a very long file list.** Chatter has limits, so a bad or broken FTP server cannot fill the memory of a Pi or keep Chatter busy. Chatter reads at most 1 MB of one folder list. One file list has at most 5000 files and folders and at most 5 folder levels. For one file list, Chatter opens at most 200 folders and stops after 2 minutes. Then the **Files** tab of the machine tells that the list is cut short. After a folder list that is too long, Chatter opens no more folders. When the folder list is too long or too slow before an upload, the upload stops, because Chatter cannot know if the file is there.
 - **The machines have no login on their data ports** (Brother, Haas, MTConnect, FANUC). Anyone on the network can read the machine data from those ports. A Siemens control has a login only if you set one up for OPC UA (see [Siemens machines](./guide/siemens.md)).
 - **A login lasts 1 year.** Log out stops the login of that browser, also a copy of its cookie. To stop your other logins, use **Log out all other browsers** in **Settings > Your account**, or change your password. To log out a different user, an Admin sets a new password for that user.
-- **Give each person their own account, with the smallest role that they need.** A Viewer can only look, and change their own password. An Operator can also send and delete files. An Admin can do everything.
+- **Give each person their own account, with the smallest role that they need.** A Viewer can see the machines and their history, and change their own password. A Viewer sees the names of the program files, but cannot download or read a program. A Viewer cannot start a read of the tool table (**Sync**). An Operator can also read, send, and delete files, and click **Sync**. An Admin can do everything.
 - **The first visit sets up the first Admin.** Until an Admin exists, the first person who opens Chatter can make the Admin account. So set it up at once after you install.
 - **Anyone on the network can see the Chatter version** at `/api/health`, with no login. The update helper needs it. It also gives a random name of the server process, which changes at each start. The network scan uses it to tell this Chatter from another one.
 - **Chatter asks GitHub once a day for the newest version.** It sends no machine data. To stop this, turn off **Check for updates on GitHub** in **Settings > Updates**.
@@ -83,6 +87,18 @@ VictoriaMetrics (the machine history database) and vmalert have no login. Anyone
 - Without Docker, Chatter listens on port 3002 only on `127.0.0.1`. Change `ALERT_HOST` only to an address that other computers cannot reach.
 
 Only an Admin can change the alert rules. A custom alert query can only read the machine history. It cannot change or delete data.
+
+## Locked out after wrong passwords
+
+When Chatter says **Too many wrong passwords**, do one of these:
+
+- **Use a browser that is already logged in.** A login lasts 1 year, and the lock does not stop it. But you cannot change your password in that browser until the lock ends.
+- **Ask an Admin to unlock you.** The Admin opens **Settings > Logins**, and clicks **Unlock** next to your computer or your username. When you are the only Admin, use a browser where you are already logged in. Chatter writes in the server log who unlocked and from which address.
+- **Wait.** The lock ends 15 minutes after the first wrong password. **Settings > Logins** shows the time left.
+- **Restart Chatter.** A restart ends each lock. Run `docker compose restart chatterbox` in the Chatter folder. On the Raspberry Pi card, first run `cd /opt/chatter`, and put `sudo` before `docker`.
+- **Make a new Admin account.** This is the last step. Do it only when no Admin can log in. See [Forgot a password](#forgot-a-password).
+
+If the lock comes back again and again, someone on the network sends wrong passwords. Look in **Settings > Logins** and in the server log for the address.
 
 ## Forgot a password
 

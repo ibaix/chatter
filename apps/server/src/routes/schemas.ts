@@ -285,12 +285,22 @@ export const trustedProxiesSchema = z.object({
   ).max(MAX_TRUSTED_PROXIES, `Trust ${MAX_TRUSTED_PROXIES} proxies or fewer`),
 }, NOT_AN_OBJECT);
 
-/** The computer to unlock in Settings > Logins */
+const ADDRESS_OR_USERNAME = 'Give an address or a username to unlock';
+
+/** The computer (address), or the user on all computers (username), to unlock in Settings > Logins */
 export const unlockSchema = z.object({
-  address: z.string({ error: 'address is required' }).trim()
+  address: z.string({ error: 'address must be text' }).trim()
     .min(1, 'address is required')
-    .max(MAX_ADDRESS_LENGTH, 'The address is too long'),
-}, NOT_AN_OBJECT);
+    .max(MAX_ADDRESS_LENGTH, 'The address is too long')
+    .optional(),
+  username: z.string({ error: 'username must be text' }).trim()
+    .min(1, 'username is required')
+    .max(MAX_USERNAME_LENGTH, 'The username is too long')
+    .optional(),
+}, NOT_AN_OBJECT).refine(
+  unlock => unlock.address !== undefined || unlock.username !== undefined,
+  ADDRESS_OR_USERNAME,
+);
 
 const roleSchema = z.enum(ROLES, { error: 'The role must be "viewer", "operator", or "admin"' });
 

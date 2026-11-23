@@ -14,17 +14,24 @@ describe('fetchFileTree', () => {
     vi.unstubAllGlobals();
   });
 
+  // The Files view shows two levels: the folders, and the folders in each of them
   it('gives the files, and tells that the list is complete when the server sends no cut-short header', async () => {
     replyWith(200, [PROGRAM]);
 
     expect(await fetchFileTree('m1', '/')).toEqual({ nodes: [PROGRAM], isCutShort: false });
-    expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain('/api/machine/m1/files?path=%2F&depth=3');
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain('/api/machine/m1/files?path=%2F&depth=2');
   });
 
   it('tells that the list is cut short when the server sends the header', async () => {
     replyWith(200, [PROGRAM], { [FILE_LIST_CUT_SHORT_HEADER]: 'true' });
 
     expect(await fetchFileTree('m1', '/')).toEqual({ nodes: [PROGRAM], isCutShort: true });
+  });
+
+  it('tells that the list is complete when the header is not "true"', async () => {
+    replyWith(200, [PROGRAM], { [FILE_LIST_CUT_SHORT_HEADER]: 'false' });
+
+    expect(await fetchFileTree('m1', '/')).toEqual({ nodes: [PROGRAM], isCutShort: false });
   });
 
   it('gives the error of the server', async () => {

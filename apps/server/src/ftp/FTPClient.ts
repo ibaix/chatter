@@ -13,12 +13,29 @@ const DEFAULT_FTP_TIMEOUT_MS = 30_000;
 const DEFAULT_TREE_DEPTH = 2;
 /**
  * The most folder levels that one tree request walks. Each level costs a LIST on the machine.
- * The web app asks for 3 levels, and CNC program folders are not deeper than this.
+ * The web app asks for 2 levels, and CNC program folders are not deeper than this.
  */
 export const MAX_TREE_DEPTH = 5;
 /** The most entries (files and folders) in one tree, so a very large or rogue FTP server cannot fill the memory */
 export const MAX_TREE_ENTRIES = FILE_TREE_ENTRY_LIMIT;
 const ROOT_PATH = '/';
+/**
+ * The most bytes of one folder listing. A listing line has about 60 bytes, so this holds more than
+ * MAX_TREE_ENTRIES lines. A rogue FTP server cannot fill the memory of a Pi with a listing that has no end.
+ */
+export const MAX_FOLDER_LIST_BYTES = 1024 * 1024;
+const MAX_FOLDER_LIST_MB = MAX_FOLDER_LIST_BYTES / 1024 / 1024;
+/** The most folders that one tree walk opens. Each folder costs some commands and a LIST on the machine. */
+export const MAX_TREE_FOLDERS = 200;
+/**
+ * One tree walk stops after this time, and keeps what it read. The raw LIST waits 1 s for each folder,
+ * so a normal walk of many folders can take some time.
+ */
+export const TREE_WALK_TIME_LIMIT_MS = 120_000;
+/** One folder list of listFiles, and the check for a file before an upload, stops after this time */
+export const FOLDER_LIST_TIME_LIMIT_MS = 60_000;
+const FOLDER_LIST_TOO_LONG_MESSAGE = `The folder list on the machine is too long. Chatter reads at most ${MAX_FOLDER_LIST_MB} MB of it.`;
+const FOLDER_LIST_TOO_SLOW_MESSAGE = 'The folder list on the machine took too long.';
 
 /** The raw RETR stops when the machine stops in the middle of a file */
 const DOWNLOAD_STALLED_MESSAGE = 'The machine stopped sending the file. Try again.';
@@ -62,8 +79,56 @@ export interface RawListEntry {
 /** The entries that one tree walk can still add */
 interface TreeWalk {
   entriesLeft: number;
-  /** True when the walk left out an entry or a folder */
-  isCut: boolean;
+  foldersLeft: number;
+  /** Why the walk left out an entry or a folder. Undefined when the tree is complete. */
+  cutReason?: TreeCutReason;
+  /**
+   * Set when the walk must open no more folders: after its time limit, or after a listing that is too long.
+   * After a listing that is too long, the machine can still send its reply to that LIST,
+   * and that late reply must not go to the next command.
+   */
+  stopReason?: TreeCutReason;
+}
+
+type TreeCutReason = 'entries' | 'folders' | 'time' | 'longList';
+
+function cutWalk(walk: TreeWalk, reason: TreeCutReason): void {
+  walk.cutReason ??= reason;
+}
+
+/** Cut the walk, and open no more folders */
+function stopWalk(walk: TreeWalk, reason: TreeCutReason): void {
+  cutWalk(walk, reason);
+  walk.stopReason ??= reason;
+}
+
+/** The reason why the walk must open no more folders, or undefined when it can go on */
+function stopReasonOf(walk: TreeWalk): TreeCutReason | undefined {
+  if (walk.stopReason) return walk.stopReason;
+  if (walk.entriesLeft <= 0) return 'entries';
+  if (walk.foldersLeft <= 0) return 'folders';
+  return undefined;
+}
+
+/** One folder listing, and whether it was longer than MAX_FOLDER_LIST_BYTES */
+interface FolderListing {
+  entries: RawListEntry[];
+  isTooLong: boolean;
+}
+
+/** The text of a raw LIST, and whether Chatter stopped it at MAX_FOLDER_LIST_BYTES */
+interface RawListing {
+  text: string;
+  isTooLong: boolean;
+}
+
+/** A folder list that was too long or too slow. The caller cannot know if a file is in the folder. */
+class FolderListLimitError extends Error {}
+
+/** A folder that the tree walk still has to list, and the list to fill with its entries */
+interface TreeFolder {
+  path: string;
+  nodes: FTPTreeNode[];
 }
 
 type BatchFileOutcome = FTPUploadResult['success'][number] | FTPUploadResult['failed'][number];
@@ -179,6 +244,48 @@ const log = createLogger('ftp');
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error';
+}
+
+/**
+ * True when basic-ftp stopped a list at its `maxListingBytes`. basic-ftp gives no error code for this,
+ * so this reads the message of its StringWriter. A test with the real basic-ftp checks this message.
+ */
+function isListingTooLong(err: unknown): boolean {
+  return err instanceof Error && err.message.startsWith('StringWriter: Maximum bytes exceeded');
+}
+
+/** Run `work`. When it takes longer than `timeLimitMs`, run `onTimeUp`, then close the client, so the work stops. */
+async function closeClientAfter<T>(
+  client: ftp.Client,
+  { timeLimitMs, onTimeUp }: { timeLimitMs: number; onTimeUp: () => void },
+  work: () => Promise<T>
+): Promise<T> {
+  const timer = setTimeout(() => {
+    onTimeUp();
+    client.close();
+  }, timeLimitMs);
+  try {
+    return await work();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** basic-ftp's list of one folder, with a time limit. basic-ftp itself stops at MAX_FOLDER_LIST_BYTES. */
+async function listFolderWithLimits(client: ftp.Client, path: string): Promise<ftp.FileInfo[]> {
+  let isTimeUp = false;
+  try {
+    return await closeClientAfter(client, { timeLimitMs: FOLDER_LIST_TIME_LIMIT_MS, onTimeUp: () => { isTimeUp = true; } }, () => client.list(path));
+  } catch (err) {
+    if (isTimeUp) throw new FolderListLimitError(FOLDER_LIST_TOO_SLOW_MESSAGE, { cause: err });
+    if (isListingTooLong(err)) throw new FolderListLimitError(FOLDER_LIST_TOO_LONG_MESSAGE, { cause: err });
+    throw err;
+  }
+}
+
+/** The complete lines of a listing. When the listing was cut, its last line can be cut in two, so it is left out. */
+function completeLines(text: string, isCut: boolean): string {
+  return isCut ? text.slice(0, text.lastIndexOf('\n') + 1) : text;
 }
 
 function alreadyExistsMessage(remotePath: string): string {
@@ -321,6 +428,8 @@ export class FTPClient {
   private user: string;
   private password: string;
   private readonly timeoutMs: number;
+  /** The tree walks that run now, by depth and path. A request for the same tree waits for the same walk. */
+  private readonly treeWalks = new Map<string, Promise<FileTree>>();
 
   constructor({
     host, port = DEFAULT_FTP_PORT, user = DEFAULT_FTP_USER, password = '', timeoutMs = DEFAULT_FTP_TIMEOUT_MS
@@ -343,7 +452,7 @@ export class FTPClient {
   async listFiles(path = ROOT_PATH): Promise<FTPFileInfo[]> {
     try {
       assertSafeFtpArgument(path);
-      const list = await this.withConnection({ verbose: false }, client => client.list(path));
+      const list = await this.withConnection({ verbose: false }, client => listFolderWithLimits(client, path));
       return list.map(item => ({
         name: item.name,
         type: item.isDirectory ? 'directory' : 'file',
@@ -360,19 +469,39 @@ export class FTPClient {
     return (await this.readFileTree(path, depth)).nodes;
   }
 
-  /** The file tree, and whether the walk cut it at MAX_TREE_ENTRIES entries. The depth limit does not count as a cut. */
+  /**
+   * The file tree, and whether the walk cut it short: at MAX_TREE_ENTRIES entries, at MAX_TREE_FOLDERS folders,
+   * at TREE_WALK_TIME_LIMIT_MS, or after a folder listing that is too long. The depth limit does not count as a cut.
+   */
   async readFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FileTree> {
-    const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, isCut: false };
+    const key = `${depth}:${path}`;
+    const running = this.treeWalks.get(key);
+    if (running) return running;
+    const tree = this.walkFileTree(path, depth);
+    this.treeWalks.set(key, tree);
+    try {
+      return await tree;
+    } finally {
+      this.treeWalks.delete(key);
+    }
+  }
+
+  private async walkFileTree(path: string, depth: number): Promise<FileTree> {
+    const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, foldersLeft: MAX_TREE_FOLDERS };
     try {
       assertSafeFtpArgument(path);
       if (depth <= 0) {
         return { nodes: [], isCutShort: false };
       }
-      const nodes = await this.withConnection({ verbose: false }, client => this.buildTree(client, { path, depth: Math.min(depth, MAX_TREE_DEPTH), walk }));
-      if (walk.isCut) {
-        log.warn(`The file tree on ${this.host} is too large. Chatter shows only the first ${MAX_TREE_ENTRIES} entries.`, { path });
+      const nodes = await this.withConnection({ verbose: false }, client => closeClientAfter(
+        client,
+        { timeLimitMs: TREE_WALK_TIME_LIMIT_MS, onTimeUp: () => stopWalk(walk, 'time') },
+        () => this.buildTree(client, { path, depth: Math.min(depth, MAX_TREE_DEPTH), walk })
+      ));
+      if (walk.cutReason) {
+        log.warn(this.treeCutMessage(walk.cutReason), { path });
       }
-      return { nodes, isCutShort: walk.isCut };
+      return { nodes, isCutShort: walk.cutReason !== undefined };
     } catch (err) {
       throw new Error(ftpErrorMessage(err, this.host, this.port), { cause: err });
     }
@@ -459,7 +588,7 @@ export class FTPClient {
     { verbose }: { verbose: boolean },
     work: (client: ftp.Client) => Promise<T>
   ): Promise<T> {
-    const client = new ftp.Client(this.timeoutMs);
+    const client = new ftp.Client(this.timeoutMs, { allowSeparateTransferHost: false, maxListingBytes: MAX_FOLDER_LIST_BYTES });
     useMachineHostForTransfers(client);
     client.ftp.verbose = verbose;
     try {
@@ -501,9 +630,11 @@ export class FTPClient {
   private async fileExists(client: ftp.Client, filePath: string): Promise<boolean> {
     const { dirPath, fileName } = parseFilePath(filePath);
     try {
-      const list = await client.list(dirPath);
+      const list = await listFolderWithLimits(client, dirPath);
       return list.some(item => item.name === fileName);
-    } catch {
+    } catch (err) {
+      // A list that was too long or too slow does not tell if the file is there. The upload must not write over it.
+      if (err instanceof FolderListLimitError) throw err;
       // The folder cannot be listed (for example it does not exist yet), so the file is not there
       return false;
     }
@@ -594,18 +725,31 @@ export class FTPClient {
   /**
    * Send a bare LIST over our own data socket and return the raw listing.
    * basic-ftp sends "LIST -a", which some limited FTP servers do not support.
+   * The listing stops at MAX_FOLDER_LIST_BYTES: then the data socket is destroyed, and the listing has the complete lines.
    */
-  private async rawListCurrentDirectory(client: ftp.Client): Promise<string> {
+  private async rawListCurrentDirectory(client: ftp.Client): Promise<RawListing> {
     const { host, port } = await requestPassiveAddress(client.ftp);
     const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
 
     return new Promise((resolve, reject) => {
-      let listing = '';
+      const chunks: Buffer[] = [];
+      let byteCount = 0;
+      let isTooLong = false;
+      const listing = (): RawListing => ({ text: completeLines(Buffer.concat(chunks).toString(), isTooLong), isTooLong });
+      // After a listing that is too long, the fallback must not read the same listing again
+      const fail = (err: unknown) => (isTooLong ? resolve(listing()) : reject(err));
 
-      dataSocket.on('data', chunk => {
-        listing += chunk.toString();
+      dataSocket.on('data', (chunk: Buffer) => {
+        if (isTooLong) return;
+        const room = MAX_FOLDER_LIST_BYTES - byteCount;
+        chunks.push(chunk.length > room ? chunk.subarray(0, room) : chunk);
+        byteCount += Math.min(chunk.length, room);
+        if (chunk.length > room) {
+          isTooLong = true;
+          dataSocket.destroy();
+        }
       });
-      dataSocket.on('error', reject);
+      dataSocket.on('error', fail);
       // Until the reply to LIST comes, an idle data connection is destroyed, so the walk goes on with the fallback.
       // After the reply, the wait for the listing has its own short limit, and a folder can be empty.
       dataSocket.setTimeout(this.timeoutMs, () => {
@@ -617,13 +761,26 @@ export class FTPClient {
         dataSocket.setTimeout(0);
         setTimeout(() => {
           dataSocket.end();
-          resolve(listing);
+          resolve(listing());
         }, RAW_LIST_TRANSFER_WAIT_MS);
       }, (err: unknown) => {
         dataSocket.end();
-        reject(err);
+        fail(err);
       });
     });
+  }
+
+  private treeCutMessage(reason: TreeCutReason): string {
+    switch (reason) {
+      case 'entries':
+        return `The file tree on ${this.host} is too large. Chatter shows only the first ${MAX_TREE_ENTRIES} entries.`;
+      case 'folders':
+        return `The file tree on ${this.host} has too many folders. Chatter opens at most ${MAX_TREE_FOLDERS} folders.`;
+      case 'time':
+        return `The file tree on ${this.host} took too long. Chatter stops a walk after ${TREE_WALK_TIME_LIMIT_MS / 1000} s.`;
+      case 'longList':
+        return `A folder list on ${this.host} is too long. Chatter reads at most ${MAX_FOLDER_LIST_MB} MB of one folder list, and then opens no more folders.`;
+    }
   }
 
   /** The connect timeout of the raw data connections. It is never longer than the FTP timeout. */
@@ -631,69 +788,91 @@ export class FTPClient {
     return Math.min(this.timeoutMs, RAW_DATA_CONNECT_TIMEOUT_MS);
   }
 
-  /** List the current folder: bare LIST first, then basic-ftp's list. An empty list when both fail. */
-  private async listCurrentDirectory(client: ftp.Client): Promise<RawListEntry[]> {
+  /**
+   * List the current folder: bare LIST first, then basic-ftp's list. An empty list when both fail.
+   * A raw listing that is too long keeps its first lines, and the fallback does not run.
+   * basic-ftp keeps nothing of a listing that is too long.
+   */
+  private async listCurrentDirectory(client: ftp.Client): Promise<FolderListing> {
+    let raw: RawListing;
     try {
-      return parseRawList(await this.rawListCurrentDirectory(client));
+      raw = await this.rawListCurrentDirectory(client);
     } catch {
-      try {
-        const list = await client.list();
-        return list.map(item => ({ name: item.name, isDir: item.isDirectory, size: item.size }));
-      } catch {
-        return [];
-      }
+      return listWithBasicFtp(client);
     }
+    return { entries: parseRawList(raw.text), isTooLong: raw.isTooLong };
   }
 
   /**
-   * Build the tree below `path`, `depth` levels deep. A folder that cannot be
-   * opened gives an empty list, so one bad folder does not hide the rest of the tree.
-   * The walk stops when it has no entries left, and then it opens no more folders.
+   * Build the tree below `path`, `depth` levels deep, one level at a time.
+   * The walk lists all the folders of one level before it opens the level below it,
+   * so the entry limit cuts the deepest level first and the upper levels stay complete.
+   * A folder that cannot be opened gives an empty list, so one bad folder does not hide the rest of the tree.
+   * The walk opens no more folders when it has no entries or folders left, after its time limit,
+   * or after a folder listing that is too long.
+   * Each folder that it did not open has no children.
    */
   private async buildTree(
     client: ftp.Client,
     { path, depth, walk }: { path: string; depth: number; walk: TreeWalk }
   ): Promise<FTPTreeNode[]> {
-    if (depth <= 0) {
-      return [];
+    const top: TreeFolder = { path, nodes: [] };
+    let level: TreeFolder[] = [top];
+    for (let levelsLeft = depth; levelsLeft > 0 && level.length > 0; levelsLeft--) {
+      const nextLevel: TreeFolder[] = [];
+      for (const folder of level) {
+        const stopReason = stopReasonOf(walk);
+        if (stopReason) {
+          cutWalk(walk, stopReason);
+          return top.nodes;
+        }
+        walk.foldersLeft -= 1;
+        const { entries, isTooLong } = await this.listFolder(client, folder.path);
+        if (isTooLong) stopWalk(walk, 'longList');
+        const kept = entries.slice(0, walk.entriesLeft);
+        walk.entriesLeft -= kept.length;
+        if (kept.length < entries.length) cutWalk(walk, 'entries');
+        for (const entry of kept) {
+          const node = treeNodeOf(entry, folder.path);
+          folder.nodes.push(node);
+          if (entry.isDir && levelsLeft > 1) {
+            node.children = [];
+            nextLevel.push({ path: node.path, nodes: node.children });
+          }
+        }
+      }
+      level = nextLevel;
     }
-    if (walk.entriesLeft <= 0) {
-      walk.isCut = true;
-      return [];
-    }
+    return top.nodes;
+  }
+
+  /** The entries of one folder. A folder that cannot be opened gives an empty list. */
+  private async listFolder(client: ftp.Client, path: string): Promise<FolderListing> {
     try {
       await client.cd(path);
       await client.pwd();
-      const entries = await this.listCurrentDirectory(client);
-
-      // Count the whole folder before a walk into its subfolders, so the upper levels stay complete
-      const kept = entries.slice(0, walk.entriesLeft);
-      walk.entriesLeft -= kept.length;
-      if (kept.length < entries.length) walk.isCut = true;
-      const nodes: FTPTreeNode[] = [];
-      for (const entry of kept) {
-        nodes.push(await this.treeNodeFor(client, { entry, parentPath: path, depth, walk }));
-      }
-      return nodes;
+      return await this.listCurrentDirectory(client);
     } catch {
-      return [];
+      return { entries: [], isTooLong: false };
     }
   }
+}
 
-  private async treeNodeFor(
-    client: ftp.Client,
-    { entry, parentPath, depth, walk }: { entry: RawListEntry; parentPath: string; depth: number; walk: TreeWalk }
-  ): Promise<FTPTreeNode> {
-    const fullPath = joinRemotePath(parentPath, entry.name);
-    const node: FTPTreeNode = {
-      name: entry.name,
-      type: entry.isDir ? 'directory' : 'file',
-      size: entry.size || 0,
-      path: fullPath
-    };
-    if (entry.isDir && depth > 1) {
-      node.children = await this.buildTree(client, { path: fullPath, depth: depth - 1, walk });
-    }
-    return node;
+function treeNodeOf(entry: RawListEntry, parentPath: string): FTPTreeNode {
+  return {
+    name: entry.name,
+    type: entry.isDir ? 'directory' : 'file',
+    size: entry.size || 0,
+    path: joinRemotePath(parentPath, entry.name)
+  };
+}
+
+/** The fallback list of the tree walk. The time limit of the walk also stops it. */
+async function listWithBasicFtp(client: ftp.Client): Promise<FolderListing> {
+  try {
+    const list = await client.list();
+    return { entries: list.map(item => ({ name: item.name, isDir: item.isDirectory, size: item.size })), isTooLong: false };
+  } catch (err) {
+    return { entries: [], isTooLong: isListingTooLong(err) };
   }
 }

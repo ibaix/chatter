@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import net from 'net';
 import { PassThrough } from 'stream';
 import * as ftp from 'basic-ftp';
-import { FTPClient } from './FTPClient.js';
+import { FTPClient, MAX_FOLDER_LIST_BYTES } from './FTPClient.js';
 
 // A rogue machine can name any host in its PASV reply, so Chatter would open a connection to a host of its choice.
 // The data connection must go only to the host of the control connection, and only the port comes from the reply.
@@ -109,9 +109,10 @@ function readAll(socket: net.Socket): Promise<string> {
 }
 
 /** Reply to the commands of FTPClient and basic-ftp. RETR, LIST and STOR use the next data connection. */
-function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSocket, onUpload, commands, sendFile }: {
+function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSocket, onUpload, commands, sendFile, listing }: {
   pasvReply: () => string;
   sendFile: (transfer: Omit<FileTransfer, 'retrNumber'>) => void;
+  listing: string;
   epsvReply: string;
   nextDataSocket: () => Promise<net.Socket>;
   onUpload: (text: string) => void;
@@ -138,7 +139,7 @@ function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSock
         sendFile({ control: socket, data: await nextDataSocket() });
       } else if (command === 'LIST') {
         socket.write('150 Opening data connection\r\n');
-        sendWholeFile({ control: socket, data: await nextDataSocket(), retrNumber: 0 }, LISTING);
+        sendWholeFile({ control: socket, data: await nextDataSocket(), retrNumber: 0 }, listing);
       } else if (command === 'STOR') {
         socket.write('150 Ready for data\r\n');
         onUpload(await readAll(await nextDataSocket()));
@@ -164,17 +165,19 @@ interface FakeMachineOptions {
   programText?: string;
   /** What the machine does for a RETR after its 150 reply. The default is sendWholeFile with programText. */
   sendFile?: (transfer: FileTransfer) => void;
+  /** The text that each LIST sends */
+  listing?: string;
 }
 
 const MACHINE_DEFAULTS = {
   controlHost: CONTROL_HOST, pasvReplyHost: PASV_REPLY_HOST, supportsEpsv: false, bareAddress: false, refuseFirstPasv: false,
-  programText: PROGRAM_TEXT
+  programText: PROGRAM_TEXT, listing: LISTING
 };
 
 /** A decoy listens at the host of the PASV reply only when that host is on this computer */
 async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeMachine> {
   const {
-    controlHost, pasvReplyHost, supportsEpsv, bareAddress, pasvReplyFor, refuseFirstPasv, programText,
+    controlHost, pasvReplyHost, supportsEpsv, bareAddress, pasvReplyFor, refuseFirstPasv, programText, listing,
     sendFile = (transfer: FileTransfer) => sendWholeFile(transfer, programText)
   } = { ...MACHINE_DEFAULTS, ...options };
   const dataSockets: net.Socket[] = [];
@@ -219,7 +222,7 @@ async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeM
     controlSockets.add(socket);
     machine.controlConnections += 1;
     answerCommands(socket, {
-      pasvReply: nextPasvReply, epsvReply, nextDataSocket, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands,
+      pasvReply: nextPasvReply, epsvReply, nextDataSocket, listing, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands,
       sendFile: transfer => {
         machine.retrCount += 1;
         sendFile({ ...transfer, retrNumber: machine.retrCount });
@@ -786,5 +789,69 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
     expect(text()).toBe(firstPart);
     expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// A rogue machine can send a folder listing with no end. Each list must stop at MAX_FOLDER_LIST_BYTES, so the
+// listing cannot fill the memory of a Pi. The listing has folders, so a walk that goes on would open them.
+describe('FTPClient folder listing that is too long', () => {
+  const timeoutMs = 200;
+  const folderLine = (index: number) => `drwxr-xr-x 1 cnc cnc 0 Jan 01 12:00 D${String(index).padStart(60, '0')}\r\n`;
+  const longListing = Array.from({ length: Math.ceil((MAX_FOLDER_LIST_BYTES * 2) / folderLine(0).length) }, (_, index) => folderLine(index)).join('');
+  let machine: FakeMachine | undefined;
+  let ftpClient: FTPClient;
+
+  beforeEach(async () => {
+    machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, listing: longListing });
+    ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await machine?.close();
+    machine = undefined;
+  });
+
+  const count = (command: string) => machine?.commands.filter(sent => sent === command).length;
+
+  it('cuts the tree, runs no fallback and opens no more folders after a raw listing that is too long', async () => {
+    const tree = await ftpClient.readFileTree('/', 2);
+
+    expect(tree.isCutShort).toBe(true);
+    expect(tree.nodes.length).toBeGreaterThan(0);
+    expect(tree.nodes.length * folderLine(0).length).toBeLessThanOrEqual(MAX_FOLDER_LIST_BYTES);
+    // Only the raw LIST: no "LIST -a" of basic-ftp, and no LIST in a folder of the listing
+    expect(count('LIST')).toBe(1);
+    expect(count('CWD')).toBe(1);
+  });
+
+  it('cuts the tree and opens no more folders after a fallback listing that is too long', async () => {
+    neverConnectTo(machine?.dataPort ?? 0, 1);
+
+    const tree = await ftpClient.readFileTree('/', 2);
+
+    expect(tree).toEqual({ nodes: [], isCutShort: true });
+    // The raw LIST got no data connection, so it sent no LIST. Then the "LIST -a" of basic-ftp got the long listing.
+    expect(count('LIST')).toBe(1);
+    expect(count('CWD')).toBe(1);
+  });
+
+  it('refuses to list a folder whose listing is too long', async () => {
+    await expect(ftpClient.listFiles('/')).rejects.toThrow('The folder list on the machine is too long');
+  });
+
+  // When Chatter cannot read the folder, it cannot know if the file is there. It must not write over a program.
+  it('does not upload when the folder listing is too long to check for the file', async () => {
+    await expect(ftpClient.uploadFile('O3000', PROGRAM_TEXT)).rejects.toThrow('The folder list on the machine is too long');
+
+    expect(machine?.commands).not.toContain('STOR');
+  });
+
+  it('gives the file that is too long to check as a failed file of a batch upload', async () => {
+    const result = await ftpClient.uploadFiles([{ remotePath: 'O3000', source: PROGRAM_TEXT }]);
+
+    expect(result.success).toEqual([]);
+    expect(result.failed).toEqual([{ remotePath: 'O3000', error: expect.stringContaining('The folder list on the machine is too long') }]);
+    expect(machine?.commands).not.toContain('STOR');
   });
 });
