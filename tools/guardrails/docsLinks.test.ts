@@ -140,6 +140,23 @@ describe('headingLinksIn', () => {
     ]);
   });
 
+  it('reads link titles in single quotes and in parentheses, and reference definitions', () => {
+    const markdown = [
+      "[a](./x.md#single 'Title') [b](./x.md#paren (Title)) [c](./x.md#double \"Title\")",
+      '[ref]: ./x.md#reference "Title"',
+      "   [ref2]: <../y.md#reference2> 'Title'",
+      '[ref3]: https://example.com/#other-site',
+    ].join('\n');
+
+    expect(headingLinksIn(markdown, 'guide/a.md')).toEqual([
+      { file: 'guide/x.md', anchor: 'single' },
+      { file: 'guide/x.md', anchor: 'paren' },
+      { file: 'guide/x.md', anchor: 'double' },
+      { file: 'guide/x.md', anchor: 'reference' },
+      { file: 'y.md', anchor: 'reference2' },
+    ]);
+  });
+
   it('reads a link in angle brackets', () => {
     expect(headingLinksIn('[a](<./x.md#angle>)', 'guide/a.md')).toEqual([{ file: 'guide/x.md', anchor: 'angle' }]);
   });

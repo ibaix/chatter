@@ -87,7 +87,7 @@ export function headingLinksIn(markdown: string, file: string): HeadingLink[] {
   const links: HeadingLink[] = [];
   for (const line of linesOutsideCodeBlocks(markdown)) {
     const withoutCode = line.replace(/`[^`]*`/g, '');
-    for (const [, target] of withoutCode.matchAll(/\]\(\s*<?([^)\s>]*)>?(?:\s+"[^"]*")?\s*\)/g)) {
+    for (const target of linkTargetsIn(withoutCode)) {
       const hash = target.indexOf('#');
       if (hash < 0 || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
       const page = target.slice(0, hash).replace(/\?.*$/, '');
@@ -96,6 +96,18 @@ export function headingLinksIn(markdown: string, file: string): HeadingLink[] {
     }
   }
   return links;
+}
+
+// An inline link [text](target "title"), with the title in "", '' or (), and the target maybe in <>
+const INLINE_LINK = /\]\(\s*<?([^)\s>]*)>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+// A reference definition [label]: target "title"
+const REFERENCE_DEFINITION = /^ {0,3}\[[^\]]+\]:\s*<?([^\s>]+)>?/;
+
+/** The targets of the inline links and of the reference definition in a line of Markdown */
+function linkTargetsIn(line: string): string[] {
+  const targets = [...line.matchAll(INLINE_LINK)].map(match => match[1]);
+  const reference = REFERENCE_DEFINITION.exec(line)?.[1];
+  return reference === undefined ? targets : [...targets, reference];
 }
 
 /** The Markdown file (from docs/) of a link to a page (with no #anchor), from the page in file */
