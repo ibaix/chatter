@@ -1,10 +1,9 @@
+import type { Role } from '@local-chatter/shared';
 import { createInterface, type Interface } from 'node:readline';
 import { Writable } from 'node:stream';
 import { setUpSchema } from '../routes/schemas.js';
-import { resetAdmins } from './adminReset.js';
+import { resetAdmins, type AdminResetStores } from './adminReset.js';
 import { hashPassword } from './passwords.js';
-import type { SessionStore } from './sessionStore.js';
-import type { UserStore } from './userStore.js';
 
 /**
  * The questions of `npm run reset-password`: the username of the new Admin, and its password two times.
@@ -13,13 +12,13 @@ import type { UserStore } from './userStore.js';
 
 const PROMOTE_WORD = 'PROMOTE';
 const NOTHING_CHANGED = 'Nothing changed.';
+/** The names of the roles on the screens and in the docs */
+const ROLE_NAMES: Record<Role, string> = { viewer: 'Viewer', operator: 'Operator', admin: 'Admin' };
 
-export interface PasswordResetRun {
+export interface PasswordResetRun extends AdminResetStores {
   /** The keyboard. It must be a terminal, so the password does not show. */
   input: NodeJS.ReadableStream & { isTTY?: boolean };
   output: NodeJS.WritableStream;
-  users: UserStore;
-  sessions: SessionStore;
 }
 
 /** The person stopped the questions (Ctrl+C), or the input ended */
@@ -45,7 +44,8 @@ class Prompt {
         done();
       },
     });
-    this.lines = createInterface({ input, output: echo, terminal: true });
+    // No history: the Up arrow must never show an answer from before, such as a password
+    this.lines = createInterface({ input, output: echo, terminal: true, historySize: 0 });
     this.lines.on('line', answer => this.give(answer));
     this.lines.on('SIGINT', () => this.lines.close());
     this.lines.on('close', () => {
@@ -105,7 +105,7 @@ class Prompt {
  * Ask for the new Admin, then replace the Admins with it (see resetAdmins).
  * Returns true when the new Admin exists. Else nothing changed, and the output tells why.
  */
-export async function runPasswordReset({ input, output, users, sessions }: PasswordResetRun): Promise<boolean> {
+export async function runPasswordReset({ input, output, ...stores }: PasswordResetRun): Promise<boolean> {
   const say = (text: string) => output.write(`${text}\n`);
   if (input.isTTY !== true) {
     say('reset-password needs a terminal, because it asks for a password and must hide it.');
@@ -119,10 +119,10 @@ export async function runPasswordReset({ input, output, users, sessions }: Passw
     const username = setUpSchema.shape.username.safeParse(await prompt.ask('Username of the new Admin: '));
     if (!username.success) return stop(say, username.error.issues[0].message);
 
-    const existing = users.findByName(username.data);
+    const existing = stores.users.findByName(username.data);
     const promote = existing !== null && existing.role !== 'admin';
     if (promote) {
-      say(`The user ${existing.username} exists already, with the role ${existing.role}.`);
+      say(`The user ${existing.username} exists already, with the role ${ROLE_NAMES[existing.role]}.`);
       say('This user becomes the Admin, with the new password.');
       const answer = await prompt.ask(`To continue, type ${PROMOTE_WORD}: `);
       if (answer.trim() !== PROMOTE_WORD) return stop(say, `You did not type ${PROMOTE_WORD}.`);
@@ -136,8 +136,8 @@ export async function runPasswordReset({ input, output, users, sessions }: Passw
     }
 
     const passwordHash = await hashPassword(password);
-    resetAdmins(users, sessions, { username: username.data, passwordHash }, { promote });
-    say(`${username.data} is the new Admin. Each browser is logged out. Log in to Chatter with the new password.`);
+    const admin = resetAdmins(stores, { username: username.data, passwordHash }, { promote });
+    say(`${admin.username} is the new Admin. Each browser is logged out. Log in to Chatter with the new password.`);
     return true;
   } catch (error) {
     if (error instanceof StoppedError) return stop(say, 'Stopped.');

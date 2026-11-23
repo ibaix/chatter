@@ -132,7 +132,8 @@ describe('auth routes', () => {
     const fresh = createApp({ poller: new HardwarePoller(emptyDb), auth, accounts, history: noHistory() });
     await auth.setUp(ADMIN, { userAgent: 'test browser', address: '192.168.1.20' });
 
-    resetAdmins(users, sessions, { username: 'boss', passwordHash: await hashPassword('new-admin-password') });
+    const boss = { username: 'boss', passwordHash: await hashPassword('new-admin-password') };
+    resetAdmins({ users, sessions, loginLog: LoginLog.inMemory() }, boss);
 
     expect(await (await fresh.request('/api/auth/status')).json()).toMatchObject({ setupNeeded: false });
     const res = await fresh.request('/api/auth/setup', {
