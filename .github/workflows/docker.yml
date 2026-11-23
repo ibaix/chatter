@@ -67,7 +67,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # A tag with no GitHub Release yet is a normal release: the release job makes its Release
+          # A tag with no GitHub Release yet is a normal release: the sign job makes its Release (add-to-release.sh)
           prerelease="$(gh release view "$GITHUB_REF_NAME" --json isPrerelease --jq .isPrerelease 2> /dev/null || echo false)"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
           echo "Pre-release: $prerelease"
