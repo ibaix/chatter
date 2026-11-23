@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { portsOpened, type ComposePort } from './composePorts';
-import { anchorsOf, docsLinksIn, docsPageFile } from './docsLinks';
+import { anchorsOf, docsLinksIn, docsPageFile, headingLinksIn } from './docsLinks';
 
 const ROOT = join(import.meta.dirname, '../..');
 const read = (path: string) => readFileSync(join(ROOT, path), 'utf8');
@@ -15,6 +15,7 @@ const trackedFiles = () =>
 
 interface ComposeService {
   command?: string[];
+  container_name?: string;
   ports?: ComposePort[];
   volumes?: string[];
 }
@@ -99,6 +100,21 @@ describe('closed ports', () => {
   });
 });
 
+describe('facts that the docs quote', () => {
+  // The docs tell users to run "docker logs chatterbox", and to change "3001:3001" to "127.0.0.1:3001:3001".
+  const { services } = compose('docker-compose.yml');
+
+  it('keeps the container name chatterbox in docker-compose.yml', () => {
+    expect(services).toHaveProperty('chatterbox');
+    expect(services.chatterbox.container_name).toBe('chatterbox');
+  });
+
+  it('publishes the port of Chatter as "3001:3001" in docker-compose.yml', () => {
+    expect(services).toHaveProperty('chatterbox');
+    expect(services.chatterbox.ports).toContain('3001:3001');
+  });
+});
+
 describe('history restore', () => {
   // A history restore writes the samples of a backup file into VictoriaMetrics. When it runs two times, the
   // deduplication keeps one sample for each time, so the charts and the reports do not count a sample two times.
@@ -133,6 +149,35 @@ describe('docs links', () => {
     const file = docsPageFile(page);
     expect(existsSync(join(ROOT, 'docs', file)), `docs/${file}`).toBe(true);
     if (anchor) expect(anchorsOf(read(join('docs', file)))).toContain(anchor);
+  });
+});
+
+describe('heading links in the docs', () => {
+  // "npm run docs:build" stops on a link to a page that does not exist, but not on a link to a heading
+  // (#anchor) that does not exist. The page then opens at the top, and the reader does not find the text.
+  function docsPages(dir = ''): string[] {
+    return readdirSync(join(ROOT, 'docs', dir)).flatMap(name => {
+      const path = dir ? `${dir}/${name}` : name;
+      // node_modules, and .vitepress (with the build output in cache/ and dist/)
+      if (name === 'node_modules' || name.startsWith('.')) return [];
+      if (statSync(join(ROOT, 'docs', path)).isDirectory()) return docsPages(path);
+      return name.endsWith('.md') ? [path] : [];
+    });
+  }
+
+  const pages = docsPages();
+  const links = pages.flatMap(page => headingLinksIn(read(join('docs', page)), page).map(link => ({ page, ...link })));
+
+  it('finds the heading links in the docs', () => {
+    expect(links).toContainEqual({ page: 'guide/update.md', file: 'security.md', anchor: 'updates-on-the-pi-card' });
+  });
+
+  it('go to a page and a heading that exist', () => {
+    const anchors = new Map(pages.map(page => [page, anchorsOf(read(join('docs', page)))]));
+    const dead = links
+      .filter(({ file, anchor, invalid }) => invalid !== undefined || !anchors.get(file)?.includes(anchor))
+      .map(({ page, file, anchor, invalid }) => (invalid === undefined ? `${page} -> ${file}#${anchor}` : `${page} -> ${invalid}`));
+    expect(dead).toEqual([]);
   });
 });
 
