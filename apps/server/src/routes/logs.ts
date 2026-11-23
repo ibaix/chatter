@@ -1,11 +1,12 @@
 import { Hono } from 'hono';
-import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
+import type { SSEStreamingApi } from 'hono/streaming';
 import { z } from 'zod';
 import { LOG_LEVELS } from '../logging/logger.js';
 import { matchesFilter, type LogFilter } from '../logging/LogBuffer.js';
 import type { ServerLog } from '../logging/ServerLog.js';
 import { requirePermission, type LoggedInEnv } from '../auth/authRoutes.js';
 import { checkedJson, checkedQuery } from './checks.js';
+import { streamSSEWithLog } from './streamReplies.js';
 
 /** At most this many live log views at the same time, so a forgotten browser tab cannot use up the memory */
 export const MAX_LOG_STREAMS = 3;
@@ -56,7 +57,7 @@ export function logRoutes(serverLog: ServerLog) {
       }
       serverLog.openStreams++;
       const filter = filterOf(c.req.valid('query'));
-      return streamSSE(c, async stream => {
+      return streamSSEWithLog(c, 'The live log', async stream => {
         try {
           await sendLines(stream, serverLog, filter);
         } finally {

@@ -8,6 +8,7 @@ import { requirePermission } from '../auth/authRoutes.js';
 import { checkedForm, checkedQuery } from './checks.js';
 import { allowLongUpload } from '../webServerOptions.js';
 import { machineErrorReply, notFound } from './responses.js';
+import { streamWithoutErrorText } from './streamReplies.js';
 import { createLogger } from '../logging/logger.js';
 import { batchUploadForm, filePathQuery, fileTreeQuery, readTargetNames, uploadForm } from './schemas.js';
 
@@ -121,7 +122,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
       if (!connector) return notFound(c);
 
       const stream = await downloadAsStream(connector, path);
-      return c.body(stream, 200, {
+      return c.body(streamWithoutErrorText(c, stream, 'The program download'), 200, {
         'Content-Disposition': attachmentHeader(fileNameOf(path)),
         'Content-Type': 'application/octet-stream',
       });

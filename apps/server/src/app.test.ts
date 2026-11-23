@@ -1,15 +1,17 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { setTimeout as wait } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import type { IncomingMessage } from 'node:http';
 import { createApp } from './app.js';
 import { HardwarePoller } from './polling/poller.js';
 import type { Auth } from './auth/Auth.js';
 import type { UserAccounts } from './auth/userAccounts.js';
-import { loggedInAuth } from './auth/testSupport.js';
+import { loggedInAuth, TEST_LOGIN } from './auth/testSupport.js';
 import { SESSION_COOKIE } from './auth/authRoutes.js';
 import { hasLongTimeLimit } from './webServerOptions.js';
 import { captureLog } from './logging/testSupport.js';
 import { UNEXPECTED_ERROR_TEXT } from './routes/responses.js';
+import { STREAM_STOPPED_TEXT } from './routes/streamReplies.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
 import type { FTPClient } from './ftp/FTPClient.js';
@@ -1145,6 +1147,24 @@ describe('API Routes', () => {
         .toBe(`attachment; filename="Teil _A_ _.nc"; filename*=UTF-8''Teil%20%22A%22%20%E2%82%AC.nc`);
     });
 
+    it('logs one line when the download fails in the middle, and stops the file', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'downloadFile').mockImplementation(async (_path, output) => {
+        output.write('G00 X0');
+        throw new Error('FTP download error: connection reset');
+      });
+      const log = captureLog();
+
+      const res = await send(`/api/machine/${machine.id}/files/download?path=/PRG/O1000.NC`);
+      const failure = await res.text().then(() => null, (error: Error) => error);
+      log.restore();
+
+      expect(res.status).toBe(200);
+      expect(failure?.message).toBe(STREAM_STOPPED_TEXT);
+      expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
+      expect(log.text('error')).toContain('connection reset');
+    });
+
     it('returns 500 when the machine refuses the download', async () => {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
       vi.spyOn(poller.getConnector(machine.id)!, 'downloadFile')
@@ -1432,6 +1452,91 @@ describe('API Routes', () => {
       expect(res.headers.get('Content-Type')).toContain('text/event-stream');
       expect(text).toContain('event: machines');
       expect(text).toContain('"name":"Speedio"');
+    });
+
+    /** Open the live events with this cookie or these headers, and read the first event (the machine list) */
+    async function openEvents(login: string | Record<string, string>): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+      const headers = typeof login === 'string' ? { Cookie: login } : login;
+      const res = await app.request('/api/events', { headers });
+      expect(res.status).toBe(200);
+      const reader = res.body!.getReader();
+      await reader.read();
+      return reader;
+    }
+
+    /** The rest of the stream, if the server ends it within a short time. Else null. */
+    async function restIfEnded(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string | null> {
+      const ended = (async () => {
+        let text = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) return text;
+          text += new TextDecoder().decode(value);
+        }
+      })();
+      return Promise.race([ended, wait(300).then(() => null)]);
+    }
+
+    const endsSoon = async (reader: ReadableStreamDefaultReader<Uint8Array>) => (await restIfEnded(reader)) !== null;
+
+    /** A second browser of the same user, with its own session */
+    async function otherSessionCookie(): Promise<string> {
+      return `${SESSION_COOKIE}=${await auth.logIn(TEST_LOGIN, { userAgent: 'other browser', address: '127.0.0.1' })}`;
+    }
+
+    it('keeps 5 live streams open for one login', async () => {
+      const readers = [];
+      for (let i = 0; i < 5; i++) readers.push(await openEvents(cookie));
+
+      expect(await endsSoon(readers[0])).toBe(false);
+      await Promise.all(readers.map(reader => reader.cancel()));
+    });
+
+    it('closes the oldest live stream of a login when the login opens a 6th, but not the streams of another login', async () => {
+      const other = await openEvents(await otherSessionCookie());
+      const readers = [];
+      for (let i = 0; i < 6; i++) readers.push(await openEvents(cookie));
+
+      // The browser waits one minute before it connects again
+      expect(await restIfEnded(readers[0])).toContain('retry: 60000');
+      expect(await endsSoon(readers[1])).toBe(false);
+      expect(await endsSoon(other)).toBe(false);
+      await Promise.all([other, ...readers.slice(1)].map(reader => reader.cancel()));
+    });
+
+    it('keeps the limit of 5 when a login opens 10 live streams, one after the other', async () => {
+      const readers = [];
+      for (let i = 0; i < 10; i++) readers.push(await openEvents(cookie));
+
+      // Each closed stream ends a moment later and frees its slot. That must not free the slot of an open stream.
+      const rests = await Promise.all(readers.map(restIfEnded));
+
+      const states = rests.map(rest => (rest === null ? 'open' : rest.includes('retry: 60000') ? 'closed, retry' : 'closed'));
+      expect(states).toEqual([...Array<string>(5).fill('closed, retry'), ...Array<string>(5).fill('open')]);
+      await Promise.all(readers.slice(5).map(reader => reader.cancel()));
+    });
+
+    it('counts the streams of a program with a password (HTTP Basic) for its user', async () => {
+      const basic = { Authorization: `Basic ${Buffer.from(`${TEST_LOGIN.username}:${TEST_LOGIN.password}`).toString('base64')}` };
+      const browser = await openEvents(cookie);
+      const readers = [];
+      for (let i = 0; i < 6; i++) readers.push(await openEvents(basic));
+
+      expect(await endsSoon(readers[0])).toBe(true);
+      expect(await endsSoon(browser)).toBe(false);
+      await Promise.all([browser, ...readers.slice(1)].map(reader => reader.cancel()));
+    });
+
+    it('lets a login open a new stream after it closes one', async () => {
+      const readers = [];
+      for (let i = 0; i < 5; i++) readers.push(await openEvents(cookie));
+      await readers[4].cancel();
+      // The server sees the closed stream a moment later
+      await wait(20);
+      readers[4] = await openEvents(cookie);
+
+      expect(await endsSoon(readers[0])).toBe(false);
+      await Promise.all(readers.map(reader => reader.cancel()));
     });
   });
 

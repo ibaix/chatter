@@ -6,8 +6,24 @@ import { createLogger } from './logging/logger.js';
 
 const log = createLogger('web-server');
 
-/** A client must send all its request headers within this time */
-const HEADERS_TIME_LIMIT_MS = 60_000;
+/** A client must send all its request headers within this time. A browser sends them at once. */
+const HEADERS_TIME_LIMIT_MS = 20_000;
+
+/**
+ * Node looks for connections that are over the header time limit this often. The Node default is 30 seconds,
+ * so a connection that sent nothing could stay open for 50 seconds.
+ */
+const CONNECTIONS_CHECK_INTERVAL_MS = 5_000;
+
+/**
+ * The web server accepts at most this many connections at a time. Node closes each new connection above it at once.
+ * Without a limit, one computer on the network can open connections until the process has no free file handles.
+ * Then Chatter cannot open its database or its log, and it cannot connect to the machines.
+ * The lowest file limit that Chatter can get is 1024 (Docker Desktop and Docker on the Pi give much more, and Node
+ * raises its own limit to the hard limit). 256 keeps most of the 1024 free for the machines, the database and the logs.
+ * A browser tab uses 1 to 6 connections, so 256 is enough for many users.
+ */
+const MAX_CONNECTIONS = 256;
 
 /**
  * A client must send its whole request within this time, if the route does not allow a long upload.
@@ -26,6 +42,7 @@ const REQUEST_TIME_LIMIT_MS = 2 * 60_000;
 export const WEB_SERVER_OPTIONS: ServerOptions = {
   requestTimeout: UPDATE_TIME_LIMIT_MS,
   headersTimeout: HEADERS_TIME_LIMIT_MS,
+  connectionsCheckingInterval: CONNECTIONS_CHECK_INTERVAL_MS,
 };
 
 /** The reply text when a request takes too long */
@@ -85,14 +102,22 @@ export interface WebServerStart {
   onListening?: () => void;
   /** Only a test gives a shorter limit, so that it does not wait 2 minutes */
   requestTimeLimitMs?: number;
+  /** Only a test gives a smaller limit */
+  maxConnections?: number;
+  /** Only a test changes these Node options, for example to give a shorter header time limit */
+  serverOptions?: ServerOptions;
 }
 
 /**
- * Starts the web server with WEB_SERVER_OPTIONS and the request time limit.
+ * Starts the web server with WEB_SERVER_OPTIONS, the connection limit and the request time limit.
  * serve() makes a plain HTTP/1 server, because no HTTP/2 option is given.
  */
-export function startWebServer(app: WebApp, port: number, { onListening, requestTimeLimitMs = REQUEST_TIME_LIMIT_MS }: WebServerStart = {}): Server {
-  const server = serve({ fetch: app.fetch, port, serverOptions: WEB_SERVER_OPTIONS }, () => onListening?.()) as Server;
+export function startWebServer(app: WebApp, port: number, {
+  onListening, requestTimeLimitMs = REQUEST_TIME_LIMIT_MS, maxConnections = MAX_CONNECTIONS, serverOptions,
+}: WebServerStart = {}): Server {
+  const options = { ...WEB_SERVER_OPTIONS, ...serverOptions };
+  const server = serve({ fetch: app.fetch, port, serverOptions: options }, () => onListening?.()) as Server;
+  server.maxConnections = maxConnections;
   limitRequestTime(server, requestTimeLimitMs);
   return server;
 }

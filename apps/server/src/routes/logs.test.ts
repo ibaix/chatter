@@ -1,10 +1,11 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SESSION_COOKIE } from '../auth/authRoutes.js';
 import { loggedInAuth } from '../auth/testSupport.js';
 import type { Auth } from '../auth/Auth.js';
 import type { UserAccounts } from '../auth/userAccounts.js';
 import { configureLogging, createLogger, currentLogLevel } from '../logging/logger.js';
 import { LogBuffer } from '../logging/LogBuffer.js';
+import { captureLog } from '../logging/testSupport.js';
 import { ServerLog } from '../logging/ServerLog.js';
 import { LOG_STREAM_QUEUE, MAX_LOG_STREAMS } from './logs.js';
 import { errorOf, testApp } from './testSupport.js';
@@ -158,6 +159,22 @@ describe('log routes', () => {
       expect(again.status).toBe(200);
       for (const events of [...open.slice(1), eventReader(again)]) await events.cancel();
     });
+  });
+
+  it('logs an error of the live log, sends no error text, closes the stream and frees its place', async () => {
+    vi.spyOn(serverLog.buffer, 'lines').mockImplementation(() => { throw new Error('the buffer is broken'); });
+    const log = captureLog();
+
+    const res = await get('/api/logs/stream');
+    const text = await res.text();
+    log.restore();
+
+    expect(res.status).toBe(200);
+    expect(text).not.toContain('event: error');
+    expect(text).not.toContain('the buffer is broken');
+    expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
+    expect(log.text('error')).toContain('the buffer is broken');
+    expect(serverLog.openStreams).toBe(0);
   });
 
   describe('debug level', () => {
