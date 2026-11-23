@@ -588,6 +588,7 @@ describe('FTPClient tree walks of a busy machine', () => {
   let machine: CountingMachine | undefined;
 
   afterEach(async () => {
+    vi.useRealTimers();
     await machine?.close();
     machine = undefined;
   });
@@ -651,6 +652,32 @@ describe('FTPClient tree walks of a busy machine', () => {
     await upload;
     expect(namesOf((await stays).nodes)).toEqual(['PROGRAMS', 'SUBS', 'O1000']);
     expect(counting.logins()).toBe(2);
+  });
+
+  // A walk that runs must also stop when each caller left. It must not log in again for the next folder, and it must
+  // give the turn to the next task. The fake timers stop the 1 s wait after the listing, so the walk is still in its
+  // first folder when the caller leaves.
+  it('stops a running walk when each caller left, with no new login, and starts the next task', async () => {
+    machine = await startCountingMachine({ noListReply: true });
+    const counting = machine;
+    const client = new FTPClient({ host: HOST, port: counting.port });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const leave = new AbortController();
+    const output = new PassThrough();
+    const text = collect(output);
+
+    const walk = outcomeOf(client.readFileTree('/', 2, leave.signal));
+    await until(() => counting.commands.includes('LIST'));
+    const download = client.downloadFile('O1000', output);
+    leave.abort(new Error('The browser left'));
+
+    expect(((await walk) as Error).message).toBe('The browser left');
+    await download;
+    expect(text()).toBe(PROGRAM_TEXT);
+    // The walk and the download only
+    expect(counting.logins()).toBe(2);
+    expect(counting.commands.filter(command => command === 'LIST')).toHaveLength(1);
+    expect(counting.mostOpenAtCommand()).toBe(1);
   });
 
   it('does not walk the tree when each caller left while the walk waited', async () => {
