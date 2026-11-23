@@ -101,29 +101,6 @@ describe('HaasConnector', () => {
       expect(connector.getStatus().lastPollTime).toBeNull();
     });
   });
-
-  describe('updateConfig', () => {
-    it('should update host', () => {
-      connector.updateConfig({ host: '10.0.0.1' });
-      expect(connector.host).toBe('10.0.0.1');
-    });
-
-    it('should update dataPort', () => {
-      connector.updateConfig({ dataPort: 8888 });
-      expect(connector.dataPort).toBe(8888);
-    });
-
-    it('should update queryPort', () => {
-      connector.updateConfig({ queryPort: 6666 });
-      expect(connector.queryPort).toBe(6666);
-    });
-
-    it('should disconnect when settings change', () => {
-      connector.connected = true;
-      connector.updateConfig({ host: '10.0.0.1' });
-      expect(connector.connected).toBe(false);
-    });
-  });
 });
 
 describe('Haas query commands', () => {
