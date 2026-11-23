@@ -12,6 +12,7 @@ import { allowLongUpload } from '../webServerOptions.js';
 import { machineErrorReply, notFound } from './responses.js';
 import { streamWithoutErrorText } from './streamReplies.js';
 import { createLogger } from '../logging/logger.js';
+import { SessionQueue } from '../ftp/sessionQueue.js';
 import { batchUploadForm, filePathQuery, fileTreeQuery, readTargetNames, uploadForm } from './schemas.js';
 
 const log = createLogger('machine-files');
@@ -49,23 +50,27 @@ const programSizeLimit = bodyLimit({
  * The most uploads that hold their files in memory at the same time, for all machines. Each machine has its own FTP
  * queue, so the queue does not limit this. An upload of 32 MB uses about twice that in memory (the form and the copy),
  * and a Pi can have only 512 MB. Two, so that one upload can wait for a busy machine while another machine gets a file.
+ * Each machine gets at most one of the two, so one busy machine cannot block the uploads to the other machines.
  */
 const MAX_UPLOADS_AT_ONCE = 2;
 const UPLOADS_BUSY_TEXT = 'Chatter is busy with other uploads. Try again later.';
 
 /**
- * Refuse an upload with 503 while MAX_UPLOADS_AT_ONCE uploads run. It comes before the route reads the body, so a
- * refused upload uses no memory for its files. Each call gives its own count, so each server has its own limit.
+ * Refuse an upload with 503 while MAX_UPLOADS_AT_ONCE uploads run, or while an upload to the same machine runs. It
+ * comes before the route reads the body, so a refused upload uses no memory for its files. Each call gives its own
+ * set, so each server has its own limit.
  */
 function limitUploadsAtOnce() {
-  let uploadCount = 0;
+  const machinesWithUpload = new Set<string>();
   return createMiddleware(async (c, next) => {
-    if (uploadCount >= MAX_UPLOADS_AT_ONCE) return c.json({ error: UPLOADS_BUSY_TEXT }, 503);
-    uploadCount += 1;
+    const machineId = c.req.param('id') ?? '';
+    if (machinesWithUpload.has(machineId)) return c.json({ error: SessionQueue.busyError().message }, 503);
+    if (machinesWithUpload.size >= MAX_UPLOADS_AT_ONCE) return c.json({ error: UPLOADS_BUSY_TEXT }, 503);
+    machinesWithUpload.add(machineId);
     try {
       await next();
     } finally {
-      uploadCount -= 1;
+      machinesWithUpload.delete(machineId);
     }
   });
 }
