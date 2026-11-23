@@ -249,6 +249,17 @@ describe('known device cookie', () => {
       expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: newDevice })).status).toBe(200);
     });
 
+    it('makes the new device cookie HTTPS-only when the browser used HTTPS, and not when it used HTTP', async () => {
+      const httpsBrowser = await browserOf(ADMIN);
+      const httpBrowser = await browserOf(BOB);
+
+      const overHttps = await send(ADMIN_COMPUTER, LOG_OUT_OTHERS, {}, { cookie: httpsBrowser.cookies, protocol: 'https' });
+      expect(setCookieLine(overHttps, DEVICE_COOKIE)).toContain('Secure');
+      const overHttp = await send(ADMIN_COMPUTER, LOG_OUT_OTHERS, {}, { cookie: httpBrowser.cookies });
+      expect(setCookieLine(overHttp, DEVICE_COOKIE)).toBeDefined();
+      expect(setCookieLine(overHttp, DEVICE_COOKIE)).not.toContain('Secure');
+    });
+
     it('gives no device cookie to a browser that is not a known browser', async () => {
       const login = await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN);
       const sessionOnly = setCookieLine(login, SESSION_COOKIE)!.split(';')[0];
