@@ -318,6 +318,15 @@ describe('release signing', () => {
     expect(actions).toEqual(['0: actions/checkout']);
   });
 
+  // A push to main and a pre-release tag such as v1.2.0-rc1 get no update file. The update helper accepts only a
+  // version such as 1.2.0.
+  const releaseTagOnly = "startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')";
+  const conditionOf = (job: WorkflowJob) => job.if?.replace(/\s+/g, ' ').trim();
+
+  it('signs only for a release tag such as v1.2.0', () => {
+    expect(conditionOf(sign)).toBe(releaseTagOnly);
+  });
+
   it('signs only after the publish job', () => {
     expect(needsOf(sign)).toContain('publish');
   });
