@@ -5,7 +5,7 @@ import { createMiddleware } from 'hono/factory';
 import { checkedJson } from '../routes/checks.js';
 import { changePasswordSchema, logInSchema, setUpSchema } from '../routes/schemas.js';
 import type { Auth, CurrentUser, Login, UserSession } from './Auth.js';
-import { LOCK_MINUTES, type LoginLimiter } from './LoginLimiter.js';
+import { LOCK_MINUTES, MAX_LOGGED_UNKNOWN_USERS, type LoginLimiter } from './LoginLimiter.js';
 import type { LoginLog, LoginResult } from './loginLog.js';
 import type { ProxySettings } from './proxySettings.js';
 import type { RequestOrigin } from './proxyTrust.js';
@@ -148,7 +148,7 @@ async function withPasswordCheck<Value>(
   { username, device, success, check }: PasswordTry<Value>,
 ): Promise<Checked<Value>> {
   const recordTry = (result: LoginResult) => {
-    logTry({ username, address, result, device });
+    logTry(limiter, { username, address, result, device });
     withoutFailing('[Login log] Could not save a login try', () => loginLog.record({ username, address, result }));
   };
   if (limiter.isBlocked(address, username, device)) {
@@ -172,9 +172,21 @@ const GOOD_RESULTS: readonly LoginResult[] = ['logged-in', 'password-changed'];
 
 /**
  * Write each password try in the server log, also when the login log cannot save it.
- * The login log keeps only the last 50 tries, but the server log keeps more. Never log the password or the cookie.
+ * The login log keeps only the last 50 tries. The server log usually keeps more, but it is only 2 files of 1 MB.
+ * So it keeps only the first MAX_LOGGED_UNKNOWN_USERS tries with an unknown username from one address in LOCK_MINUTES.
+ * Never log the password or the cookie.
  */
-function logTry({ username, address, result, device }: { username: string; address: string; result: LoginResult; device?: string }) {
+function logTry(
+  limiter: LoginLimiter,
+  { username, address, result, device }: { username: string; address: string; result: LoginResult; device?: string },
+) {
+  if (result === 'no-such-user') {
+    const count = limiter.countUnknownUser(address);
+    if (count === MAX_LOGGED_UNKNOWN_USERS + 1) {
+      log.warn('More password tries with unknown usernames from this address are not logged', { address, minutes: LOCK_MINUTES });
+    }
+    if (count > MAX_LOGGED_UNKNOWN_USERS) return;
+  }
   // The login log on the Logins tab does not show the device, so the server log tells it
   const details = { username, address, result, ...(device ? { knownDevice: true } : {}) };
   if (GOOD_RESULTS.includes(result)) log.info('Password try', details);
