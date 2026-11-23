@@ -62,6 +62,14 @@ test_compose_keeps_the_data_volume_and_adds_the_update_folder() {
   check "the Chatter container keeps its data volume" grep -q 'target: /app/data' <<< "$config"
   check "the Chatter container gets the update folder" grep -q 'target: /app/update$' <<< "$config"
   check "the Chatter container gets the inbox" grep -q 'target: /app/update/inbox' <<< "$config"
+  check "the network history stays internal" grep -q 'internal: true' <<< "$(top_level_network history <<< "$config")"
+}
+
+# Prints the settings of one network in the top-level "networks:" of the compose config.
+top_level_network() {
+  awk -v name="  $1:" '/^networks:/ { in_networks = 1; next } /^[^ ]/ { in_networks = 0 }
+    in_networks && $0 == name { in_network = 1; next } in_networks && /^  [^ ]/ { in_network = 0 }
+    in_networks && in_network'
 }
 
 test_node_can_write_only_in_the_inbox() {
