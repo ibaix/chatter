@@ -316,10 +316,19 @@ describe('release signing', () => {
   // The check is one script with its own shell test (tools/release/test/check-tag-on-main.test.sh)
   const onMainCheck = (step: WorkflowStep) => step.run?.trim() === 'tools/release/check-tag-on-main.sh';
 
+  // GitHub reads the names in an expression in any case, so secrets.update_signing_key is the same key.
+  // The parsed file has no comments, so a comment that names the key does not count.
   it('gives the signing key only to the sign job', () => {
-    expect(allJobs().filter(({ job }) => JSON.stringify(job).includes('UPDATE_SIGNING_KEY')).map(({ id }) => id)).toEqual([SIGN_JOB]);
-    const mentions = workflowFiles.flatMap(file => workflowText(file).match(/secrets\.UPDATE_SIGNING_KEY/g) ?? []);
+    expect(allJobs().filter(({ job }) => /UPDATE_SIGNING_KEY/i.test(JSON.stringify(job))).map(({ id }) => id)).toEqual([SIGN_JOB]);
+    const mentions = workflowFiles.flatMap(file => JSON.stringify(workflow(file)).match(/secrets\.UPDATE_SIGNING_KEY/gi) ?? []);
     expect(mentions).toHaveLength(1);
+  });
+
+  // toJSON(secrets) gives all the secrets, and secrets[<name>] can give any secret by a name that the test cannot read
+  it.each(workflowFiles)('reads no secret by a computed name, and not all the secrets, in %s', file => {
+    const text = JSON.stringify(workflow(file));
+    expect(text).not.toMatch(/toJSON\(\s*secrets\s*\)/i);
+    expect(text).not.toMatch(/\bsecrets\s*\[/i);
   });
 
   it('gives the release environment, which holds the key, only to the sign job', () => {
