@@ -889,10 +889,10 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
     await until(() => text() === firstPart);
     // Keep the data connection of the client open, so later bytes can still come to it
     const realDestroy = net.Socket.prototype.destroy;
-    let clientDataSocket: net.Socket | undefined;
+    const heldSockets: net.Socket[] = [];
     vi.spyOn(net.Socket.prototype, 'destroy').mockImplementation(function (this: net.Socket, ...args: [Error?]) {
-      if (this.remotePort === machine?.dataPort && clientDataSocket === undefined) {
-        clientDataSocket = this;
+      if (this.remotePort === machine?.dataPort && heldSockets.length === 0) {
+        heldSockets.push(this);
         return this;
       }
       return realDestroy.apply(this, args);
@@ -902,10 +902,10 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
 
     expect(await outcome).toBe('FTP download error: The machine stopped sending the file. Try again.');
     transfer?.data.write('LATE');
-    await until(() => clientDataSocket?.bytesRead === firstPart.length + 'LATE'.length);
+    await until(() => heldSockets[0]?.bytesRead === firstPart.length + 'LATE'.length);
     expect(text()).toBe(firstPart);
     vi.restoreAllMocks();
-    clientDataSocket?.destroy();
+    heldSockets[0]?.destroy();
   });
 
   it('downloads the whole file when the 226 comes before the end of the data', async () => {
