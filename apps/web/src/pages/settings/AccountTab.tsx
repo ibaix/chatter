@@ -107,7 +107,7 @@ function SessionsPanel() {
       title="Where you are logged in"
       description={
         <>
-          A login ends when you log it out, when the browser is not used for 14 days, or 1 year after the login. Programs that send the password are not on this list.
+          A login ends when you log it out, after 14 days with no use, or 1 year after the login. A visible Chatter page counts as a use. A hidden tab does not. Programs that send the password are not on this list.
           When you click <strong>Log out all other browsers</strong>, each other browser is a new browser for the login
           limits. This includes the browsers that are logged out.
         </>
