@@ -48,6 +48,16 @@ describe('LoginsTab', () => {
     expect(rows[2]).toHaveTextContent('Logged in');
   });
 
+  it('shows a new Admin from npm run reset-password', async () => {
+    const at = new Date().toISOString();
+    await renderTab(report({ tries: [{ at, username: 'boss', address: 'server terminal', result: 'reset-password' }] }));
+    const rows = within(screen.getByRole('table')).getAllByRole('row');
+
+    expect(rows[1]).toHaveTextContent('boss');
+    expect(rows[1]).toHaveTextContent('server terminal');
+    expect(rows[1]).toHaveTextContent('New Admin from reset-password');
+  });
+
   it('unlocks a computer', async () => {
     await renderTab(report());
     vi.mocked(unlockComputer).mockResolvedValue(report({ locked: [] }));
