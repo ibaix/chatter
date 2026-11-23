@@ -25,11 +25,22 @@ A reverse proxy is a server that takes the HTTPS requests from the browsers, and
      ```
 
    A ufw or firewalld rule does not limit a port that Docker publishes. For `<LAN interface>`, and to keep the rule after a restart, see [Limit who can reach Chatter](../security.md#limit-who-can-reach-chatter).
+5. Stop all old logins after a move to HTTPS. Before the move, other people on the network could read a login cookie. Each user does these steps:
+   1. Open Chatter through the proxy. In **Settings > Your account**, click **Log out**.
+   2. Log in again through the proxy. The browser then gets a new login cookie.
+   3. In **Settings > Your account**, click **Log out all other browsers**.
+   4. On each other browser, log in again through the proxy.
+
+   This step stops each copy of an old cookie. **Log out all other browsers** alone does not stop the old login of the browser that you use, so do not skip **Log out**.
 
 Chatter believes the `X-Forwarded-*` headers only from the trusted addresses, because any computer can send them.
 Only one proxy in front of Chatter is supported.
 
 A browser that logged in over plain HTTP before the move keeps that login. The login ends when the browser is not used for 14 days, and 1 year after the login at the latest. A visible Chatter page counts as a use. A hidden tab does not.
+
+A login cookie from plain HTTP has no Secure flag, so the browser can also send it over plain HTTP. When the browser uses the login through the proxy, Chatter gives it the same cookie again, with the Secure flag. Then the browser sends that cookie only over HTTPS. This does not stop a copy of the cookie that a person already read. Only step 5 stops that copy.
+
+After the move, use only the HTTPS address of the proxy for that host name. The browser does not send a cookie with the Secure flag over plain HTTP. So a plain HTTP address of the same host name, for example `http://chatter.local:3001`, shows the login page again, also after a login.
 
 ## Security headers from the proxy
 

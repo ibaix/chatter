@@ -106,12 +106,18 @@ export class SessionStore {
   }
 
   /** Save that the browser was used now, from this address. Skips the write when it was saved a short time ago. */
-  markSeen(session: Session, address: string): void {
+  markSeen(session: Session, address: string): boolean {
     const isRecent = this.now() - session.lastSeenAt.getTime() < SEEN_INTERVAL_MS;
-    if (isRecent && address === session.address) return;
+    if (isRecent && address === session.address) return false;
     this.db
       .prepare('UPDATE sessions SET last_seen_at = ?, address = ? WHERE id = ?')
       .run(this.now(), shortAddress(address), session.id);
+    return true;
+  }
+
+  /** The seconds before the session ends at SESSION_LIFETIME_SECONDS after the login, rounded up */
+  secondsLeft(session: Session): number {
+    return Math.ceil((session.createdAt.getTime() + SESSION_LIFETIME_MS - this.now()) / 1000);
   }
 
   delete(id: string): void {

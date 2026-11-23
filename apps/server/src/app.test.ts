@@ -126,6 +126,29 @@ describe('API Routes', () => {
     });
   });
 
+  describe('the cache of API replies', () => {
+    // A reply can set the login cookie again (authRoutes.ts), so no shared cache in a proxy may keep it for other browsers
+    it('tells each cache not to keep an API reply', async () => {
+      const replies = [
+        await app.request('/api/health'),
+        await app.request('/api/machines'),
+        await send('/api/machines'),
+        await send('/api/not-an-api-address'),
+      ];
+
+      expect(replies.map(res => res.status)).toEqual([200, 401, 200, 404]);
+      for (const res of replies) expect(res.headers.get('Cache-Control')).toBe('no-store');
+    });
+
+    it('tells each cache not to keep the live events', async () => {
+      const res = await send('/api/events');
+      await res.body!.cancel();
+
+      expect(res.headers.get('Content-Type')).toContain('text/event-stream');
+      expect(res.headers.get('Cache-Control')).toBe('no-store');
+    });
+  });
+
   describe('the time limit of a large upload', () => {
     /** Each route that takes a large file. "m1" does not need to be a machine: the route marks the request first. */
     const LARGE_UPLOADS = [

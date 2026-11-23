@@ -113,9 +113,14 @@ export class Auth {
     return this.sessions.listOf(user.id);
   }
 
-  /** Save that the browser was used now, from this address */
-  markSeen(session: Session, address: string): void {
-    this.sessions.markSeen(session, address);
+  /** Save that the browser was used now, from this address. True when it saved, false when it skipped a recent use. */
+  markSeen(session: Session, address: string): boolean {
+    return this.sessions.markSeen(session, address);
+  }
+
+  /** The seconds before the session ends at its 1-year limit, for the Max-Age of its cookie */
+  secondsLeftOf(session: Session): number {
+    return this.sessions.secondsLeft(session);
   }
 
   logOut(session: Session): void {
