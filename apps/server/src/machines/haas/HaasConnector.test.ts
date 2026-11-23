@@ -571,6 +571,20 @@ describe('Haas reply size limits', () => {
     expect(log.text('warn')).toContain(String(MAX_HAAS_LINE_BYTES));
   });
 
+  it('forgets the data stream error at a disconnect, so it does not show after a change of the settings', async () => {
+    const dataPort = await startPort();
+    connector = new HaasConnector({ name: 'VF2', host: '127.0.0.1', dataPort, queryPort: CLOSED_PORT });
+    await connector.connect();
+    await vi.waitFor(() => expect(sentBytes).toHaveLength(1));
+    await sentBytes[0];
+
+    connector.disconnect();
+    const status = await connector.poll();
+
+    expect(sockets).toHaveLength(2);
+    expect(dataStreamErrors(status.errors)).toEqual([]);
+  });
+
   it('fails a query whose reply has no end of line at the limit, and connects the query port again at the next poll', async () => {
     const queryPort = await startPort(socket => answerQueries(socket, { '?Q104': 'MODE, MEM' }));
     connector = new HaasConnector({ id: 'vf2', name: 'VF2', host: '127.0.0.1', dataPort: CLOSED_PORT, queryPort });

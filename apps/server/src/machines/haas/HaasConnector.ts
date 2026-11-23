@@ -405,6 +405,7 @@ export class HaasConnector extends BaseMachineConnector {
     this.queryConnected = false;
     this.connected = false;
     this.clearDataRest();
+    this.dataStreamError = null;
   }
 
   private updateAlarmText(): void {
