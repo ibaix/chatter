@@ -131,6 +131,14 @@ function answerCommands(socket: net.Socket, {
   commands: string[];
   lines: string[];
 }): void {
+  const standardReplies: Record<string, MachineReply> = {
+    USER: '331 Password',
+    PASS: passReply ?? (() => undefined),
+    PASV: control => control.write(`${pasvReply()}\r\n`),
+    EPSV: epsvReply,
+    PWD: '257 "/"',
+    CWD: '250 OK',
+  };
   socket.write('220 Fake machine\r\n');
   let buffered = '';
   socket.on('data', async chunk => {
@@ -142,17 +150,9 @@ function answerCommands(socket: net.Socket, {
       const command = line.split(' ')[0].toUpperCase();
       commands.push(command);
       lines.push(line);
-      const reply = replies[command];
+      const reply = replies[command] ?? standardReplies[command];
       if (typeof reply === 'function') reply(socket);
       else if (reply !== undefined) socket.write(`${reply}\r\n`);
-      else if (command === 'USER') socket.write('331 Password\r\n');
-      else if (command === 'PASS') {
-        if (passReply !== undefined) socket.write(`${passReply}\r\n`);
-      }
-      else if (command === 'PASV') socket.write(`${pasvReply()}\r\n`);
-      else if (command === 'EPSV') socket.write(`${epsvReply}\r\n`);
-      else if (command === 'PWD') socket.write('257 "/"\r\n');
-      else if (command === 'CWD') socket.write('250 OK\r\n');
       else if (command === 'RETR') {
         socket.write('150 Opening data connection\r\n');
         sendFile({ control: socket, data: await nextDataSocket() });
@@ -1335,7 +1335,10 @@ describe('FTPClient raw LIST that ends early', () => {
   }
 
   /** The lines that the machine got on the last control connection, from its USER */
-  const linesOfLastSession = () => machine?.lines.slice(machine.lines.findLastIndex(line => line.startsWith('USER'))) ?? [];
+  const linesOfLastSession = () => {
+    const lines = machine?.lines ?? [];
+    return lines.slice(lines.map(line => line.startsWith('USER')).lastIndexOf(true));
+  };
 
   /** The tree that the walk gave. A test fails when the walk gave an error. */
   async function treeOf(tree: Promise<unknown>): Promise<{ nodes: FTPTreeNode[]; isCutShort: boolean }> {
