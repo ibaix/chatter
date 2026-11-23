@@ -131,7 +131,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
       } catch (error) {
         if (!browserLeft.aborted) throw error;
         // The browser left before the first bytes, and the download stopped. Nobody reads this reply.
-        log.debug('The program download stopped because the browser left before the first bytes', { path: c.req.path });
+        log.debug('The program download stopped because the browser left before the first bytes', { path: c.req.path, error });
         return c.body(null, CLIENT_CLOSED_REQUEST);
       }
       return c.body(streamWithoutErrorText(c, stream, 'The program download'), 200, {
