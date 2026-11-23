@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Auth, UserSession } from './Auth.js';
-import { currentSession, knownDevice, logInFirst, setDeviceCookie, type LoginGuard } from './authRoutes.js';
+import { currentSession, knownDevice, logInFirst, markSessionSeen, setDeviceCookie, type LoginGuard } from './authRoutes.js';
 import { deviceName } from './deviceName.js';
 import { originOf } from './requestOrigin.js';
 
@@ -21,8 +21,17 @@ function sessionsReport(auth: Auth, current: UserSession) {
  * See where you are logged in, and log out your other browsers.
  * Only a browser can do this: a program that sends the password has no session.
  */
-export function sessionRoutes({ auth, proxySettings }: Pick<LoginGuard, 'auth' | 'proxySettings'>) {
+export function sessionRoutes(guard: Pick<LoginGuard, 'auth' | 'proxySettings'>) {
+  const { auth, proxySettings } = guard;
   return new Hono()
+    // A visible Chatter page sends this from time to time, so its login stays in use. A hidden page does not send it.
+    .post('/auth/sessions/in-use', c => {
+      const current = currentSession(c, auth);
+      if (!current) return logInFirst(c);
+      markSessionSeen(c, guard, current);
+      return c.body(null, 204);
+    })
+
     .get('/auth/sessions', c => {
       const current = currentSession(c, auth);
       return current ? c.json(sessionsReport(auth, current)) : logInFirst(c);

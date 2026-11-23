@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll, beforeEach, vi } from 'vitest';
 import { setTimeout as wait } from 'node:timers/promises';
 import type Database from 'better-sqlite3';
 import type { IncomingMessage } from 'node:http';
@@ -12,6 +12,7 @@ import { hasLongTimeLimit } from './webServerOptions.js';
 import { captureLog } from './logging/testSupport.js';
 import { UNEXPECTED_ERROR_TEXT } from './routes/responses.js';
 import { STREAM_STOPPED_TEXT } from './routes/streamReplies.js';
+import { KEEP_ALIVE_MS } from './realtime/machineEvents.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
 import type { FTPClient } from './ftp/FTPClient.js';
@@ -1525,6 +1526,62 @@ describe('API Routes', () => {
       expect(await endsSoon(readers[0])).toBe(true);
       expect(await endsSoon(browser)).toBe(false);
       await Promise.all([browser, ...readers.slice(1)].map(reader => reader.cancel()));
+    });
+
+    describe('at each keep-alive', () => {
+      beforeEach(() => { vi.useFakeTimers(); });
+      afterEach(() => { vi.useRealTimers(); });
+
+      /** Read the stream until the server ends it, and give all its text */
+      async function restOf(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+        let text = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) return text;
+          text += new TextDecoder().decode(value);
+        }
+      }
+
+      it('ends the live stream of a browser that logged out', async () => {
+        const otherCookie = await otherSessionCookie();
+        const reader = await openEvents(otherCookie);
+
+        await app.request('/api/auth/logout', { method: 'POST', headers: { Cookie: otherCookie } });
+        await vi.advanceTimersByTimeAsync(KEEP_ALIVE_MS);
+
+        expect(await restOf(reader)).not.toContain(': keep-alive');
+        expect((await app.request('/api/events', { headers: { Cookie: otherCookie } })).status).toBe(401);
+      });
+
+      it('ends the live stream of each other browser after Log out all other browsers', async () => {
+        // Its own user, so the login of the other tests stays
+        const own = await loggedInAuth();
+        app = createApp({ poller, auth: own.auth, accounts: own.accounts, history });
+        const clickingCookie = own.cookie;
+        const clicking = await openEvents(clickingCookie);
+        const other = await openEvents(`${SESSION_COOKIE}=${await own.auth.logIn(TEST_LOGIN, { userAgent: 'other browser', address: '127.0.0.1' })}`);
+
+        await app.request('/api/auth/sessions/log-out-others', { method: 'POST', headers: { Cookie: clickingCookie } });
+        await vi.advanceTimersByTimeAsync(KEEP_ALIVE_MS);
+
+        expect(await restOf(other)).not.toContain(': keep-alive');
+        expect(new TextDecoder().decode((await clicking.read()).value)).toContain(': keep-alive');
+        await clicking.cancel();
+      });
+
+      it('keeps the live stream of a program with a password (HTTP Basic)', async () => {
+        const basic = { Authorization: `Basic ${Buffer.from(`${TEST_LOGIN.username}:${TEST_LOGIN.password}`).toString('base64')}` };
+        const reader = await openEvents(basic);
+        const log = captureLog();
+
+        await vi.advanceTimersByTimeAsync(KEEP_ALIVE_MS);
+        const { value } = await reader.read();
+        log.restore();
+
+        expect(new TextDecoder().decode(value)).toContain(': keep-alive');
+        expect(log.lines.filter(line => line.level === 'error')).toEqual([]);
+        await reader.cancel();
+      });
     });
 
     it('lets a login open a new stream after it closes one', async () => {

@@ -13,6 +13,13 @@ const SESSION_LIFETIME_MS = SESSION_LIFETIME_SECONDS * 1000;
 export const MAX_SESSIONS = 50;
 /** The "last seen" time is saved at most this often, so each request does not write to the database */
 export const SEEN_INTERVAL_MS = 60 * 1000;
+/** A session that is not used for this long stops. A browser that is used keeps its session until SESSION_LIFETIME_SECONDS. */
+export const SESSION_IDLE_MS = 14 * 24 * 60 * 60 * 1000;
+/**
+ * The saved "last seen" time can be up to SEEN_INTERVAL_MS before the last use, because markSeen skips some writes.
+ * So a session stops this long after the saved time. Then it never stops less than SESSION_IDLE_MS after its last use.
+ */
+const IDLE_AFTER_SAVED_SEEN_MS = SESSION_IDLE_MS + SEEN_INTERVAL_MS;
 /** A browser can send a very long User-Agent header */
 const MAX_USER_AGENT_LENGTH = 256;
 const MAX_ADDRESS_LENGTH = 64;
@@ -83,7 +90,7 @@ export class SessionStore {
     return token;
   }
 
-  /** The session of this token, or null when it was logged out or is too old */
+  /** The session of this token, or null when it was logged out, is too old, or was not used for too long */
   find(token: string): Session | null {
     const row = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(hashOf(token)) as SessionRow | undefined;
     if (!row || this.isExpired(row)) return null;
@@ -93,8 +100,8 @@ export class SessionStore {
   /** The sessions of a user, the newest use first */
   listOf(userId: number): Session[] {
     const rows = this.db
-      .prepare('SELECT * FROM sessions WHERE user_id = ? AND created_at > ? ORDER BY last_seen_at DESC')
-      .all(userId, this.oldestValidCreation()) as SessionRow[];
+      .prepare('SELECT * FROM sessions WHERE user_id = ? AND created_at > ? AND last_seen_at > ? ORDER BY last_seen_at DESC')
+      .all(userId, this.oldestValidCreation(), this.oldestValidSeen()) as SessionRow[];
     return rows.map(toSession);
   }
 
@@ -125,15 +132,21 @@ export class SessionStore {
   }
 
   private isExpired(row: SessionRow): boolean {
-    return row.created_at <= this.oldestValidCreation();
+    return row.created_at <= this.oldestValidCreation() || row.last_seen_at <= this.oldestValidSeen();
   }
 
   private oldestValidCreation(): number {
     return this.now() - SESSION_LIFETIME_MS;
   }
 
+  private oldestValidSeen(): number {
+    return this.now() - IDLE_AFTER_SAVED_SEEN_MS;
+  }
+
   private removeExpired(): void {
-    this.db.prepare('DELETE FROM sessions WHERE created_at <= ?').run(this.oldestValidCreation());
+    this.db
+      .prepare('DELETE FROM sessions WHERE created_at <= ? OR last_seen_at <= ?')
+      .run(this.oldestValidCreation(), this.oldestValidSeen());
   }
 
   private removeLeastRecentlySeen(userId: number): void {

@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app.js';
 import { HardwarePoller } from '../polling/poller.js';
 import { noHistory } from '../recording/testSupport.js';
-import { SESSION_COOKIE } from './authRoutes.js';
+import { Hono } from 'hono';
+import type { Auth } from './Auth.js';
+import { isStillLoggedIn, SESSION_COOKIE } from './authRoutes.js';
 import { MAX_LOGGED_UNKNOWN_USERS } from './LoginLimiter.js';
 import { LoginLog } from './loginLog.js';
 import { ProxySettings } from './proxySettings.js';
@@ -589,5 +591,40 @@ describe('auth routes behind a reverse proxy', () => {
 
     expect(overHttps.headers.get('Set-Cookie')).toContain('Secure');
     expect(overHttp.headers.get('Set-Cookie')).not.toContain('Secure');
+  });
+});
+
+describe('isStillLoggedIn', () => {
+  /** Tell if the login of a request with these headers is still valid */
+  async function check(auth: Auth, headers: Record<string, string>): Promise<boolean> {
+    const app = new Hono().get('/check', c => c.json(isStillLoggedIn(c, auth)));
+    return (await app.request('/check', { headers })).json() as Promise<boolean>;
+  }
+
+  it('is true for a valid session, and false after the session ended', async () => {
+    const { auth } = authParts();
+    const token = await auth.setUp(ADMIN, { userAgent: 'test browser', address: '127.0.0.1' });
+    const cookie = { Cookie: `${SESSION_COOKIE}=${token}` };
+    expect(await check(auth, cookie)).toBe(true);
+
+    auth.logOut(auth.sessionOf(token!)!);
+
+    expect(await check(auth, cookie)).toBe(false);
+  });
+
+  it('is true for a program with a password (HTTP Basic), because it has no session', async () => {
+    const { auth } = authParts();
+    expect(await check(auth, basic(ADMIN.username, ADMIN.password).headers)).toBe(true);
+  });
+
+  it('is true, and logs the error, when it cannot read the sessions', async () => {
+    const auth = { sessionOf: () => { throw new Error('database is locked'); } } as unknown as Auth;
+    const log = captureLog();
+
+    const result = await check(auth, { Cookie: `${SESSION_COOKIE}=some-token` });
+    log.restore();
+
+    expect(result).toBe(true);
+    expect(log.text('error')).toContain('database is locked');
   });
 });

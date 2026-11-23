@@ -1,10 +1,11 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { MAX_SESSIONS, SEEN_INTERVAL_MS, SESSION_LIFETIME_SECONDS, SessionStore } from './sessionStore.js';
+import { MAX_SESSIONS, SEEN_INTERVAL_MS, SESSION_IDLE_MS, SESSION_LIFETIME_SECONDS, SessionStore } from './sessionStore.js';
 
 const BROWSER = { userAgent: 'Mozilla/5.0 (Macintosh) Chrome/130.0', address: '192.168.1.20' };
 const SAM = 1;
 const JO = 2;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 describe('SessionStore', () => {
   it('finds the session of a token, but not of a made-up token', () => {
@@ -32,6 +33,49 @@ describe('SessionStore', () => {
     now = SESSION_LIFETIME_SECONDS * 1000;
     expect(sessions.find(token)).toBeNull();
     expect(sessions.listOf(SAM)).toEqual([]);
+  });
+
+  it('stops a session after one year, also when the browser uses it each day', () => {
+    let now = 0;
+    const sessions = SessionStore.inMemory(() => now);
+    const token = sessions.create(SAM, BROWSER);
+
+    while (now < SESSION_LIFETIME_SECONDS * 1000 - DAY_MS) {
+      now += DAY_MS;
+      sessions.markSeen(sessions.find(token)!, BROWSER.address);
+    }
+    now = SESSION_LIFETIME_SECONDS * 1000;
+    expect(sessions.find(token)).toBeNull();
+  });
+
+  it('stops a session that is not used for 14 days', () => {
+    expect(SESSION_IDLE_MS).toBe(14 * DAY_MS);
+    let now = 0;
+    const sessions = SessionStore.inMemory(() => now);
+    const token = sessions.create(SAM, BROWSER);
+    // The last use that is not saved, because it comes less than SEEN_INTERVAL_MS after the saved use
+    now = SEEN_INTERVAL_MS - 1;
+    sessions.markSeen(sessions.find(token)!, BROWSER.address);
+
+    now += SESSION_IDLE_MS;
+    expect(sessions.find(token)).not.toBeNull();
+    expect(sessions.listOf(SAM)).toHaveLength(1);
+
+    now += 1;
+    expect(sessions.find(token)).toBeNull();
+    expect(sessions.listOf(SAM)).toEqual([]);
+  });
+
+  it('keeps a session that is used on day 13', () => {
+    let now = 0;
+    const sessions = SessionStore.inMemory(() => now);
+    const token = sessions.create(SAM, BROWSER);
+
+    now = 13 * DAY_MS;
+    sessions.markSeen(sessions.find(token)!, BROWSER.address);
+    now = 13 * DAY_MS + SESSION_IDLE_MS;
+    expect(sessions.find(token)).not.toBeNull();
+    expect(sessions.listOf(SAM)).toHaveLength(1);
   });
 
   it('lists the newest use first', () => {
@@ -131,6 +175,17 @@ describe('SessionStore', () => {
     now = SESSION_LIFETIME_SECONDS * 1000;
     sessions.create(SAM, BROWSER);
     expect(db.prepare('SELECT COUNT(*) AS count FROM sessions').get()).toEqual({ count: 1 });
+  });
+
+  it('removes the sessions that are not used for 14 days from the database at the next login', () => {
+    let now = 0;
+    const db = new Database(':memory:');
+    const sessions = new SessionStore(db, () => now);
+    sessions.create(SAM, BROWSER);
+
+    now = SESSION_IDLE_MS + SEEN_INTERVAL_MS;
+    sessions.create(JO, BROWSER);
+    expect(db.prepare('SELECT user_id FROM sessions').all()).toEqual([{ user_id: JO }]);
   });
 
   it('cuts a very long User-Agent and address', () => {

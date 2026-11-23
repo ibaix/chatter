@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
 import { api } from './api/client';
 import { AppShell } from './components/layout/AppShell';
+import { useLoginInUse } from './hooks/useLoginInUse';
 import { useMachineEvents } from './hooks/useMachineEvents';
 import { machinesWhileChatterIsLost } from './machines/machineStatus';
 import { DashboardPage } from './pages/dashboard/DashboardPage';
@@ -19,6 +20,8 @@ function App() {
   // Live machine status from the server (SSE).
   // It also shows each add, change, and removal, so no call below loads the list again.
   const { isLive, isLoaded } = useMachineEvents(setMachines);
+  // The live connection does not keep the login. Only a visible page does.
+  useLoginInUse();
   // After the first list, a lost live connection makes every value old. The pages then show no machine as running.
   const chatterIsLost = isLoaded && !isLive;
   const shownMachines = chatterIsLost ? machinesWhileChatterIsLost(machines) : machines;

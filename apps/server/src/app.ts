@@ -18,7 +18,7 @@ import { AlertStore } from './alerts/AlertStore.js';
 import { errorReply } from './routes/responses.js';
 import { securityHeaders } from './securityHeaders.js';
 import type { Auth } from './auth/Auth.js';
-import { authRoutes, loginOf, requireLogin } from './auth/authRoutes.js';
+import { authRoutes, isStillLoggedIn, loginOf, requireLogin } from './auth/authRoutes.js';
 import { sessionRoutes } from './auth/sessionRoutes.js';
 import { LoginLimiter } from './auth/LoginLimiter.js';
 import { LoginLog } from './auth/loginLog.js';
@@ -132,7 +132,7 @@ export function createApp({
     .route('/', historyBackupRoutes(poller, historyBackup))
     .route('/', alertRoutes(alerts))
     .route('/', alertRuleRoutes(poller, alertRules))
-    .route('/', machineEventRoutes(new MachineChangeFeed(poller), c => loginOf(c, auth)))
+    .route('/', machineEventRoutes(new MachineChangeFeed(poller), c => loginOf(c, auth), c => isStillLoggedIn(c, auth)))
     .route('/', proxySettingsRoutes(proxySettings))
     .route('/', loginSettingsRoutes(loginGuard))
     .route('/', userSettingsRoutes(accounts))
