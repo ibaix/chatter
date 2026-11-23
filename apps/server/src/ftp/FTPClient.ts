@@ -367,7 +367,9 @@ function joinRemotePath(dirPath: string, name: string): string {
 
 const log = createLogger('ftp');
 
+/** The text of an error. The web server stops a request with a text reason when the browser leaves. */
 function errorText(err: unknown): string {
+  if (typeof err === 'string') return err;
   return err instanceof Error ? err.message : 'Unknown error';
 }
 
