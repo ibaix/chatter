@@ -1,4 +1,5 @@
 // Finds links from the app to the docs site, and the pages and headings that they go to.
+import { posix } from 'node:path';
 
 const DOCS_SITE = 'https://toolpath.github.io/chatter/';
 
@@ -25,28 +26,108 @@ export function docsPageFile(page: string): string {
 /** The heading anchors of a Markdown page: a {#custom} anchor, or the heading text as VitePress makes it. */
 export function anchorsOf(markdown: string): string[] {
   const anchors: string[] = [];
-  const seen = new Map<string, number>();
-  let fence: string | undefined;
-  for (const line of markdown.split('\n')) {
-    const fenceMark = /^(```|~~~)/.exec(line)?.[1];
-    if (fenceMark && (fence === undefined || fence === fenceMark)) {
-      fence = fence === undefined ? fenceMark : undefined;
-      continue;
-    }
-    const heading = fence === undefined && /^#{1,6}\s+(.*)$/.exec(line);
+  for (const line of linesOutsideCodeBlocks(markdown)) {
+    const heading = /^ {0,3}#{1,6}\s+(.*)$/.exec(line);
     if (!heading) continue;
     const custom = /\{#([^}]+)\}\s*$/.exec(heading[1]);
     if (custom) {
+      // VitePress stops the build when a custom anchor is already on the page
       anchors.push(custom[1]);
       continue;
     }
-    // VitePress adds -1, -2, ... to a heading anchor that is already on the page
+    // As markdown-it-anchor in VitePress does: when the anchor is already on the page (from a heading or
+    // a {#id}), try -1, -2, ... until one is free
     const base = slug(textOf(heading[1]));
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    anchors.push(count === 0 ? base : `${base}-${count}`);
+    let anchor = base;
+    for (let i = 1; anchors.includes(anchor); i++) anchor = `${base}-${i}`;
+    anchors.push(anchor);
   }
   return anchors;
+}
+
+/**
+ * The lines of a Markdown page that are not in a code block (``` or ~~~). As in CommonMark, a code block ends at
+ * a fence of the same character that is at least as long as the opening fence and has no text after it.
+ */
+function linesOutsideCodeBlocks(markdown: string): string[] {
+  const lines: string[] = [];
+  let fence: string | undefined;
+  for (const line of withoutFrontmatter(markdown).split('\n')) {
+    const mark = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence === undefined && mark && !(mark[1][0] === '`' && mark[2].includes('`'))) {
+      fence = mark[1];
+      continue;
+    }
+    if (fence !== undefined && mark?.[1][0] === fence[0] && mark[1].length >= fence.length && mark[2].trim() === '') {
+      fence = undefined;
+      continue;
+    }
+    if (fence === undefined) lines.push(line);
+  }
+  return lines;
+}
+
+/** The page without the YAML frontmatter (the lines from a first line "---" to the next "---"), which VitePress does not show */
+function withoutFrontmatter(markdown: string): string {
+  return markdown.replace(/^---[ \t]*\r?\n(?:.*\r?\n)*?---[ \t]*(?:\r?\n|$)/, '');
+}
+
+export interface HeadingLink {
+  /** The Markdown file of the page that the link goes to, from docs/, for example "guide/update.md" */
+  file: string;
+  /** The heading anchor, for example "back-up" */
+  anchor: string;
+  /** The target as written, when the anchor has a bad %-code. The link goes to no heading. */
+  invalid?: string;
+}
+
+/**
+ * The links of a docs page (file, from docs/) to a heading of a docs page, for example "./update.md#back-up"
+ * or "#back-up". Links to other sites, and links in code or in the frontmatter, are not included.
+ *
+ * It reads inline links (with a title in "", '' or (), and a target in <> with no spaces) and reference
+ * definitions ([label]: target). It does NOT read: HTML links (<a href>), links in the frontmatter, a link or
+ * a reference definition on more than one line, a target with spaces or parentheses, and links in .vue files
+ * or in docs/.vitepress/config.mts.
+ */
+export function headingLinksIn(markdown: string, file: string): HeadingLink[] {
+  const links: HeadingLink[] = [];
+  for (const line of linesOutsideCodeBlocks(markdown)) {
+    const withoutCode = line.replace(/`[^`]*`/g, '');
+    for (const target of linkTargetsIn(withoutCode)) {
+      const hash = target.indexOf('#');
+      if (hash < 0 || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+      const page = target.slice(0, hash).replace(/\?.*$/, '');
+      const linked = page === '' ? file : linkedPageFile(page, file);
+      const raw = target.slice(hash + 1);
+      try {
+        links.push({ file: linked, anchor: decodeURIComponent(raw) });
+      } catch {
+        links.push({ file: linked, anchor: raw, invalid: target });
+      }
+    }
+  }
+  return links;
+}
+
+// An inline link [text](target "title"), with the title in "", '' or (), and the target maybe in <>
+const INLINE_LINK = /\]\(\s*<?([^)\s>]*)>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/g;
+// A reference definition [label]: target "title"
+const REFERENCE_DEFINITION = /^ {0,3}\[[^\]]+\]:\s*<?([^\s>]+)>?/;
+
+/** The targets of the inline links and of the reference definition in a line of Markdown */
+function linkTargetsIn(line: string): string[] {
+  const targets = [...line.matchAll(INLINE_LINK)].map(match => match[1]);
+  const reference = REFERENCE_DEFINITION.exec(line)?.[1];
+  return reference === undefined ? targets : [...targets, reference];
+}
+
+/** The Markdown file (from docs/) of a link to a page (with no #anchor), from the page in file */
+function linkedPageFile(page: string, file: string): string {
+  const joined = page.startsWith('/') ? page.slice(1) : posix.join(posix.dirname(file), page);
+  // A link to a folder ("/", "../", "./sub/") goes to the index page of the folder
+  const path = posix.normalize(joined).replace(/^\.(\/|$)/, '');
+  return docsPageFile(path.replace(/\.md$/, ''));
 }
 
 /** The text of a heading as the page shows it: a link gives its text only. */

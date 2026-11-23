@@ -5,9 +5,17 @@ Tests that keep the guardrails in [AGENTS.md](../../AGENTS.md#guardrails):
 - No FANUC FOCAS2 files are in git.
 - `docker-compose.yml` keeps the volume names, and the folder name `chatter` stays in the Docker package and on the Pi card.
 - `docker-compose.yml` and `docker-compose.dev.yml` keep the deduplication of VictoriaMetrics, so a second history restore does not double the samples.
+- `docker-compose.yml` keeps the facts that the docs quote: the container name `chatterbox` (for `docker logs chatterbox`) and the port entry `"3001:3001"` of Chatter (the HTTPS page tells users to change it). To change one, change the docs in the same change.
 - No compose file opens VictoriaMetrics, vmalert or the alert port 3002 to the network.
 - The update helper on the Pi (`STEPS` in `update-chatter.sh`) and Chatter (`UPDATE_STEPS` in `packages/shared`) have the same steps, in the same order.
 - Each docs link in the app goes to a page and a heading that exist. The links of released apps (`guide/update#back-up` and `guide/manage`) always stay.
+- Each link in the docs to a heading (`./page.md#heading` or `#heading`) goes to a heading that exists, with the anchor that VitePress makes (or a `{#id}`). `npm run docs:build` does not check these links. The check reads inline links and reference definitions (`[label]: ./page.md#heading`) in the `.md` files. It does not read these links:
+  - HTML links (`<a href="...">`).
+  - Links in the frontmatter, for example the buttons of the home page.
+  - Links in `.vue` files and in `docs/.vitepress/config.mts` (the menu and the sidebar).
+  - A link or a reference definition on more than one line, and a target with spaces or parentheses.
+
+  The check does not read HTML or entities (such as `&amp;`) in a heading, or a heading with a line of `===` or `---` under it. Then the check can report a link to that heading as dead. Give such a heading a `{#id}`.
 - Each workflow gives only read permissions at the top. A job that must write gets its permissions in its own block. Only the jobs in the allow-list of the test can write, and each one gets exactly the write scopes of its entry. No job gets `write-all`. To give a job write permissions, add it to the allow-list in the same change.
 - Each job that writes in the Pi card, the image cleanup and the moving image tags runs only from main or a release tag.
 - Each workflow pins each action by a full commit, with the version in a comment. A local action (`./`) is not pinned.

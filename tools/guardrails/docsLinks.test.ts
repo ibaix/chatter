@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorsOf, docsLinksIn, docsPageFile } from './docsLinks';
+import { anchorsOf, docsLinksIn, docsPageFile, headingLinksIn } from './docsLinks';
 
 describe('docsLinksIn', () => {
   it('finds full links, DocsLink pages and docsUrl calls', () => {
@@ -57,7 +57,115 @@ describe('anchorsOf', () => {
     expect(anchorsOf('## Steps\n## Steps\n## Steps')).toEqual(['steps', 'steps-1', 'steps-2']);
   });
 
+  it('gives a heading the next free number when a custom anchor or a numbered heading has its anchor', () => {
+    expect(anchorsOf('## Back up {#back-up}\n## Back up')).toEqual(['back-up', 'back-up-1']);
+    expect(anchorsOf('## Foo\n## Foo-1\n## Foo')).toEqual(['foo', 'foo-1', 'foo-2']);
+  });
+
+  it('skips the frontmatter', () => {
+    expect(anchorsOf('---\nlayout: home\n# comment\n---\n## Real')).toEqual(['real']);
+    expect(anchorsOf('## Real\n---\n# After a line\n---')).toEqual(['real', 'after-a-line']);
+  });
+
   it('skips code blocks with tildes', () => {
     expect(anchorsOf('~~~bash\n# not a heading\n~~~\n## Real')).toEqual(['real']);
+  });
+
+  it('ends a code block only at a fence of the same character, as long or longer, with no info string', () => {
+    expect(anchorsOf('````md\n```\n# fake\n```\n# fake2\n````\n## Real')).toEqual(['real']);
+    expect(anchorsOf('~~~md\n```\n# fake\n```\n# fake2\n~~~\n## Real')).toEqual(['real']);
+    expect(anchorsOf('```\n# fake\n```bash\n# fake2\n```\n## Real')).toEqual(['real']);
+    // Backticks after the opening backticks make inline code, not a code block
+    expect(anchorsOf('```inline``` code\n## Real')).toEqual(['real']);
+  });
+
+  it('reads a heading with up to 3 spaces before it, as in a list item', () => {
+    expect(anchorsOf('- x\n  ## In a list\n   ### Three spaces\n    # Code, not a heading')).toEqual(['in-a-list', 'three-spaces']);
+  });
+
+  it('skips a code block in a list item', () => {
+    expect(anchorsOf('- x\n  ```\n  # fake\n  ```\n## Real')).toEqual(['real']);
+  });
+});
+
+describe('headingLinksIn', () => {
+  it('finds links to a heading of another page or of the same page', () => {
+    const markdown = [
+      'See [Back up](./update.md#back-up) and [the plan](#the-plan).',
+      'Read [the security page](../security.md#keep-chatter-db-private) and [logs](logs.md#server-log).',
+      'Also [the API](/api/history.md#alerts), [no .md](/guide/update#back-up) and [a page link](./update.md).',
+    ].join('\n');
+
+    expect(headingLinksIn(markdown, 'guide/logs.md')).toEqual([
+      { file: 'guide/update.md', anchor: 'back-up' },
+      { file: 'guide/logs.md', anchor: 'the-plan' },
+      { file: 'security.md', anchor: 'keep-chatter-db-private' },
+      { file: 'guide/logs.md', anchor: 'server-log' },
+      { file: 'api/history.md', anchor: 'alerts' },
+      { file: 'guide/update.md', anchor: 'back-up' },
+    ]);
+  });
+
+  it('skips links to other sites, code blocks and inline code', () => {
+    const markdown = [
+      '[GitHub](https://github.com/toolpath/chatter#readme) and [mail](mailto:a@b.c#x)',
+      '```md',
+      '[in a block](./update.md#nothing)',
+      '```',
+      'Write `[a link](#not-a-link)` like this.',
+    ].join('\n');
+
+    expect(headingLinksIn(markdown, 'index.md')).toEqual([]);
+  });
+
+  it('decodes the anchor and reads a link with a title', () => {
+    expect(headingLinksIn('[x](./update.md#caf%C3%A9 "Title")', 'guide/a.md')).toEqual([{ file: 'guide/update.md', anchor: 'café' }]);
+  });
+
+  it('skips the frontmatter', () => {
+    expect(headingLinksIn('---\ntext: "[a](#front)"\n---\n[b](#real)', 'a.md')).toEqual([{ file: 'a.md', anchor: 'real' }]);
+  });
+
+  it('finds the index page of a folder link, and drops a query', () => {
+    const markdown = '[a](/#x) [b](../#x) [c](./#x) [d](./x.md?y=1#x) [e](/guide/../x.md#a) [f](./sub/#x) [g](..#x)';
+
+    expect(headingLinksIn(markdown, 'guide/a.md')).toEqual([
+      { file: 'index.md', anchor: 'x' },
+      { file: 'index.md', anchor: 'x' },
+      { file: 'guide/index.md', anchor: 'x' },
+      { file: 'guide/x.md', anchor: 'x' },
+      { file: 'x.md', anchor: 'a' },
+      { file: 'guide/sub/index.md', anchor: 'x' },
+      { file: 'index.md', anchor: 'x' },
+    ]);
+  });
+
+  it('reads link titles in single quotes and in parentheses, and reference definitions', () => {
+    const markdown = [
+      "[a](./x.md#single 'Title') [b](./x.md#paren (Title)) [c](./x.md#double \"Title\")",
+      '[ref]: ./x.md#reference "Title"',
+      "   [ref2]: <../y.md#reference2> 'Title'",
+      '[ref3]: https://example.com/#other-site',
+    ].join('\n');
+
+    expect(headingLinksIn(markdown, 'guide/a.md')).toEqual([
+      { file: 'guide/x.md', anchor: 'single' },
+      { file: 'guide/x.md', anchor: 'paren' },
+      { file: 'guide/x.md', anchor: 'double' },
+      { file: 'guide/x.md', anchor: 'reference' },
+      { file: 'y.md', anchor: 'reference2' },
+    ]);
+  });
+
+  it('gives a link with a bad percent code as not valid, with its target as written', () => {
+    expect(headingLinksIn('[a](./x.md#100%)', 'guide/a.md')).toEqual([{ file: 'guide/x.md', anchor: '100%', invalid: './x.md#100%' }]);
+  });
+
+  it('reads a link in angle brackets', () => {
+    expect(headingLinksIn('[a](<./x.md#angle>)', 'guide/a.md')).toEqual([{ file: 'guide/x.md', anchor: 'angle' }]);
+  });
+
+  it('skips a code block in a list item', () => {
+    expect(headingLinksIn('- x\n  ```\n  [a](#code)\n  ```\n[b](#real)', 'a.md')).toEqual([{ file: 'a.md', anchor: 'real' }]);
   });
 });

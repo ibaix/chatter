@@ -81,7 +81,11 @@ export function useSinumerikCertificateFolder(folder: string): void {
 /** One certificate store for every Siemens machine, so they all use the same client certificate */
 function sharedCertificateManager(): OPCUACertificateManager | undefined {
   if (!certificateFolder) return undefined;
-  // A SINUMERIK server certificate is self-signed, so Chatter trusts the one it meets first
+  // A SINUMERIK server certificate is self-signed. automaticallyAcceptUnknownCertificate makes Chatter accept
+  // each new or changed server certificate with no check by a person. It does not pin a certificate to a host,
+  // and it moves even a certificate in rejected/ to trusted/. So signAndEncrypt hides the data from a device that
+  // only listens. But a device in the middle gets its own certificate accepted, so it can read the data, and
+  // nothing proves which control answers. For this risk, see docs/security.md#how-chatter-is-made-to-be-used.
   certificateManager ??= new OPCUACertificateManager({
     rootFolder: certificateFolder,
     automaticallyAcceptUnknownCertificate: true,
