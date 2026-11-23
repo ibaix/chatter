@@ -30,6 +30,8 @@ const RESULT_TONES: Record<LoginResult, StatusTone> = {
   'wrong-password': 'check',
   'no-such-user': 'check',
   locked: 'bad',
+  // Not a password try, but it changes who controls Chatter
+  'reset-password': 'check',
 };
 
 const RESULT_LABELS: Record<LoginResult, string> = {
@@ -39,6 +41,7 @@ const RESULT_LABELS: Record<LoginResult, string> = {
   'no-such-user': 'No such user',
   // A computer or a user can be locked, and each has a different limit
   locked: 'Locked: too many wrong passwords',
+  'reset-password': 'New Admin from reset-password',
 };
 
 /** The computers and the users that must wait after too many wrong passwords, and the last password tries */
