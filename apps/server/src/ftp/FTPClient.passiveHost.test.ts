@@ -110,8 +110,11 @@ function readAll(socket: net.Socket): Promise<string> {
 }
 
 /** Reply to the commands of FTPClient and basic-ftp. RETR, LIST and STOR use the next data connection. */
-function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSocket, onUpload, commands, sendFile, listing }: {
+function answerCommands(socket: net.Socket, {
+  pasvReply, epsvReply, nextDataSocket, onUpload, commands, sendFile, listing, passReply
+}: {
   pasvReply: () => string;
+  passReply: string;
   sendFile: (transfer: Omit<FileTransfer, 'retrNumber'>) => void;
   listing: string;
   epsvReply: string;
@@ -130,7 +133,7 @@ function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSock
       const command = line.split(' ')[0].toUpperCase();
       commands.push(command);
       if (command === 'USER') socket.write('331 Password\r\n');
-      else if (command === 'PASS') socket.write('230 Logged in\r\n');
+      else if (command === 'PASS') socket.write(`${passReply}\r\n`);
       else if (command === 'PASV') socket.write(`${pasvReply()}\r\n`);
       else if (command === 'EPSV') socket.write(`${epsvReply}\r\n`);
       else if (command === 'PWD') socket.write('257 "/"\r\n');
@@ -168,6 +171,8 @@ interface FakeMachineOptions {
   sendFile?: (transfer: FileTransfer) => void;
   /** The text that each LIST sends */
   listing?: string;
+  /** The machine refuses the login from this control connection on (1 for the first) */
+  refuseLoginFrom?: number;
 }
 
 const MACHINE_DEFAULTS = {
@@ -179,7 +184,7 @@ const MACHINE_DEFAULTS = {
 async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeMachine> {
   const {
     controlHost, pasvReplyHost, supportsEpsv, bareAddress, pasvReplyFor, refuseFirstPasv, programText, listing,
-    sendFile = (transfer: FileTransfer) => sendWholeFile(transfer, programText)
+    refuseLoginFrom = Infinity, sendFile = (transfer: FileTransfer) => sendWholeFile(transfer, programText)
   } = { ...MACHINE_DEFAULTS, ...options };
   const dataSockets: net.Socket[] = [];
   const dataWaiters: Array<(socket: net.Socket) => void> = [];
@@ -222,7 +227,9 @@ async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeM
   const controlServer = net.createServer(socket => {
     controlSockets.add(socket);
     machine.controlConnections += 1;
+    const passReply = machine.controlConnections >= refuseLoginFrom ? '530 Login incorrect' : '230 Logged in';
     answerCommands(socket, {
+      passReply,
       pasvReply: nextPasvReply, epsvReply, nextDataSocket, listing, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands,
       sendFile: transfer => {
         machine.retrCount += 1;
@@ -677,8 +684,8 @@ async function until(condition: () => boolean): Promise<void> {
 }
 
 /** Start a download of O1000 from a new fake machine. `outcome` is 'success' or the error message. */
-async function startDownload({ sendFile, timeoutMs }: { sendFile: (transfer: FileTransfer) => void; timeoutMs: number }) {
-  const machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, sendFile });
+async function startDownload({ timeoutMs, ...options }: FakeMachineOptions & { timeoutMs: number }) {
+  const machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, ...options });
   const ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs });
   const destination = new PassThrough();
   const text = collectText(destination);
@@ -1001,6 +1008,75 @@ describe('FTPClient raw RETR with real timers', () => {
     expect(await download.outcome).toBe('success');
     expect(download.text()).toBe(PROGRAM_TEXT);
     expect(Date.now() - started).toBeGreaterThanOrEqual(timeoutMs * 2);
+  });
+});
+
+// A refused RETR (for example 550, no such file) is a clear answer. A second RETR on a new connection gets the same
+// answer, and a failed second login would hide the real reason.
+describe('FTPClient raw RETR that the machine refuses', () => {
+  const timeoutMs = 200;
+  let machine: FakeMachine | undefined;
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await machine?.close();
+    machine = undefined;
+  });
+
+  /** The machine answers each RETR in `replies` (by its number) with that reply. Other RETRs get the file. */
+  function refuseRetr(replies: Record<number, string>) {
+    return (transfer: FileTransfer) => {
+      const reply = replies[transfer.retrNumber];
+      if (reply === undefined) {
+        sendWholeFile(transfer, PROGRAM_TEXT);
+        return;
+      }
+      transfer.control.write(`${reply}\r\n`);
+      transfer.data.end();
+    };
+  }
+
+  const retrCount = () => machine?.commands.filter(command => command === 'RETR').length;
+
+  it.each([
+    { reply: '550 No such file' },
+    { reply: '450 File busy' },
+  ])('fails with the reply, and runs no fallback, when the machine answers RETR with $reply', async ({ reply }) => {
+    const download = await startDownload({ sendFile: refuseRetr({ 1: reply }), timeoutMs });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe(`FTP download error: ${reply}`);
+    expect(retrCount()).toBe(1);
+    expect(machine.controlConnections).toBe(1);
+  });
+
+  it('runs the fallback when the machine cannot open the data connection for the raw RETR (425)', async () => {
+    const download = await startDownload({ sendFile: refuseRetr({ 1: '425 Cannot open data connection' }), timeoutMs });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('success');
+    expect(download.text()).toBe(PROGRAM_TEXT);
+    expect(retrCount()).toBe(2);
+  });
+
+  it('gives the error of the raw RETR when the second login of the fallback fails', async () => {
+    const download = await startDownload({
+      sendFile: refuseRetr({ 1: '425 Cannot open data connection' }), refuseLoginFrom: 2, timeoutMs
+    });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('FTP download error: 425 Cannot open data connection');
+    expect(machine.controlConnections).toBe(2);
+  });
+
+  it('gives the error of the fallback when the fallback RETR fails', async () => {
+    const download = await startDownload({
+      sendFile: refuseRetr({ 1: '425 Cannot open data connection', 2: '550 No such file' }), timeoutMs
+    });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('FTP download error: 550 No such file');
+    expect(retrCount()).toBe(2);
   });
 });
 
