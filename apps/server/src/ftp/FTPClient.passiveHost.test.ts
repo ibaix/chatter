@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import net from 'net';
-import { PassThrough } from 'stream';
+import { PassThrough, Writable } from 'stream';
 import * as ftp from 'basic-ftp';
-import { FTPClient, MAX_FOLDER_LIST_BYTES } from './FTPClient.js';
+import { FTPClient, MAX_FOLDER_LIST_BYTES, REPLY_AFTER_DATA_WAIT_MS, type DownloadLimits } from './FTPClient.js';
+import { captureLog } from '../logging/testSupport.js';
 
 // A rogue machine can name any host in its PASV reply, so Chatter would open a connection to a host of its choice.
 // The data connection must go only to the host of the control connection, and only the port comes from the reply.
@@ -33,7 +34,22 @@ interface FakeMachine {
   uploadedText: string;
   /** The first word of each command that the machine got */
   commands: string[];
+  /** Control connections (logins) that the machine got */
+  controlConnections: number;
   close(): Promise<void>;
+}
+
+/** One RETR on the fake machine, after its 150 reply */
+interface FileTransfer {
+  control: net.Socket;
+  data: net.Socket;
+  /** 1 for the first RETR of the machine, 2 for the next, and so on */
+  retrNumber: number;
+}
+
+/** The usual RETR: send the whole file, close the data connection, then send 226 */
+function sendWholeFile({ control, data }: FileTransfer, programText: string): void {
+  data.end(programText, () => control.write('226 Transfer complete\r\n'));
 }
 
 function listen(server: net.Server, port: number, host: string): Promise<number> {
@@ -94,9 +110,12 @@ function readAll(socket: net.Socket): Promise<string> {
 }
 
 /** Reply to the commands of FTPClient and basic-ftp. RETR, LIST and STOR use the next data connection. */
-function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSocket, onUpload, commands, programText, listing }: {
+function answerCommands(socket: net.Socket, {
+  pasvReply, epsvReply, nextDataSocket, onUpload, commands, sendFile, listing, passReply
+}: {
   pasvReply: () => string;
-  programText: string;
+  passReply: string;
+  sendFile: (transfer: Omit<FileTransfer, 'retrNumber'>) => void;
   listing: string;
   epsvReply: string;
   nextDataSocket: () => Promise<net.Socket>;
@@ -114,15 +133,17 @@ function answerCommands(socket: net.Socket, { pasvReply, epsvReply, nextDataSock
       const command = line.split(' ')[0].toUpperCase();
       commands.push(command);
       if (command === 'USER') socket.write('331 Password\r\n');
-      else if (command === 'PASS') socket.write('230 Logged in\r\n');
+      else if (command === 'PASS') socket.write(`${passReply}\r\n`);
       else if (command === 'PASV') socket.write(`${pasvReply()}\r\n`);
       else if (command === 'EPSV') socket.write(`${epsvReply}\r\n`);
       else if (command === 'PWD') socket.write('257 "/"\r\n');
       else if (command === 'CWD') socket.write('250 OK\r\n');
-      else if (command === 'RETR' || command === 'LIST') {
+      else if (command === 'RETR') {
         socket.write('150 Opening data connection\r\n');
-        const dataSocket = await nextDataSocket();
-        dataSocket.end(command === 'RETR' ? programText : listing, () => socket.write('226 Transfer complete\r\n'));
+        sendFile({ control: socket, data: await nextDataSocket() });
+      } else if (command === 'LIST') {
+        socket.write('150 Opening data connection\r\n');
+        sendWholeFile({ control: socket, data: await nextDataSocket(), retrNumber: 0 }, listing);
       } else if (command === 'STOR') {
         socket.write('150 Ready for data\r\n');
         onUpload(await readAll(await nextDataSocket()));
@@ -146,8 +167,12 @@ interface FakeMachineOptions {
   refuseFirstPasv?: boolean;
   /** The text of each file that RETR sends */
   programText?: string;
+  /** What the machine does for a RETR after its 150 reply. The default is sendWholeFile with programText. */
+  sendFile?: (transfer: FileTransfer) => void;
   /** The text that each LIST sends */
   listing?: string;
+  /** The machine refuses the login from this control connection on (1 for the first) */
+  refuseLoginFrom?: number;
 }
 
 const MACHINE_DEFAULTS = {
@@ -158,14 +183,17 @@ const MACHINE_DEFAULTS = {
 /** A decoy listens at the host of the PASV reply only when that host is on this computer */
 async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeMachine> {
   const {
-    controlHost, pasvReplyHost, supportsEpsv, bareAddress, pasvReplyFor, refuseFirstPasv, programText, listing
+    controlHost, pasvReplyHost, supportsEpsv, bareAddress, pasvReplyFor, refuseFirstPasv, programText, listing,
+    refuseLoginFrom = Infinity, sendFile = (transfer: FileTransfer) => sendWholeFile(transfer, programText)
   } = { ...MACHINE_DEFAULTS, ...options };
   const dataSockets: net.Socket[] = [];
   const dataWaiters: Array<(socket: net.Socket) => void> = [];
-  const machine = { dataConnections: 0, decoyConnections: 0, uploadedText: '', commands: [] as string[] };
+  const machine = { dataConnections: 0, decoyConnections: 0, controlConnections: 0, retrCount: 0, uploadedText: '', commands: [] as string[] };
 
+  const openDataSockets = new Set<net.Socket>();
   const dataServer = net.createServer(socket => {
     machine.dataConnections += 1;
+    openDataSockets.add(socket);
     socket.on('error', () => undefined);
     const waiter = dataWaiters.shift();
     if (waiter) waiter(socket);
@@ -198,9 +226,15 @@ async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeM
   const controlSockets = new Set<net.Socket>();
   const controlServer = net.createServer(socket => {
     controlSockets.add(socket);
+    machine.controlConnections += 1;
+    const passReply = machine.controlConnections >= refuseLoginFrom ? '530 Login incorrect' : '230 Logged in';
     answerCommands(socket, {
-      pasvReply: nextPasvReply, programText, listing, epsvReply, nextDataSocket,
-      onUpload: text => { machine.uploadedText = text; }, commands: machine.commands
+      passReply,
+      pasvReply: nextPasvReply, epsvReply, nextDataSocket, listing, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands,
+      sendFile: transfer => {
+        machine.retrCount += 1;
+        sendFile({ ...transfer, retrNumber: machine.retrCount });
+      }
     });
   });
   const controlPort = await listen(controlServer, 0, controlHost);
@@ -211,9 +245,11 @@ async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeM
     get dataConnections() { return machine.dataConnections; },
     get decoyConnections() { return machine.decoyConnections; },
     get uploadedText() { return machine.uploadedText; },
+    get controlConnections() { return machine.controlConnections; },
     commands: machine.commands,
     async close() {
       controlSockets.forEach(socket => socket.destroy());
+      openDataSockets.forEach(socket => socket.destroy());
       const decoyClosed = decoyServer.listening ? closeServer(decoyServer) : Promise.resolve();
       await Promise.all([closeServer(controlServer), closeServer(dataServer), decoyClosed]);
     },
@@ -632,6 +668,600 @@ describe('FTPClient raw RETR timer', () => {
     expect(text()).toBe(programText);
     expect(machine.commands).toContain('RETR');
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+/**
+ * Resolve when the condition is true. It does not use vi.waitFor, because with fake timers vi.waitFor moves the
+ * clock at each check. setImmediate and Date are not fake in these tests.
+ */
+async function until(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('The condition did not become true in 2 s');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
+/** Start a download of O1000 from a new fake machine. `outcome` is 'success' or the error message. */
+async function startDownload({ timeoutMs, limits, destination = new PassThrough(), ...options }: FakeMachineOptions & {
+  timeoutMs: number; limits?: Partial<DownloadLimits>; destination?: Writable;
+}) {
+  const machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, ...options });
+  const ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs }, limits);
+  const text = destination instanceof PassThrough ? collectText(destination) : () => '';
+  const download = ftpClient.downloadFile('O1000', destination);
+  // Keep the result, so a rejection before the test reads it is not unhandled
+  const outcome = download.then(() => 'success', (err: Error) => err.message);
+  return { machine, text, outcome };
+}
+
+/** Wait for the next turn of the event loop, so the client can read what came on its sockets */
+function nextTurn(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve));
+}
+
+/** True when the promise has settled. It waits some turns of the event loop first. */
+async function hasSettled(promise: Promise<unknown>): Promise<boolean> {
+  let isSettled = false;
+  void promise.then(() => { isSettled = true; });
+  for (let turn = 0; turn < 10; turn += 1) await nextTurn();
+  return isSettled;
+}
+
+// A machine (or a rogue device) can send part of a file and then stop, with the data connection open. The raw RETR
+// writes each byte to the user at once, so a cut file must fail, and it must never come back as a success.
+describe('FTPClient raw RETR that stops in the middle of a file', () => {
+  const timeoutMs = 200;
+  const firstPart = PROGRAM_TEXT.slice(0, 8);
+  let machine: FakeMachine | undefined;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    await machine?.close();
+    machine = undefined;
+  });
+
+  async function downloadFrom(sendFile: (transfer: FileTransfer) => void) {
+    const download = await startDownload({ sendFile, timeoutMs });
+    machine = download.machine;
+    return download;
+  }
+
+  it('fails, and does not retry, when the machine sends part of the file and then goes silent', async () => {
+    const { text, outcome } = await downloadFrom(({ data }) => data.write(firstPart));
+    await until(() => text() === firstPart);
+
+    vi.advanceTimersByTime(timeoutMs);
+
+    expect(await outcome).toBe('FTP download error: The machine stopped sending the file. Try again.');
+    expect(text()).toBe(firstPart);
+    expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('downloads a file that comes slowly, when each pause is shorter than the timeout', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => { transfer = started; });
+    await until(() => transfer !== undefined);
+
+    let sent = '';
+    for (const letter of PROGRAM_TEXT) {
+      vi.advanceTimersByTime(timeoutMs / 2);
+      transfer?.data.write(letter);
+      sent += letter;
+      await until(() => text() === sent);
+    }
+    if (transfer) sendWholeFile(transfer, '');
+
+    expect(await outcome).toBe('success');
+    expect(text()).toBe(PROGRAM_TEXT);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // With no byte sent to the user, the fallback can start again on a new control connection, where no late reply
+  // of the first RETR can arrive.
+  it('downloads through the fallback on a new connection when the machine sends no byte and goes silent', async () => {
+    const { text, outcome } = await downloadFrom(transfer => {
+      if (transfer.retrNumber > 1) sendWholeFile(transfer, PROGRAM_TEXT);
+    });
+    await until(() => machine?.commands.includes('RETR') === true);
+
+    vi.advanceTimersByTime(timeoutMs);
+
+    expect(await outcome).toBe('success');
+    expect(text()).toBe(PROGRAM_TEXT);
+    expect(machine?.controlConnections).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  /** Send the first part, wait until the user has it, then close the data connection and wait for the close */
+  async function sendPartAndClose(text: () => string, transfer: FileTransfer): Promise<void> {
+    transfer.data.write(firstPart);
+    await until(() => text() === firstPart);
+    await closeData(transfer);
+  }
+
+  /** Close the data connection on the machine, and wait until the client closed it too */
+  async function closeData(transfer: FileTransfer): Promise<void> {
+    let isClosed = false;
+    transfer.data.on('close', () => { isClosed = true; });
+    transfer.data.end();
+    await until(() => isClosed);
+  }
+
+  // Some old, simple FTP servers never send the 226 after RETR. A clean end of the data connection is then the end
+  // of the file. A late reply could go to the next command, so the client closes the control connection.
+  it('downloads the file, and writes a warning, when the data connection ends but the machine sends no 226', async () => {
+    const log = captureLog();
+    try {
+      let transfer: FileTransfer | undefined;
+      const { text, outcome } = await downloadFrom(started => { transfer = started; });
+      await until(() => transfer !== undefined);
+      let isControlClosed = false;
+      transfer?.control.on('close', () => { isControlClosed = true; });
+      if (transfer) await sendPartAndClose(text, transfer);
+
+      vi.advanceTimersByTime(timeoutMs);
+
+      expect(await outcome).toBe('success');
+      expect(text()).toBe(firstPart);
+      await until(() => isControlClosed);
+      const warnings = log.lines.filter(line => line.level === 'warn');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].text).toContain('did not confirm');
+      expect(warnings[0].text).toContain(`host=${NAT_CONTROL_HOST}`);
+      expect(warnings[0].text).toContain('file=O1000');
+      expect(warnings[0].text).toContain(`bytes=${firstPart.length}`);
+      expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      log.restore();
+    }
+  });
+
+  it('writes no warning when the 226 comes', async () => {
+    const log = captureLog();
+    try {
+      const { outcome } = await downloadFrom(transfer => sendWholeFile(transfer, PROGRAM_TEXT));
+
+      expect(await outcome).toBe('success');
+      expect(log.text('warn')).toBe('');
+    } finally {
+      log.restore();
+    }
+  });
+
+  it('waits only a short time for the 226 after the end of the data, also with a long FTP timeout', async () => {
+    let transfer: FileTransfer | undefined;
+    const download = await startDownload({ sendFile: started => { transfer = started; }, timeoutMs: 30_000 });
+    machine = download.machine;
+    await until(() => transfer !== undefined);
+    if (transfer) await sendPartAndClose(download.text, transfer);
+
+    vi.advanceTimersByTime(REPLY_AFTER_DATA_WAIT_MS - 1);
+    expect(await hasSettled(download.outcome)).toBe(false);
+    vi.advanceTimersByTime(1);
+
+    expect(await download.outcome).toBe('success');
+  });
+
+  it.each([
+    { code: 426, reply: '426 Connection closed; transfer aborted', error: '426 Connection closed; transfer aborted' },
+    { code: 451, reply: '451 Local error in processing', error: '451 Local error in processing' },
+    { code: 350, reply: '350 Restarting at 0', error: 'Unexpected reply to RETR: 350 Restarting at 0' },
+  ])('fails when the data connection closes and the machine sends $code', async ({ reply, error }) => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => { transfer = started; });
+    await until(() => transfer !== undefined);
+    if (transfer) await sendPartAndClose(text, transfer);
+
+    transfer?.control.write(`${reply}\r\n`);
+
+    expect(await outcome).toBe(`FTP download error: ${error}`);
+    expect(text()).toBe(firstPart);
+    expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The client must close its data connection after a stall. Else the machine can go on sending to it.
+  it('closes the data connection after a stall, and gives the user no byte that comes later', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => {
+      transfer = started;
+      started.data.write(firstPart);
+    });
+    await until(() => text() === firstPart);
+    let isClosed = false;
+    transfer?.data.on('close', () => { isClosed = true; });
+
+    vi.advanceTimersByTime(timeoutMs);
+
+    expect(await outcome).toBe('FTP download error: The machine stopped sending the file. Try again.');
+    transfer?.data.write('LATE');
+    await until(() => isClosed);
+    expect(text()).toBe(firstPart);
+  });
+
+  it('gives the user no byte that comes after a stall, also before the data connection closes', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => {
+      transfer = started;
+      started.data.write(firstPart);
+    });
+    await until(() => text() === firstPart);
+    // Keep the data connection of the client open, so later bytes can still come to it
+    const realDestroy = net.Socket.prototype.destroy;
+    const heldSockets: net.Socket[] = [];
+    vi.spyOn(net.Socket.prototype, 'destroy').mockImplementation(function (this: net.Socket, ...args: [Error?]) {
+      if (this.remotePort === machine?.dataPort && heldSockets.length === 0) {
+        heldSockets.push(this);
+        return this;
+      }
+      return realDestroy.apply(this, args);
+    });
+
+    vi.advanceTimersByTime(timeoutMs);
+
+    expect(await outcome).toBe('FTP download error: The machine stopped sending the file. Try again.');
+    transfer?.data.write('LATE');
+    await until(() => heldSockets[0]?.bytesRead === firstPart.length + 'LATE'.length);
+    expect(text()).toBe(firstPart);
+    vi.restoreAllMocks();
+    heldSockets[0]?.destroy();
+  });
+
+  it('downloads the whole file when the 226 comes before the end of the data', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => {
+      transfer = started;
+      started.data.write(firstPart);
+    });
+    await until(() => text() === firstPart);
+
+    transfer?.control.write('226 Transfer complete\r\n');
+    await nextTurn();
+    transfer?.data.end(PROGRAM_TEXT.slice(firstPart.length));
+
+    expect(await outcome).toBe('success');
+    expect(text()).toBe(PROGRAM_TEXT);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('downloads the whole file when the 226 comes some time after the end of the data', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => { transfer = started; });
+    await until(() => transfer !== undefined);
+    if (transfer) await sendPartAndClose(text, transfer);
+
+    vi.advanceTimersByTime(timeoutMs / 2);
+    transfer?.control.write('226 Transfer complete\r\n');
+
+    expect(await outcome).toBe('success');
+    expect(text()).toBe(firstPart);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('fails when the data connection breaks and the machine sends no 226', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => {
+      transfer = started;
+      started.data.write(firstPart);
+    });
+    await until(() => text() === firstPart);
+
+    transfer?.data.resetAndDestroy();
+
+    expect(await outcome).toMatch(/^FTP download error: .*ECONNRESET/);
+    expect(text()).toBe(firstPart);
+    expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The end of the data starts the wait for the reply again. Else a slow last chunk leaves too little time for the 226.
+  it('starts the wait for the reply again when the data connection closes', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => { transfer = started; });
+    await until(() => transfer !== undefined);
+    transfer?.data.write(firstPart);
+    await until(() => text() === firstPart);
+    vi.advanceTimersByTime(timeoutMs * 0.75);
+    if (transfer) await closeData(transfer);
+
+    vi.advanceTimersByTime(timeoutMs * 0.75);
+
+    expect(await hasSettled(outcome)).toBe(false);
+    transfer?.control.write('226 Transfer complete\r\n');
+    expect(await outcome).toBe('success');
+  });
+});
+
+// The same checks with real timers. A fake clock cannot show a timer of a socket, such as the timeout of the control
+// connection. The margins are large, so a slow CI computer does not make the test fail.
+describe('FTPClient raw RETR with real timers', () => {
+  const timeoutMs = 300;
+  const pauseMs = 40;
+  let machine: FakeMachine | undefined;
+
+  afterEach(async () => {
+    await machine?.close();
+    machine = undefined;
+  });
+
+  it('downloads a file that comes in small parts for much longer than the timeout', async () => {
+    let transfer: FileTransfer | undefined;
+    const download = await startDownload({ sendFile: started => { transfer = started; }, timeoutMs });
+    machine = download.machine;
+    await until(() => transfer !== undefined);
+    const started = Date.now();
+
+    for (const letter of PROGRAM_TEXT) {
+      await new Promise(resolve => setTimeout(resolve, pauseMs));
+      transfer?.data.write(letter);
+    }
+    if (transfer) sendWholeFile(transfer, '');
+
+    expect(await download.outcome).toBe('success');
+    expect(download.text()).toBe(PROGRAM_TEXT);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(timeoutMs * 2);
+  });
+});
+
+// A refused RETR (for example 550, no such file) is a clear answer. A second RETR on a new connection gets the same
+// answer, and a failed second login would hide the real reason.
+describe('FTPClient raw RETR that the machine refuses', () => {
+  const timeoutMs = 200;
+  let machine: FakeMachine | undefined;
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await machine?.close();
+    machine = undefined;
+  });
+
+  /** The machine answers each RETR in `replies` (by its number) with that reply. Other RETRs get the file. */
+  function refuseRetr(replies: Record<number, string>) {
+    return (transfer: FileTransfer) => {
+      const reply = replies[transfer.retrNumber];
+      if (reply === undefined) {
+        sendWholeFile(transfer, PROGRAM_TEXT);
+        return;
+      }
+      transfer.control.write(`${reply}\r\n`);
+      transfer.data.end();
+    };
+  }
+
+  const retrCount = () => machine?.commands.filter(command => command === 'RETR').length;
+
+  it.each([
+    { reply: '550 No such file' },
+    { reply: '450 File busy' },
+  ])('fails with the reply, and runs no fallback, when the machine answers RETR with $reply', async ({ reply }) => {
+    const download = await startDownload({ sendFile: refuseRetr({ 1: reply }), timeoutMs });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe(`FTP download error: ${reply}`);
+    expect(retrCount()).toBe(1);
+    expect(machine.controlConnections).toBe(1);
+  });
+
+  it('runs the fallback when the machine cannot open the data connection for the raw RETR (425)', async () => {
+    const download = await startDownload({ sendFile: refuseRetr({ 1: '425 Cannot open data connection' }), timeoutMs });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('success');
+    expect(download.text()).toBe(PROGRAM_TEXT);
+    expect(retrCount()).toBe(2);
+  });
+
+  it('gives the error of the raw RETR when the second login of the fallback fails', async () => {
+    const download = await startDownload({
+      sendFile: refuseRetr({ 1: '425 Cannot open data connection' }), refuseLoginFrom: 2, timeoutMs
+    });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('FTP download error: 425 Cannot open data connection');
+    expect(machine.controlConnections).toBe(2);
+  });
+
+  it('gives the error of the fallback when the fallback RETR fails', async () => {
+    const download = await startDownload({
+      sendFile: refuseRetr({ 1: '425 Cannot open data connection', 2: '550 No such file' }), timeoutMs
+    });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('FTP download error: 550 No such file');
+    expect(retrCount()).toBe(2);
+  });
+});
+
+// A machine (or a rogue device) can send one byte just before each timeout, or a file with no end. One download
+// must stop after a time limit and a byte limit, on the raw RETR and on the fallback, and close its connections.
+describe('FTPClient download limits', () => {
+  let machine: FakeMachine | undefined;
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    await machine?.close();
+    machine = undefined;
+  });
+
+  /** The first RETR gets 425, so the fallback runs. The second RETR does what `sendFile` does. */
+  function fallbackThat(sendFile: (transfer: FileTransfer) => void) {
+    return (transfer: FileTransfer) => {
+      if (transfer.retrNumber > 1) {
+        sendFile(transfer);
+        return;
+      }
+      transfer.control.write('425 Cannot open data connection\r\n');
+      transfer.data.end();
+    };
+  }
+
+  it('stops a raw RETR that sends one byte just before each timeout, at the time limit', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const timeoutMs = 200;
+    let transfer: FileTransfer | undefined;
+    const download = await startDownload({ sendFile: started => { transfer = started; }, timeoutMs, limits: { timeLimitMs: 1_000 } });
+    machine = download.machine;
+    await until(() => transfer !== undefined);
+    let isDataClosed = false;
+    transfer?.data.on('close', () => { isDataClosed = true; });
+
+    for (let sent = 1; sent <= 6; sent += 1) {
+      transfer?.data.write('X');
+      await until(() => download.text().length === sent);
+      vi.advanceTimersByTime(timeoutMs - 10);
+    }
+
+    expect(await download.outcome).toBe('FTP download error: The download took too long. Chatter stops a download after 1 second.');
+    await until(() => isDataClosed);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('stops a fallback download that does not end, at the time limit', async () => {
+    let transfer: FileTransfer | undefined;
+    const download = await startDownload({
+      sendFile: fallbackThat(started => {
+        transfer = started;
+        started.data.write('X');
+      }),
+      timeoutMs: 5_000, limits: { timeLimitMs: 300 }
+    });
+    machine = download.machine;
+    const started = Date.now();
+
+    expect(await download.outcome).toBe('FTP download error: The download took too long. Chatter stops a download after 0.3 seconds.');
+    expect(Date.now() - started).toBeLessThan(3_000);
+    let isDataClosed = transfer?.data.destroyed === true;
+    transfer?.data.on('close', () => { isDataClosed = true; });
+    await until(() => isDataClosed);
+  });
+
+  // After the time limit, the fallback must not log in again: it would download with no time limit
+  it('runs no fallback when the time limit comes before the first byte', async () => {
+    const download = await startDownload({
+      sendFile: transfer => {
+        if (transfer.retrNumber > 1) sendWholeFile(transfer, PROGRAM_TEXT);
+      },
+      timeoutMs: 5_000, limits: { timeLimitMs: 300 }
+    });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('FTP download error: The download took too long. Chatter stops a download after 0.3 seconds.');
+    expect(machine.commands.filter(command => command === 'RETR')).toHaveLength(1);
+    expect(machine.controlConnections).toBe(1);
+  });
+
+  it('stops a raw RETR at the byte limit, and gives the user no byte over the limit', async () => {
+    let transfer: FileTransfer | undefined;
+    const download = await startDownload({
+      sendFile: started => {
+        transfer = started;
+        started.data.write(PROGRAM_TEXT);
+      },
+      timeoutMs: 5_000, limits: { maxBytes: 10 }
+    });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('FTP download error: The file on the machine is too large. Chatter downloads at most 10 bytes.');
+    expect(download.text().length).toBeLessThanOrEqual(10);
+    let isDataClosed = transfer?.data.destroyed === true;
+    transfer?.data.on('close', () => { isDataClosed = true; });
+    await until(() => isDataClosed);
+    expect(machine.commands.filter(command => command === 'RETR')).toHaveLength(1);
+  });
+
+  it('stops a fallback download at the byte limit', async () => {
+    const download = await startDownload({
+      sendFile: fallbackThat(transfer => sendWholeFile(transfer, PROGRAM_TEXT)), timeoutMs: 5_000, limits: { maxBytes: 10 }
+    });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('FTP download error: The file on the machine is too large. Chatter downloads at most 10 bytes.');
+    expect(download.text().length).toBeLessThanOrEqual(10);
+  });
+
+  it('downloads a file of exactly the byte limit', async () => {
+    const download = await startDownload({ timeoutMs: 5_000, limits: { maxBytes: PROGRAM_TEXT.length } });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('success');
+    expect(download.text()).toBe(PROGRAM_TEXT);
+  });
+});
+
+/** A destination that takes each chunk only when the test lets it, as a slow browser does */
+function slowDestination() {
+  const waiting: Array<() => void> = [];
+  const chunks: Buffer[] = [];
+  const destination = new Writable({
+    highWaterMark: 16 * 1024,
+    write(chunk: Buffer, _encoding, done) {
+      chunks.push(chunk);
+      waiting.push(done);
+    },
+  });
+  return {
+    destination,
+    /** The bytes that wait in memory, and the bytes that the destination took */
+    heldBytes: () => destination.writableLength,
+    text: () => Buffer.concat(chunks).toString(),
+    /** Take all chunks from now on */
+    release() {
+      destination._write = (chunk: Buffer, _encoding, done) => {
+        chunks.push(chunk);
+        done();
+      };
+      waiting.splice(0).forEach(done => done());
+    },
+  };
+}
+
+// The download goes to the HTTP reply. When the browser reads slowly, the raw RETR must stop to read from the machine,
+// so the file does not wait in the memory of a Pi.
+describe('FTPClient raw RETR to a slow destination', () => {
+  let machine: FakeMachine | undefined;
+
+  afterEach(async () => {
+    await machine?.close();
+    machine = undefined;
+  });
+
+  const bigText = 'G01 X1 Y1\n'.repeat(1_600_000);
+
+  it.each([
+    { name: 'the raw RETR', sendFile: (transfer: FileTransfer) => sendWholeFile(transfer, bigText) },
+    {
+      name: 'the fallback',
+      sendFile: (transfer: FileTransfer) => {
+        if (transfer.retrNumber > 1) {
+          sendWholeFile(transfer, bigText);
+          return;
+        }
+        transfer.control.write('425 Cannot open data connection\r\n');
+        transfer.data.end();
+      }
+    },
+  ])('stops to read from the machine in $name while the destination is full, and does not time out', async ({ sendFile }) => {
+    const slow = slowDestination();
+    const download = await startDownload({ sendFile, timeoutMs: 100, destination: slow.destination });
+    machine = download.machine;
+
+    await new Promise(resolve => setTimeout(resolve, 400));
+
+    expect(slow.heldBytes()).toBeLessThan(4 * 1024 * 1024);
+    expect(await hasSettled(download.outcome)).toBe(false);
+    slow.release();
+    expect(await download.outcome).toBe('success');
+    expect(slow.text()).toBe(bigText);
   });
 });
 
