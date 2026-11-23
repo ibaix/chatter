@@ -1322,15 +1322,16 @@ describe('FTPClient raw LIST that ends early', () => {
   /**
    * Record the delay of each timer that starts. The test then sees when the client starts a wait, with no fixed number
    * of event-loop turns. Call `restore` at the end of the test, before the clock is real again.
+   * It is not a vi.spyOn: vi.restoreAllMocks runs after vi.useRealTimers, and would put the fake clock back.
    */
   function recordTimerDelays(): { delays: number[]; restore: () => void } {
     const delays: number[] = [];
     const fakeSetTimeout = globalThis.setTimeout;
-    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((handler: () => void, ms?: number) => {
+    globalThis.setTimeout = ((handler: () => void, ms?: number) => {
       delays.push(ms ?? 0);
       return fakeSetTimeout(handler, ms);
-    }) as typeof setTimeout);
-    return { delays, restore: () => spy.mockRestore() };
+    }) as typeof setTimeout;
+    return { delays, restore: () => { globalThis.setTimeout = fakeSetTimeout; } };
   }
 
   /** The lines that the machine got on the last control connection, from its USER */
