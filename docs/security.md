@@ -41,7 +41,9 @@ These limits are known. They are not bugs, but you must know them:
 Chatter itself cannot install an update. It only puts the update file and a request in a folder. A helper on the Pi, outside Docker, does the install.
 
 - The helper installs only a file that is signed with the Chatter release key, and only a newer version. So a bad download or a bad upload cannot install.
-- GitHub signs the update file in a separate job. Only that job gets the release key, and it runs no GitHub Action except the checkout. It signs only a release tag on `main`. Each workflow pins its actions by a full commit.
+- GitHub signs the update file in a separate job. Only that job gets the release key, and it runs no GitHub Action except the checkout. Each workflow pins its actions by a full commit.
+- The sign job refuses a tag that is not on `main`. This check stops a mistake, but not an attack. For a tag, GitHub runs the workflow file of the tagged commit. So a person who can push to the repo can push a tag on another commit, with a changed workflow that skips the check and reads the key. The `release` environment gives the key to each tag such as `v1.2.0`. A tag ruleset and required reviewers on the `release` environment stop this attack. These settings are a separate item, and they are not on yet.
+- Until these settings are on, a new tag on an old commit of `main` also gets a signed update file.
 - The helper does not trust anything that Chatter says or puts in the folder. So an attacker who breaks into Chatter cannot use the helper to take control of the Pi.
 - A newer helper also accepts the request `reboot`, and restarts the Pi at most once in 15 minutes. So an attacker who breaks into Chatter can restart the Pi, but cannot keep it down.
 - A newer helper writes `network.json` (the addresses of the Pi, the gateway, and if SSH is on) and `helper.log` for **Settings > Diagnostics**. It writes each value only when the value has the expected shape.
