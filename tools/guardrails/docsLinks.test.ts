@@ -60,6 +60,10 @@ describe('anchorsOf', () => {
   it('skips code blocks with tildes', () => {
     expect(anchorsOf('~~~bash\n# not a heading\n~~~\n## Real')).toEqual(['real']);
   });
+
+  it('skips a code block in a list item', () => {
+    expect(anchorsOf('- x\n  ```\n  # fake\n  ```\n## Real')).toEqual(['real']);
+  });
 });
 
 describe('headingLinksIn', () => {
@@ -94,5 +98,13 @@ describe('headingLinksIn', () => {
 
   it('decodes the anchor and reads a link with a title', () => {
     expect(headingLinksIn('[x](./update.md#caf%C3%A9 "Title")', 'guide/a.md')).toEqual([{ file: 'guide/update.md', anchor: 'café' }]);
+  });
+
+  it('reads a link in angle brackets', () => {
+    expect(headingLinksIn('[a](<./x.md#angle>)', 'guide/a.md')).toEqual([{ file: 'guide/x.md', anchor: 'angle' }]);
+  });
+
+  it('skips a code block in a list item', () => {
+    expect(headingLinksIn('- x\n  ```\n  [a](#code)\n  ```\n[b](#real)', 'a.md')).toEqual([{ file: 'a.md', anchor: 'real' }]);
   });
 });
