@@ -259,8 +259,9 @@ describe('HistoryBackup', () => {
       const reader = backups.download(prepared.id, source.id, 'admin').stream.getReader();
       await reader.read();
       await reader.cancel();
-      await new Promise(resolve => setTimeout(resolve, 20));
-      expect(filesLeft()).toEqual([]);
+      // The delete runs after the cancel, and takes longer on a slow disk or under coverage.
+      // The download stops by itself only after 5 minutes, so the wait cannot pass because of that.
+      await vi.waitFor(() => expect(filesLeft()).toEqual([]), { timeout: 3_000 });
       await backups.prepareBackup(source, ALL, 'admin');
     });
 
