@@ -229,7 +229,7 @@ function problemWithMovedSecrets(
   const problem = `Type the ${labelsOf(kept)} again. You changed the ${labelsOf(changed)}. `
     + 'Chatter does not send a saved secret to a new address.';
   // The form can delete only a secret that is not necessary
-  return kept.some(field => field.required) ? problem : `${problem} To use no secret, select Delete the saved secret.`;
+  return kept.some(field => !field.required) ? `${problem} To use no secret, select Delete the saved secret.` : problem;
 }
 
 /** An address that is not there, or empty, is the default address of the type, for example ntfy.sh */
