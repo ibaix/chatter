@@ -13,6 +13,7 @@ import { isStillLoggedIn, SESSION_COOKIE } from './authRoutes.js';
 import { MAX_LOGGED_UNKNOWN_USERS } from './LoginLimiter.js';
 import { LoginLog } from './loginLog.js';
 import { ProxySettings } from './proxySettings.js';
+import { SEEN_INTERVAL_MS, SESSION_IDLE_MS, SESSION_LIFETIME_SECONDS } from './sessionStore.js';
 import { authParts } from './testSupport.js';
 import { captureLog, type CapturedLog } from '../logging/testSupport.js';
 
@@ -591,6 +592,115 @@ describe('auth routes behind a reverse proxy', () => {
 
     expect(overHttps.headers.get('Set-Cookie')).toContain('Secure');
     expect(overHttp.headers.get('Set-Cookie')).not.toContain('Secure');
+  });
+});
+
+describe('the Secure flag of a login cookie from plain HTTP', () => {
+  const PROXY = '127.0.0.1';
+  const USER = '192.168.1.20';
+  /** What the Node server gives each request: here, a connection from the proxy, or from a computer that is not trusted */
+  const fromProxy = { incoming: { socket: { remoteAddress: PROXY } } };
+  const fromUntrusted = { incoming: { socket: { remoteAddress: '192.168.1.99' } } };
+  let now: number;
+  let app: ReturnType<typeof createApp>;
+  let auth: Auth;
+  let cookie: string;
+
+  /** A request that the proxy sends on for the user, over HTTP or HTTPS */
+  const viaProxy = (path: string, protocol: string, headers: Record<string, string> = {}, method = 'GET') =>
+    app.request(path, { method, headers: { 'X-Forwarded-For': USER, 'X-Forwarded-Proto': protocol, ...headers } }, fromProxy);
+  const withSession = (path: string, protocol: string, method = 'GET') =>
+    viaProxy(path, protocol, { Cookie: cookie }, method);
+
+  beforeEach(async () => {
+    now = Date.parse('2026-11-09T10:00:00Z');
+    const db = new Database(':memory:');
+    const parts = authParts(db, () => now);
+    auth = parts.auth;
+    app = createApp({
+      poller: new HardwarePoller(emptyDb),
+      auth,
+      accounts: parts.accounts,
+      history: noHistory(),
+      proxySettings: ProxySettings.inMemory(PROXY),
+    });
+    const login = await app.request('/api/auth/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': USER, 'X-Forwarded-Proto': 'http' },
+      body: JSON.stringify(ADMIN),
+    }, fromProxy);
+    const setCookie = login.headers.get('Set-Cookie') ?? '';
+    expect(setCookie).not.toContain('Secure');
+    cookie = setCookie.split(';')[0];
+    now += SEEN_INTERVAL_MS;
+  });
+
+  it('sets the cookie again with the Secure flag when the browser uses it over HTTPS', async () => {
+    const res = await withSession('/api/machines', 'https');
+
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get('Set-Cookie') ?? '';
+    expect(setCookie.split(';')[0]).toBe(cookie);
+    expect(setCookie).toContain('Secure');
+    expect(setCookie).toContain('HttpOnly');
+    expect(setCookie).toContain('SameSite=Lax');
+    expect(setCookie).toContain('Path=/;');
+    expect(setCookie).toContain(`Max-Age=${SESSION_LIFETIME_SECONDS}`);
+  });
+
+  it('sets the cookie again when a visible page tells over HTTPS that its login is in use', async () => {
+    const res = await withSession('/api/auth/sessions/in-use', 'https', 'POST');
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get('Set-Cookie')).toContain('Secure');
+  });
+
+  it('does not set the cookie over plain HTTP', async () => {
+    const res = await withSession('/api/machines', 'http');
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Set-Cookie')).toBeNull();
+  });
+
+  it('sets the cookie at most once in each SEEN_INTERVAL_MS', async () => {
+    expect((await withSession('/api/machines', 'https')).headers.get('Set-Cookie')).toContain('Secure');
+
+    now += SEEN_INTERVAL_MS - 1;
+    expect((await withSession('/api/machines', 'https')).headers.get('Set-Cookie')).toBeNull();
+    now += 1;
+    expect((await withSession('/api/machines', 'https')).headers.get('Set-Cookie')).toContain('Secure');
+  });
+
+  it('does not trust the X-Forwarded-Proto header of a computer that is not a trusted proxy', async () => {
+    const res = await app.request('/api/machines', {
+      headers: { Cookie: cookie, 'X-Forwarded-For': USER, 'X-Forwarded-Proto': 'https' },
+    }, fromUntrusted);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Set-Cookie')).toBeNull();
+  });
+
+  it('does not set a cookie for a program that sends its password (HTTP Basic)', async () => {
+    const res = await viaProxy('/api/machines', 'https', basic(ADMIN.username, ADMIN.password).headers);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Set-Cookie')).toBeNull();
+  });
+
+  it('does not set the cookie again for a session that ended', async () => {
+    auth.logOut(auth.sessionOf(cookie.split('=')[1])!);
+    const res = await withSession('/api/machines', 'https');
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('Set-Cookie')).toBeNull();
+  });
+
+  it('does not set the cookie again for a session that was not used for 14 days', async () => {
+    now += SESSION_IDLE_MS + SEEN_INTERVAL_MS;
+    const res = await withSession('/api/machines', 'https');
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('Set-Cookie')).toBeNull();
   });
 });
 
