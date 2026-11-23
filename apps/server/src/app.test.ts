@@ -1,14 +1,20 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import type Database from 'better-sqlite3';
+import type { IncomingMessage } from 'node:http';
 import { createApp } from './app.js';
 import { HardwarePoller } from './polling/poller.js';
 import type { Auth } from './auth/Auth.js';
 import type { UserAccounts } from './auth/userAccounts.js';
 import { loggedInAuth } from './auth/testSupport.js';
+import { SESSION_COOKIE } from './auth/authRoutes.js';
+import { hasLongTimeLimit } from './webServerOptions.js';
+import { captureLog } from './logging/testSupport.js';
+import { UNEXPECTED_ERROR_TEXT } from './routes/responses.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
+import type { FTPClient } from './ftp/FTPClient.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
-import { PROGRAM_UPLOAD_LIMIT_BYTES, SUPPORTED_MACHINE_TYPES } from '@local-chatter/shared';
+import { FILE_LIST_CUT_SHORT_HEADER, PROGRAM_UPLOAD_LIMIT_BYTES, SUPPORTED_MACHINE_TYPES, type FTPTreeNode } from '@local-chatter/shared';
 
 // Mock the db module
 vi.mock('./storage/database.js', () => ({
@@ -114,6 +120,38 @@ describe('API Routes', () => {
 
       expect(res.status).toBe(200);
       expect(await res.json()).toMatchObject({ version: '1.2.0' });
+    });
+  });
+
+  describe('the time limit of a large upload', () => {
+    /** Each route that takes a large file. "m1" does not need to be a machine: the route marks the request first. */
+    const LARGE_UPLOADS = [
+      '/api/updates/file', '/api/machine/m1/history-restore', '/api/focas/library',
+      '/api/machine/m1/files/upload', '/api/machine/m1/files/upload-batch',
+    ];
+
+    /** True when the route gave the request the long time limit */
+    async function getsLongTime(path: string, headers: Record<string, string>): Promise<boolean> {
+      const incoming = {} as IncomingMessage;
+      await app.request(path, { method: 'POST', headers, body: 'x' }, { incoming });
+      return hasLongTimeLimit(incoming);
+    }
+
+    it('gives the long time to each large upload, but only after the login and the role check', async () => {
+      const viewer = { username: 'time-viewer', password: 'test-password' };
+      await accounts.add({ ...viewer, role: 'viewer' });
+      const viewerCookie = `${SESSION_COOKIE}=${await auth.logIn(viewer, { userAgent: 'test browser', address: '127.0.0.1' })}`;
+
+      for (const path of LARGE_UPLOADS) {
+        expect(await getsLongTime(path, { Cookie: cookie }), path).toBe(true);
+        expect(await getsLongTime(path, { Cookie: viewerCookie }), path).toBe(false);
+        expect(await getsLongTime(path, {}), path).toBe(false);
+      }
+    });
+
+    it('gives the normal time to the other routes', async () => {
+      expect(await getsLongTime('/api/auth/login', { 'Content-Type': 'application/json' })).toBe(false);
+      expect(await getsLongTime('/api/machines', { Cookie: cookie, 'Content-Type': 'application/json' })).toBe(false);
     });
   });
 
@@ -814,6 +852,68 @@ describe('API Routes', () => {
       expect(res.status).toBe(404);
       expect(res.body.error).toContain('not found');
     });
+
+    // Each folder level is a LIST on the machine, so a deep tree can keep the machine and Chatter busy for a long time
+    it.each(['0', '6', '50', '99999999999', 'abc', '-1', '1.5'])('refuses depth=%s and sends nothing to the machine', async depth => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      // A mock, so a test that fails does not wait for a machine that is not there
+      const readFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [], isCutShort: false });
+
+      const res = await call('GET', `/api/machine/${machine.id}/files?depth=${depth}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('depth must be a whole number from 1 to 5');
+      expect(readFileTree).not.toHaveBeenCalled();
+    });
+
+    it.each([['1', 1], ['3', 3], ['5', 5]])('lists the tree for depth=%s', async (depth, expectedDepth) => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const readFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [], isCutShort: false });
+
+      const res = await call('GET', `/api/machine/${machine.id}/files?path=/PRG&depth=${depth}`);
+
+      expect(res.status).toBe(200);
+      expect(readFileTree).toHaveBeenCalledWith('/PRG', expectedDepth);
+    });
+
+    // The web app shows a note when the list is cut short. The body stays a plain list, as the API docs show it.
+    const PROGRAM: FTPTreeNode = { name: 'O1000', type: 'file', size: 10, path: '/O1000' };
+
+    it('tells the web app in a header when the list was cut short', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [PROGRAM], isCutShort: true });
+
+      const res = await send(`/api/machine/${machine.id}/files`, { method: 'GET' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get(FILE_LIST_CUT_SHORT_HEADER)).toBe('true');
+      expect(await res.json()).toEqual([PROGRAM]);
+    });
+
+    // The connector must pass the flag of the FTP client on to the route
+    it('sends the cut-short header when the FTP client cut the list short', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const { ftpClient } = poller.getConnector(machine.id) as unknown as { ftpClient: FTPClient };
+      const readFileTree = vi.spyOn(ftpClient, 'readFileTree').mockResolvedValue({ nodes: [PROGRAM], isCutShort: true });
+
+      const res = await send(`/api/machine/${machine.id}/files?depth=2`, { method: 'GET' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get(FILE_LIST_CUT_SHORT_HEADER)).toBe('true');
+      expect(await res.json()).toEqual([PROGRAM]);
+      expect(readFileTree).toHaveBeenCalledWith('.', 2);
+    });
+
+    it('sends no cut-short header for a full list', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [PROGRAM], isCutShort: false });
+
+      const res = await send(`/api/machine/${machine.id}/files`, { method: 'GET' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get(FILE_LIST_CUT_SHORT_HEADER)).toBeNull();
+      expect(await res.json()).toEqual([PROGRAM]);
+    });
   });
 
   describe('GET /api/machine/:id/files/download', () => {
@@ -1053,7 +1153,21 @@ describe('API Routes', () => {
       const res = await call('GET', `/api/machine/${machine.id}/files/download?path=/PRG/O1000.NC`);
 
       expect(res.status).toBe(500);
+      // The reply of the machine tells the user what went wrong
       expect(res.body.error).toContain('550');
+    });
+
+    it('keeps the text of the machine when it refuses to delete a file, and logs it', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'deleteFile').mockRejectedValue(new Error('FTP delete error: 550 Permission denied'));
+      const log = captureLog();
+
+      const res = await call('DELETE', `/api/machine/${machine.id}/files?path=/PRG/O1000.NC`);
+      log.restore();
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('FTP delete error: 550 Permission denied');
+      expect(log.text('error')).toContain('550 Permission denied');
     });
 
     it('uploads one file and records it', async () => {
@@ -1067,6 +1181,22 @@ describe('API Routes', () => {
       expect(res.status).toBe(200);
       expect(uploadFile).toHaveBeenCalledWith('/PRG/O1000.NC', Buffer.from('test'), true);
       expect(recordUpload).toHaveBeenCalledWith(machine.id, 'test.nc', 'test.nc', '/PRG/O1000.NC', 'test');
+    });
+
+    it('replies with success when the file is on the machine but the upload history cannot be saved, and logs the error', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'uploadFile').mockResolvedValue();
+      vi.mocked(recordUpload).mockRejectedValueOnce(new Error('SQLITE_FULL: database or disk is full'));
+      const log = captureLog();
+
+      const res = await call('POST', `/api/machine/${machine.id}/files/upload`, uploadForm({ withFile: true, path: '/PRG/O1000.NC' }));
+      log.restore();
+
+      expect(res.status).toBe(200);
+      expect(res.body.path).toBe('/PRG/O1000.NC');
+      expect(JSON.stringify(res.body)).not.toContain('SQLITE');
+      expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
+      expect(log.text('error')).toContain('SQLITE_FULL');
     });
 
     it('returns 409 when the file already exists', async () => {
@@ -1107,6 +1237,25 @@ describe('API Routes', () => {
       ]);
     });
 
+    it('replies with the sent files when the upload history cannot be saved, and logs the error', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'uploadFiles').mockResolvedValue({ success: [{ remotePath: '/PRG/a.nc' }], failed: [] });
+      vi.mocked(recordUpload).mockRejectedValueOnce(new Error('SQLITE_FULL: database or disk is full'));
+      const form = new FormData();
+      form.append('files', new File(['G00'], 'a.nc'));
+      form.append('basePath', '/PRG');
+      const log = captureLog();
+
+      const res = await call('POST', `/api/machine/${machine.id}/files/upload-batch`, form);
+      log.restore();
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toEqual([{ filename: 'a.nc', targetName: 'a.nc', path: '/PRG/a.nc' }]);
+      expect(JSON.stringify(res.body)).not.toContain('SQLITE');
+      expect(log.lines.filter(line => line.level === 'error')).toHaveLength(1);
+      expect(log.text('error')).toContain('SQLITE_FULL');
+    });
+
     it('returns 400 when no files are given', async () => {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
       const form = new FormData();
@@ -1116,6 +1265,155 @@ describe('API Routes', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('No files');
+    });
+  });
+
+  // FTP sends each path in a command line. A line break in a path would add a second command, for example DELE.
+  describe('control characters in a path on the machine', () => {
+    const CONTROL_CHARACTER_ERROR = 'A path or a file name on the machine cannot have a line break or another control character';
+    const BAD_PATHS = ['O1000\r\nDELE O1234', 'O1000\nDELE O1234', 'O1000\0', 'O1000\tX', 'O1000\x7f'];
+    /** The error of a body that the FormData parser of Node 22 cannot read */
+    const MALFORMED_FORM_DATA = 'Malformed FormData';
+
+    async function brotherConnector() {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      return { id: machine.id, connector: poller.getConnector(machine.id)! };
+    }
+
+    function batchForm({ basePath = '/PRG', targetNames, fileName = 'a.nc' }: { basePath?: string; targetNames?: string; fileName?: string }) {
+      const form = new FormData();
+      form.append('files', new File(['G00'], fileName));
+      form.append('basePath', basePath);
+      if (targetNames !== undefined) form.append('targetNames', targetNames);
+      return form;
+    }
+
+    // A raw multipart body, because a File object cannot set the encoded file name that a client can send.
+    function sendBatchWithFileName(fileNameParameter: string, id: string) {
+      const body = [
+        '--x', `Content-Disposition: form-data; name="files"; ${fileNameParameter}`, '', 'G00',
+        '--x', 'Content-Disposition: form-data; name="basePath"', '', '/PRG',
+        '--x--', '',
+      ].join('\r\n');
+      return send(`/api/machine/${id}/files/upload-batch`, {
+        method: 'POST', headers: { 'Content-Type': 'multipart/form-data; boundary=x' }, body,
+      });
+    }
+
+    it.each(BAD_PATHS)('refuses a download of %j and sends nothing to the machine', async path => {
+      const { id, connector } = await brotherConnector();
+      const downloadFile = vi.spyOn(connector, 'downloadFile');
+
+      const res = await call('GET', `/api/machine/${id}/files/download?path=${encodeURIComponent(path)}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
+      expect(downloadFile).not.toHaveBeenCalled();
+    });
+
+    it.each(BAD_PATHS)('refuses a file list of the folder %j', async path => {
+      const { id, connector } = await brotherConnector();
+      const readFileTree = vi.spyOn(connector, 'readFileTree').mockResolvedValue({ nodes: [], isCutShort: false });
+
+      const res = await call('GET', `/api/machine/${id}/files?path=${encodeURIComponent(`/PRG/${path}`)}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
+      expect(readFileTree).not.toHaveBeenCalled();
+    });
+
+    it.each(BAD_PATHS)('refuses a delete of %j', async path => {
+      const { id, connector } = await brotherConnector();
+      const deleteFile = vi.spyOn(connector, 'deleteFile');
+
+      const res = await call('DELETE', `/api/machine/${id}/files?path=${encodeURIComponent(path)}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
+      expect(deleteFile).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['path', { path: 'O1000\r\nDELE O1234' }],
+      ['targetName', { path: '/PRG/O1000.NC', targetName: 'O1000\r\nDELE O1234' }],
+    ])('refuses an upload with a line break in the %s', async (_field, fields: Record<string, string>) => {
+      const { id, connector } = await brotherConnector();
+      const uploadFile = vi.spyOn(connector, 'uploadFile');
+      const form = uploadForm({ withFile: true });
+      for (const [name, value] of Object.entries(fields)) form.append(name, value);
+
+      const res = await call('POST', `/api/machine/${id}/files/upload`, form);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
+      expect(uploadFile).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a basePath with a line break', { basePath: '/PRG\r\nDELE O1234' }, CONTROL_CHARACTER_ERROR],
+      ['a name on the machine with a line break', { targetNames: JSON.stringify({ 'a.nc': 'O1\r\nDELE O1234' }) }, CONTROL_CHARACTER_ERROR],
+      ['a file name key with a line break', { targetNames: JSON.stringify({ 'a.nc\r\nDELE O1234': 'O1' }) }, CONTROL_CHARACTER_ERROR],
+      ['targetNames that are null', { targetNames: 'null' }, 'targetNames must give a name on the machine for each file name'],
+      ['targetNames that are a list', { targetNames: '["O1"]' }, 'targetNames must give a name on the machine for each file name'],
+      ['a name on the machine that is not text', { targetNames: '{"a.nc":5}' }, 'targetNames must give a name on the machine for each file name'],
+      ['targetNames that are not JSON', { targetNames: '{a.nc' }, 'targetNames must be JSON text'],
+    ])('refuses a batch upload with %s', async (_case, fields, error) => {
+      const { id, connector } = await brotherConnector();
+      const uploadFiles = vi.spyOn(connector, 'uploadFiles');
+
+      const res = await call('POST', `/api/machine/${id}/files/upload-batch`, batchForm(fields));
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe(error);
+      expect(uploadFiles).not.toHaveBeenCalled();
+    });
+
+    // The file name goes into the path when targetNames gives no other name. The FormData parser decodes
+    // %0D%0A in a quoted filename to a line break on each Node version, so the route must refuse it.
+    it('refuses a batch upload of a file whose own name has a line break', async () => {
+      const { id, connector } = await brotherConnector();
+      const uploadFiles = vi.spyOn(connector, 'uploadFiles');
+
+      const res = await sendBatchWithFileName('filename="O1%0D%0ADELE%20O1234"', id);
+
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe(CONTROL_CHARACTER_ERROR);
+      expect(uploadFiles).not.toHaveBeenCalled();
+    });
+
+    // Node 24 decodes filename* to a line break, and the route refuses it. Node 22 cannot parse filename*,
+    // and refuses the body as malformed. Each way, no file goes to the machine.
+    it('refuses a batch upload of a file whose filename* has a line break', async () => {
+      const { id, connector } = await brotherConnector();
+      const uploadFiles = vi.spyOn(connector, 'uploadFiles');
+
+      const res = await sendBatchWithFileName("filename*=utf-8''O1%0D%0ADELE%20O1234", id);
+
+      expect(res.status).toBe(400);
+      const { error } = (await res.json()) as { error: string };
+      // When the body parses, only the check of the route can give the 400
+      if (!error.includes(MALFORMED_FORM_DATA)) expect(error).toBe(CONTROL_CHARACTER_ERROR);
+      expect(uploadFiles).not.toHaveBeenCalled();
+    });
+
+    it('sends a file named "constructor" with its own name, not a name from the object prototype', async () => {
+      const { id, connector } = await brotherConnector();
+      const uploadFiles = vi.spyOn(connector, 'uploadFiles').mockResolvedValue({ success: [], failed: [] });
+
+      const res = await call('POST', `/api/machine/${id}/files/upload-batch`, batchForm({ fileName: 'constructor', targetNames: '{}' }));
+
+      expect(res.status).toBe(200);
+      expect(uploadFiles).toHaveBeenCalledWith([{ remotePath: '/PRG/constructor', source: Buffer.from('G00') }], false);
+    });
+
+    it('keeps a path with spaces, dots and letters outside ASCII', async () => {
+      const { id, connector } = await brotherConnector();
+      const downloadFile = vi.spyOn(connector, 'downloadFile').mockImplementation(async (_path, output) => { output.end(); });
+
+      const res = await send(`/api/machine/${id}/files/download?path=${encodeURIComponent('/PRG/Teil A €.v2.nc')}`);
+
+      expect(res.status).toBe(200);
+      expect(downloadFile).toHaveBeenCalledWith('/PRG/Teil A €.v2.nc', expect.anything());
     });
   });
 
@@ -1138,13 +1436,17 @@ describe('API Routes', () => {
   });
 
   describe('errors that a route does not catch', () => {
-    it('returns 500 with the error text', async () => {
+    it('returns 500 with a general text, and logs the error', async () => {
       vi.spyOn(poller, 'getMachines').mockImplementation(() => { throw new Error('database is locked'); });
+      const log = captureLog();
 
       const res = await call('GET', '/api/machines');
+      log.restore();
 
       expect(res.status).toBe(500);
-      expect(res.body.error).toBe('database is locked');
+      expect(res.body.error).toBe(UNEXPECTED_ERROR_TEXT);
+      expect(log.text('error')).toContain('database is locked');
+      expect(log.text('error')).toContain('path=/api/machines');
     });
 
     it('returns 400 for a JSON body that is not an object', async () => {
@@ -1159,16 +1461,100 @@ describe('API Routes', () => {
       expect(body.error).toContain('must be an object');
     });
 
-    it('returns 400 for a body that is not JSON', async () => {
+    it('returns 400 for a body that is not JSON, and logs no error', async () => {
+      const log = captureLog();
+
       const res = await send('/api/machines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{not json',
       });
+      log.restore();
 
       const body = await res.json() as { error: string };
       expect(res.status).toBe(400);
       expect(body.error).toContain('Malformed JSON');
+      expect(log.text('error')).toBe('');
+    });
+  });
+
+  describe('who may read the content of a program', () => {
+    const roleCookies: Record<'viewer' | 'operator' | 'admin', string> = { viewer: '', operator: '', admin: '' };
+
+    beforeAll(async () => {
+      roleCookies.admin = cookie;
+      for (const role of ['viewer', 'operator'] as const) {
+        const login = { username: role, password: 'test-password' };
+        await accounts.add({ ...login, role });
+        roleCookies[role] = `${SESSION_COOKIE}=${await auth.logIn(login, { userAgent: 'test browser', address: '127.0.0.1' })}`;
+      }
+    });
+
+    /** A machine whose connector gives one file in its tree and the text "G00 X0" for a download */
+    async function machineWithFile(): Promise<string> {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const connector = poller.getConnector(machine.id)!;
+      vi.spyOn(connector, 'readFileTree').mockResolvedValue({ nodes: [{ name: 'O1000.NC', path: '/PRG/O1000.NC', type: 'file', size: 6 }], isCutShort: false } as never);
+      vi.spyOn(connector, 'downloadFile').mockImplementation(async (_path, output) => { output.write('G00 X0'); });
+      vi.mocked(getUploadEventById).mockResolvedValue({ id: 1, file_name: 'O1000.NC', file_content: 'G00 X0' } as never);
+      return machine.id;
+    }
+
+    const contentPaths = (id: string) => [
+      `/api/machine/${id}/files/download?path=/PRG/O1000.NC`,
+      `/api/machine/${id}/uploads/events/1`,
+    ];
+    const listPaths = (id: string) => [
+      `/api/machine/${id}/files?path=/PRG`,
+      `/api/machine/${id}/uploads`,
+      `/api/machine/${id}/uploads/1/events`,
+    ];
+
+    const getAs = (role: keyof typeof roleCookies, path: string) => app.request(path, { headers: { Cookie: roleCookies[role] } });
+    /** The header of a program that logs in as the Viewer, with no cookie */
+    const basicViewer = { Authorization: `Basic ${Buffer.from('viewer:test-password').toString('base64')}` };
+
+    it('refuses the content of a program to a Viewer', async () => {
+      const id = await machineWithFile();
+      for (const path of contentPaths(id)) {
+        const res = await getAs('viewer', path);
+        expect(res.status, path).toBe(403);
+        expect(await res.text(), path).not.toContain('G00 X0');
+      }
+      expect(poller.getConnector(id)!.downloadFile).not.toHaveBeenCalled();
+      expect(getUploadEventById).not.toHaveBeenCalled();
+    });
+
+    it.each(['operator', 'admin'] as const)('gives the content of a program to an %s', async role => {
+      const id = await machineWithFile();
+      for (const path of contentPaths(id)) {
+        const res = await getAs(role, path);
+        expect(res.status, path).toBe(200);
+        expect(await res.text(), path).toContain('G00 X0');
+      }
+    });
+
+    it.each(['viewer', 'operator', 'admin'] as const)('gives the program names and dates to a %s', async role => {
+      const id = await machineWithFile();
+      for (const path of listPaths(id)) {
+        expect((await getAs(role, path)).status, path).toBe(200);
+      }
+    });
+
+    // A program logs in with HTTP Basic on each request. The role of its user applies the same as for a browser.
+    it('refuses the content of a program to a Viewer that logs in with HTTP Basic, but gives the names', async () => {
+      const id = await machineWithFile();
+      const getAsBasicViewer = (path: string) => app.request(path, { headers: basicViewer });
+      for (const path of contentPaths(id)) {
+        const res = await getAsBasicViewer(path);
+        expect(res.status, path).toBe(403);
+        expect(await res.text(), path).not.toContain('G00 X0');
+      }
+      for (const path of listPaths(id)) {
+        expect((await getAsBasicViewer(path)).status, path).toBe(200);
+      }
+      expect(poller.getConnector(id)!.downloadFile).not.toHaveBeenCalled();
+      expect(getUploadEventById).not.toHaveBeenCalled();
     });
   });
 });

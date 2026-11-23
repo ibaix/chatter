@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isLocalRange } from '../discovery/addressRange.js';
+import { MAX_TREE_DEPTH } from '../ftp/FTPClient.js';
 import {
   ALERT_CHECKS, ALERT_SEVERITIES, ALERT_SUBJECT_IDS, MAX_ALERT_FOR_MINUTES, MAX_ALERT_NAME_LENGTH, MAX_ALERT_QUERY_LENGTH,
   MAX_ALERT_RULES_PER_MACHINE, MAX_IGNORE_PATTERNS, patternProblem, type AlertSubject,
@@ -80,22 +81,63 @@ export const scanNetworkSchema = z.object({
     .refine(isLocalRange, 'Type the first three numbers of a local network address, such as 192.168.1'),
 }, NOT_AN_OBJECT);
 
+/**
+ * A path or a name on the machine. FTP sends it in a command line, so a line break would start a second command,
+ * for example DELE. \p{Cc} is each control character, CR, LF and NUL included.
+ */
+const CONTROL_CHARACTER_IN_PATH = 'A path or a file name on the machine cannot have a line break or another control character';
+const hasNoControlCharacter = (text: string) => !/\p{Cc}/u.test(text);
+const remoteName = (error?: string) => z.string({ error }).refine(hasNoControlCharacter, CONTROL_CHARACTER_IN_PATH);
+const requiredRemotePath = (requiredMessage: string) => remoteName(requiredMessage).min(1, requiredMessage);
+
+/** JSON text: the name on the machine for each file name */
+const BAD_TARGET_NAMES = 'targetNames must give a name on the machine for each file name';
+const targetNamesJson = z.string()
+  .transform((json, context) => {
+    try {
+      return JSON.parse(json) as unknown;
+    } catch {
+      context.addIssue({ code: 'custom', message: 'targetNames must be JSON text' });
+      return z.NEVER;
+    }
+  })
+  .pipe(z.record(z.string(), remoteName(BAD_TARGET_NAMES), { error: BAD_TARGET_NAMES }))
+  // A key with a bad character matches no file, but a request with one is not from the web app
+  .refine(names => Object.keys(names).every(hasNoControlCharacter), CONTROL_CHARACTER_IN_PATH);
+
+/** The names on the machine from targetNames text, or why the text is bad */
+export type TargetNames = { ok: true; names: Record<string, string> } | { ok: false; error: string };
+
+/** Read targetNames text. A form with no targetNames gives no names. It does not throw on bad text. */
+export function readTargetNames(json: string | undefined): TargetNames {
+  if (json === undefined) return { ok: true, names: {} };
+  const names = targetNamesJson.safeParse(json);
+  return names.success ? { ok: true, names: names.data } : { ok: false, error: names.error.issues[0].message };
+}
+
+/** Each folder level is a LIST on the machine, so the depth has a limit */
+const BAD_TREE_DEPTH = `depth must be a whole number from 1 to ${MAX_TREE_DEPTH}`;
+const treeDepthText = z.string().refine(
+  depth => /^\d+$/.test(depth) && Number(depth) >= 1 && Number(depth) <= MAX_TREE_DEPTH,
+  BAD_TREE_DEPTH
+);
+
 export const fileTreeQuery = z.object({
-  path: z.string().optional(),
-  depth: wholeNumberText('depth').optional(),
+  path: remoteName().optional(),
+  depth: treeDepthText.optional(),
 });
 
 export const filePathQuery = z.object({
-  path: z.string({ error: 'File path is required' }).min(1, 'File path is required'),
+  path: requiredRemotePath('File path is required'),
 });
 
 const trueOrFalse = z.enum(['true', 'false'], { error: 'overwrite must be "true" or "false"' });
 
 export const uploadForm = z.object({
   file: z.instanceof(File, { error: NO_FILE }),
-  path: z.string({ error: 'Remote path is required' }).min(1, 'Remote path is required'),
+  path: requiredRemotePath('Remote path is required'),
   overwrite: trueOrFalse.optional(),
-  targetName: z.string().optional(),
+  targetName: remoteName().optional(),
 });
 
 /** The FANUC FOCAS2 library that an admin uploads */
@@ -106,11 +148,19 @@ export const focasLibraryForm = z.object({
 /** The form gives one file as a value and several files as a list */
 export const batchUploadForm = z.object({
   files: z.union([z.instanceof(File), z.array(z.instanceof(File)).min(1)], { error: 'No files provided' })
-    .transform(files => [files].flat()),
-  basePath: z.string({ error: 'Base path is required' }).min(1, 'Base path is required'),
+    .transform(files => [files].flat())
+    // A file keeps its own name on the machine when targetNames gives no other name
+    .refine(files => files.every(file => hasNoControlCharacter(file.name)), CONTROL_CHARACTER_IN_PATH),
+  basePath: requiredRemotePath('Base path is required'),
   overwrite: trueOrFalse.optional(),
-  /** JSON text: the name on the machine for each file name */
-  targetNames: z.string().optional(),
+  /**
+   * JSON text: the name on the machine for each file name. Bad JSON gets a 400, so no file goes to a wrong name.
+   * The field stays text after the check, because the typed web client sends the form as the route reads it.
+   */
+  targetNames: z.string().superRefine((json, context) => {
+    const names = readTargetNames(json);
+    if (!names.ok) context.addIssue({ code: 'custom', message: names.error });
+  }).optional(),
 });
 
 export const uploadListQuery = z.object({
@@ -235,12 +285,22 @@ export const trustedProxiesSchema = z.object({
   ).max(MAX_TRUSTED_PROXIES, `Trust ${MAX_TRUSTED_PROXIES} proxies or fewer`),
 }, NOT_AN_OBJECT);
 
-/** The computer to unlock in Settings > Logins */
+const ADDRESS_OR_USERNAME = 'Give an address or a username to unlock';
+
+/** The computer (address), or the user on all computers (username), to unlock in Settings > Logins */
 export const unlockSchema = z.object({
-  address: z.string({ error: 'address is required' }).trim()
+  address: z.string({ error: 'address must be text' }).trim()
     .min(1, 'address is required')
-    .max(MAX_ADDRESS_LENGTH, 'The address is too long'),
-}, NOT_AN_OBJECT);
+    .max(MAX_ADDRESS_LENGTH, 'The address is too long')
+    .optional(),
+  username: z.string({ error: 'username must be text' }).trim()
+    .min(1, 'username is required')
+    .max(MAX_USERNAME_LENGTH, 'The username is too long')
+    .optional(),
+}, NOT_AN_OBJECT).refine(
+  unlock => unlock.address !== undefined || unlock.username !== undefined,
+  ADDRESS_OR_USERNAME,
+);
 
 const roleSchema = z.enum(ROLES, { error: 'The role must be "viewer", "operator", or "admin"' });
 

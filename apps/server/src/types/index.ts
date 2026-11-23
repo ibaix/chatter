@@ -23,6 +23,7 @@ export type {
   BrotherMachineUpdate,
   FanucMachineData,
   FanucMachineUpdate,
+  FileTree,
   FTPFileInfo,
   FTPTreeNode,
   HaasMachineData,
@@ -320,6 +321,8 @@ export interface FTPConfig {
   port?: number;
   user?: string;
   password?: string;
+  /** How long the FTP client waits for the machine, in milliseconds. The default is 30 s. */
+  timeoutMs?: number;
 }
 
 export interface FTPUploadFile {

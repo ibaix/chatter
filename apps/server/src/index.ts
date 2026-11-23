@@ -5,7 +5,7 @@ import type { Server } from 'node:http';
 import { createApp, historyBackupFolder } from './app.js';
 import { HistoryBackup } from './history-backup/HistoryBackup.js';
 import { VictoriaHistory } from './history-backup/victoriaHistory.js';
-import { WEB_SERVER_OPTIONS } from './webServerOptions.js';
+import { startWebServer } from './webServerOptions.js';
 import { webAppRoutes } from './webApp.js';
 import { HardwarePoller } from './polling/poller.js';
 import { MetricsWriter } from './recording/MetricsWriter.js';
@@ -32,6 +32,7 @@ import { UserAccounts } from './auth/userAccounts.js';
 import { UserStore } from './auth/userStore.js';
 import { ProxySettings, sqliteProxySettingStore } from './auth/proxySettings.js';
 import { LoginLog } from './auth/loginLog.js';
+import { DEVICE_KEY_FILE, loadDeviceKey } from './auth/deviceCookie.js';
 import { SettingsTable } from './storage/settingsTable.js';
 import { UpdateFolder } from './updates/UpdateFolder.js';
 import { UpdateService } from './updates/UpdateService.js';
@@ -39,7 +40,7 @@ import { chatterVersion } from './updates/chatterVersion.js';
 import { ReleaseWatcher, releasesRepo, sqliteCheckSettingStore } from './updates/ReleaseWatcher.js';
 import { createLogger } from './logging/logger.js';
 import { ConnectionLog } from './logging/ConnectionLog.js';
-import { ServerLog } from './logging/ServerLog.js';
+import { startServerLog } from './logging/startServerLog.js';
 
 const log = createLogger('server');
 
@@ -64,9 +65,11 @@ const ALERT_RULES_DIR = process.env.ALERT_RULES_DIR || path.join(dataFolder(), '
 /** Chatter asks vmalert here to read the rules file again. vmalert has no login, so it must stay on the inside network. */
 const VMALERT_URL = process.env.VMALERT_URL || 'http://localhost:8880';
 
-/** The last lines of the log, in memory and in data/logs, for Settings > Diagnostics */
-const serverLog = ServerLog.forDataFolder(dataFolder());
-serverLog.listen();
+/**
+ * The last lines of the log, in memory and in data/logs, for Settings > Diagnostics.
+ * An error that nothing caught is logged. Then Chatter stops, and Docker starts it again.
+ */
+const { serverLog } = startServerLog(dataFolder());
 
 async function start(): Promise<void> {
   try {
@@ -120,7 +123,8 @@ async function start(): Promise<void> {
 
     const users = new UserStore(getDb());
     const sessions = new SessionStore(getDb());
-    const auth = new Auth(users, sessions);
+    // The key file is in the data volume, so the known browsers stay known after an update
+    const auth = new Auth(users, sessions, loadDeviceKey(path.join(dataFolder(), DEVICE_KEY_FILE)));
     const accounts = new UserAccounts(users, sessions);
     const proxySettings = new ProxySettings(sqliteProxySettingStore(settings), TRUST_PROXY);
     if (proxySettings.addresses.length > 0) log.info('Trusted reverse proxies', { addresses: proxySettings.addresses.join(', ') });
@@ -146,12 +150,13 @@ async function start(): Promise<void> {
       historyHealthUrls: { victoriaMetrics: `${VICTORIA_METRICS_URL}/health`, vmalert: `${VMALERT_URL}/health` },
     });
     if (WEB_DIR) app.route('/', webAppRoutes(WEB_DIR));
-    // serve() makes a plain HTTP/1 server, because no HTTP/2 option is given.
-    // WEB_SERVER_OPTIONS lets a slow upload of an update file take longer than the Node default of 5 minutes.
-    const server = serve({ fetch: app.fetch, port: PORT, serverOptions: WEB_SERVER_OPTIONS }, () => {
-      log.info('Server running', { url: `http://localhost:${PORT}`, webApp: WEB_DIR, liveEvents: '/api/events' });
-      poller.start();
-    }) as Server;
+    // A large upload gets a long time limit. Each other request gets a short one.
+    const server = startWebServer(app, PORT, {
+      onListening: () => {
+        log.info('Server running', { url: `http://localhost:${PORT}`, webApp: WEB_DIR, liveEvents: '/api/events' });
+        poller.start();
+      },
+    });
     const receiver = alertReceiverApp(alerts, {
       isKnownMachine: machineId => poller.getMachine(machineId) !== null,
       afterSave: () => notifications.findAlertChanges(),
