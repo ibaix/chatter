@@ -86,10 +86,18 @@ describe('auth routes', () => {
     expect(await status.json()).toEqual({ setupNeeded: false, loggedIn: true, user: { username: 'admin', role: 'admin' } });
   });
 
-  it('refuses a second setup', async () => {
+  it('refuses a second setup, and does not write that it made an Admin', async () => {
     await setUp();
-    const res = await post('/api/auth/setup', { username: 'attacker', password: 'attacker-password' });
-    expect(res.status).toBe(409);
+    const log = captureLog();
+    try {
+      const res = await post('/api/auth/setup', { username: 'attacker', password: 'attacker-password' });
+
+      expect(res.status).toBe(409);
+      expect(log.text()).not.toContain('made a new Admin');
+      expect(log.text()).not.toContain('username=attacker');
+    } finally {
+      log.restore();
+    }
   });
 
   it('refuses a short password', async () => {
@@ -338,6 +346,8 @@ describe('auth routes', () => {
     expect((await post('/api/auth/login', ADMIN)).status).toBe(200);
     log.restore();
     expect(log.text('error')).toContain('disk full');
+    // The server log still has the try
+    expect(log.text('info')).toMatch(/username=admin.*result=logged-in/);
     vi.restoreAllMocks();
   });
 
@@ -500,6 +510,24 @@ describe('auth routes behind a reverse proxy', () => {
       ]);
       expect(log.text()).not.toContain('bob-new-password');
       expect(log.text()).not.toContain(BOB.password);
+    });
+
+    it('writes a warn line for a wrong current password in a password change, but not the passwords', async () => {
+      const login = await postFor('192.168.1.30', '/api/auth/login', BOB);
+      const cookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+      log = captureLog();
+      const res = await app.request('/api/auth/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '192.168.1.30', Cookie: cookie },
+        body: JSON.stringify({ currentPassword: 'secret-wrong-current', newPassword: 'bob-new-password' }),
+      }, fromProxy);
+
+      expect(res.status).toBe(401);
+      expect(linesWith('warn', 'result=wrong-password')).toEqual([
+        expect.stringMatching(/username=bob.*address=192\.168\.1\.30/),
+      ]);
+      expect(log.text()).not.toContain('secret-wrong-current');
+      expect(log.text()).not.toContain('bob-new-password');
     });
 
     it('writes the login of a program (HTTP Basic) one time, not with each request', async () => {
