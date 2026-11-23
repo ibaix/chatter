@@ -261,7 +261,7 @@ describe('notification routes', () => {
       },
     };
 
-    describe.each(Object.entries(cases))('a %s channel', (_type, { input, urlKey, newUrl, secretKey, secret, error }) => {
+    describe.each(Object.entries(cases))('the %s channel type', (_type, { input, urlKey, newUrl, secretKey, secret, error }) => {
       const withValues = (values: Record<string, string>): ChannelInput => ({ ...input, values: { ...input.values, ...values } });
       const movedForm = withValues({ [urlKey]: newUrl, [secretKey]: '' });
       let id: string;
