@@ -17,7 +17,8 @@ const trackedFiles = () =>
 interface ComposeService {
   command?: string[];
   container_name?: string;
-  networks?: ComposeServiceNetworks;
+  networks?: ComposeServiceNetworks | null;
+  network_mode?: string;
   ports?: ComposePort[];
   volumes?: string[];
 }
@@ -28,6 +29,7 @@ interface ComposeFile {
   volumes?: Record<string, unknown>;
 }
 const compose = (path: string) => parse(read(path)) as ComposeFile;
+const composeFiles = trackedFiles().filter(file => /(^|\/)docker-compose[^/]*\.ya?ml$/.test(file));
 
 describe('FANUC files', () => {
   it('are not in git, because the FOCAS2 library belongs to FANUC', () => {
@@ -46,7 +48,9 @@ describe('user data', () => {
   const main = compose('docker-compose.yml');
 
   it('keeps the volume names in docker-compose.yml', () => {
-    expect(Object.keys(main.volumes ?? {})).toEqual(expect.arrayContaining(['chatterbox-data', 'victoriametrics-data']));
+    expect(Object.keys(main.volumes ?? {})).toEqual(
+      expect.arrayContaining(['chatterbox-data', 'victoriametrics-data', 'chatter-alert-rules']),
+    );
     expect(main.services.chatterbox.volumes).toContain('chatterbox-data:/app/data');
     expect(main.services.victoriametrics.volumes).toContain('victoriametrics-data:/storage');
   });
@@ -71,8 +75,6 @@ describe('closed ports', () => {
   // VictoriaMetrics (8428), vmalert (8880) and the alert port (3002) have no login.
   const noLoginPorts = [8428, 8880, 3002];
   const thisComputerOnly = ['127.0.0.1', 'localhost', '::1'];
-  const composeFiles = trackedFiles().filter(file => /(^|\/)docker-compose[^/]*\.ya?ml$/.test(file));
-
   it('finds the compose files', () => {
     expect(composeFiles).toContain('docker-compose.yml');
   });
@@ -104,14 +106,14 @@ describe('closed ports', () => {
 });
 
 describe('history network', () => {
-  // VictoriaMetrics and vmalert have no login. On an internal network, no computer on the shop network can reach
+  // VictoriaMetrics and vmalert have no login. On an internal network, no other computer on the shop network can reach
   // them, also with a Docker Engine older than 28, and they cannot connect out. Only Chatter is on both networks.
   const main = compose('docker-compose.yml');
-  const networksOfService = (service: string) => networksOf(main.services[service]?.networks);
+  const networksOfService = (service: string) => networksOf(main.services[service] ?? {});
   const isInternal = (network: string) => main.networks?.[network]?.internal === true;
 
   it('makes the network "history" internal in docker-compose.yml', () => {
-    expect(main.networks?.history).toEqual({ internal: true });
+    expect(main.networks?.history?.internal).toBe(true);
   });
 
   it.each(['victoriametrics', 'vmalert'])('puts %s on "history" and on no network that is not internal', service => {
@@ -119,23 +121,39 @@ describe('history network', () => {
     expect(networksOfService(service).filter(network => !isInternal(network))).toEqual([]);
   });
 
+  it('puts each service except chatterbox only on internal networks', () => {
+    // A new service with no "networks:" is on "default", so this test fails until it gets a network.
+    const exposed = Object.keys(main.services)
+      .filter(service => service !== 'chatterbox')
+      .filter(service => networksOfService(service).some(network => !isInternal(network)));
+    expect(exposed).toEqual([]);
+  });
+
   it('puts chatterbox on "default", for the browsers and the machines, and on "history"', () => {
     expect(networksOfService('chatterbox')).toEqual(expect.arrayContaining(['default', 'history']));
   });
 
-  it('keeps the service names, which the Pi card, the update helper and the docs use', () => {
-    expect(Object.keys(main.services).sort()).toEqual(['chatterbox', 'victoriametrics', 'vmalert']);
+  it('keeps "default" not internal, so the browsers reach port 3001 and Chatter reaches the machines', () => {
+    expect(isInternal('default')).toBe(false);
   });
 
-  it('keeps the volume names, so an update finds the data', () => {
-    expect(Object.keys(main.volumes ?? {}).sort()).toEqual(['chatter-alert-rules', 'chatterbox-data', 'victoriametrics-data']);
+  // Docker Compose adds the "networks:" of a file that it merges with docker-compose.yml to the networks of
+  // docker-compose.yml. docker-compose.dev.yml is a different project (chatter-dev), so it is not in this list.
+  const mergedFiles = composeFiles.filter(file => !['docker-compose.yml', 'docker-compose.dev.yml'].includes(file));
+
+  it('finds the files that Docker Compose merges with docker-compose.yml', () => {
+    expect(mergedFiles).toEqual(
+      expect.arrayContaining(['docker-compose.build.yml', 'tools/pi-image/in-pi/docker-compose.override.yml']),
+    );
   });
 
-  it('gives no network in the Pi card override, so the networks of docker-compose.yml apply', () => {
-    // Docker Compose adds a "networks:" of the override to the networks of docker-compose.yml.
-    const override = compose('tools/pi-image/in-pi/docker-compose.override.yml');
-    expect(Object.values(override.services).map(service => service.networks)).toEqual([undefined]);
-    expect(override.networks).toBeUndefined();
+  it.each(mergedFiles)('adds no network in %s, so the networks of docker-compose.yml apply', file => {
+    const merged = compose(file);
+    const withNetworks = Object.entries(merged.services ?? {})
+      .filter(([, service]) => 'networks' in service || 'network_mode' in service)
+      .map(([service]) => service);
+    expect(withNetworks).toEqual([]);
+    expect(merged.networks).toBeUndefined();
   });
 });
 
