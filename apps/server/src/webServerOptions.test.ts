@@ -22,10 +22,77 @@ describe('WEB_SERVER_OPTIONS', () => {
     expect(server.requestTimeout).toBe(UPDATE_TIME_LIMIT_MS);
   });
 
-  it('still closes a connection that does not send its headers within one minute', () => {
+  it('closes a connection that does not send its headers within 20 seconds', () => {
     const server = createServer(WEB_SERVER_OPTIONS);
 
-    expect(server.headersTimeout).toBe(60_000);
+    expect(server.headersTimeout).toBe(20_000);
+  });
+
+  it('checks the header time limit each 5 seconds, not each 30 seconds as the Node default', () => {
+    expect(WEB_SERVER_OPTIONS.connectionsCheckingInterval).toBe(5_000);
+  });
+});
+
+describe('the connection limits of startWebServer', () => {
+  let server: Server;
+
+  afterEach(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+
+  async function start(settings: Parameters<typeof startWebServer>[2]): Promise<number> {
+    server = startWebServer(new Hono().get('/', c => c.text('hello')), 0, settings);
+    await once(server, 'listening');
+    return (server.address() as AddressInfo).port;
+  }
+
+  async function open(port: number): Promise<{ socket: Socket; reply: Promise<string> }> {
+    const socket = connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    return { socket, reply: replyOf(socket) };
+  }
+
+  it('accepts at most 256 connections at a time', async () => {
+    await start({});
+
+    expect(server.maxConnections).toBe(256);
+  });
+
+  it('closes a new connection at once when the limit is full', async () => {
+    const port = await start({ maxConnections: 2 });
+    const first = await open(port);
+    const second = await open(port);
+    await wait(50);
+
+    const third = await open(port);
+    const closedAtOnce = await Promise.race([third.reply.then(() => true), wait(500).then(() => false)]);
+
+    expect(closedAtOnce).toBe(true);
+    expect(first.socket.destroyed).toBe(false);
+    expect(second.socket.destroyed).toBe(false);
+    first.socket.write('GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n');
+    expect(await first.reply).toContain('hello');
+  });
+
+  it('closes a connection that sends no headers after the header time limit', async () => {
+    const port = await start({ serverOptions: { headersTimeout: 200, connectionsCheckingInterval: 50 } });
+    const { socket, reply } = await open(port);
+
+    const closedInTime = await Promise.race([reply.then(() => true), wait(2_000).then(() => false)]);
+
+    expect(closedInTime).toBe(true);
+    socket.destroy();
+  });
+
+  it('keeps a connection open within the header time limit', async () => {
+    const port = await start({ serverOptions: { headersTimeout: 5_000, connectionsCheckingInterval: 50 } });
+    const { socket, reply } = await open(port);
+    await wait(300);
+
+    expect(socket.destroyed).toBe(false);
+    socket.write('GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n');
+    expect(await reply).toContain('hello');
   });
 });
 
