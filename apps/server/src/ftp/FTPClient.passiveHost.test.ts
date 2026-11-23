@@ -787,6 +787,17 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
     await closeData(transfer);
   }
 
+  /** The errors that basic-ftp gives when the machine closes the control connection */
+  const CONTROL_CLOSED_ERROR = /^FTP download error: (Server sent FIN packet unexpectedly|Server closed connection unexpectedly)/;
+
+  /** Close the control connection on the machine, and wait until the client closed it too */
+  async function closeControl(transfer: FileTransfer | undefined): Promise<void> {
+    let isClosed = false;
+    transfer?.control.on('close', () => { isClosed = true; });
+    transfer?.control.end();
+    await until(() => isClosed);
+  }
+
   /** Close the data connection on the machine, and wait until the client closed it too */
   async function closeData(transfer: FileTransfer): Promise<void> {
     let isClosed = false;
@@ -884,8 +895,11 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
 
     transfer?.control.write('426 Connection closed; transfer aborted\r\n');
 
+    // The download must end at the reply, not wait for the data connection to end
+    expect(await hasSettled(outcome)).toBe(true);
     expect(await outcome).toBe('FTP download error: 426 Connection closed; transfer aborted');
-    transfer?.data.end('LATE');
+    // write(), not end(): the machine keeps its side open, so only the client can close the data connection
+    transfer?.data.write('LATE');
     await until(() => isClosed);
     expect(text()).toBe(firstPart);
     expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
@@ -899,9 +913,11 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
     await until(() => transfer !== undefined);
     if (transfer) await sendPartAndClose(text, transfer);
 
-    transfer?.control.end();
+    await closeControl(transfer);
+    // A client that waits for the reply would accept the file when this time is up
+    vi.advanceTimersByTime(REPLY_AFTER_DATA_WAIT_MS);
 
-    expect(await outcome).toMatch(/^FTP download error: /);
+    expect(await outcome).toMatch(CONTROL_CLOSED_ERROR);
     expect(text()).toBe(firstPart);
     expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
