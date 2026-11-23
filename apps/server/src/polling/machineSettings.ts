@@ -199,7 +199,7 @@ export function checkSavedPasswordsStay(connector: BaseMachineConnector, updates
   }
   if (missing.length === 0) return;
   throw new PasswordNeededError(`Type the ${missing.join(' and the ')} again. `
-    + 'You changed the IP address or the port, and Chatter does not send a saved password to a new address. '
+    + 'You changed the IP address or a port. Chatter does not send a saved password to a new address. '
     + 'To use no password, click Remove password.');
 }
 
