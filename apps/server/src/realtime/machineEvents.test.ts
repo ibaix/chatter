@@ -27,6 +27,26 @@ describe('machineEventRoutes', () => {
     expect(log.text('error')).toContain('path=/events');
   });
 
+  it('tells at each keep-alive that the login is in use, so an open dashboard stays logged in', async () => {
+    vi.useFakeTimers();
+    try {
+      const feed = { currentMachines: () => [], subscribe: () => () => {} } as unknown as MachineChangeFeed;
+      const inUse = vi.fn();
+      const app = new Hono().route('/', machineEventRoutes(feed, () => 'admin', inUse));
+      const reader = (await app.request('/events')).body!.getReader();
+      await reader.read();
+      expect(inUse).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(inUse).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(inUse).toHaveBeenCalledTimes(2);
+      await reader.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   describe('when the first send fails', () => {
     /** A feed whose machine list fails while `failing` is true */
     function feedThatFails() {

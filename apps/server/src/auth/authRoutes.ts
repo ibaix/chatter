@@ -202,14 +202,27 @@ function withoutFailing(message: string, save: () => void): void {
   }
 }
 
+/**
+ * Save that the browser of the request was used now, so its session does not stop for no use.
+ * A program login (HTTP Basic) has no session, so nothing is saved for it.
+ */
+export function markSessionSeen(
+  c: Context,
+  { auth, proxySettings }: Pick<LoginGuard, 'auth' | 'proxySettings'>,
+  session: UserSession | null = currentSession(c, auth),
+): void {
+  if (!session) return;
+  const { address } = originOf(c, proxySettings);
+  withoutFailing('[Sessions] Could not save when a browser was used', () => auth.markSeen(session, address));
+}
+
 /** Stops each request that has no valid login. Sets c.var.user for the routes after it. */
 export function requireLogin(guard: LoginGuard) {
   const { auth, proxySettings } = guard;
   return createMiddleware<LoggedInEnv>(async (c, next) => {
     const session = currentSession(c, auth);
     if (session) {
-      const { address } = originOf(c, proxySettings);
-      withoutFailing('[Sessions] Could not save when a browser was used', () => auth.markSeen(session, address));
+      markSessionSeen(c, guard, session);
       c.set('user', session.user);
       return next();
     }

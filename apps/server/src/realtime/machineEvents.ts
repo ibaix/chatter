@@ -42,8 +42,14 @@ function sendChanges(stream: SSEStreamingApi, changes: MachineChanges): void {
  * GET /events: live machine status as server-sent events (SSE).
  * First the full machine list, then only the machines that change.
  * `loginOf` gives the login of the request. When a login opens more than MAX_STREAMS_PER_LOGIN streams, its oldest stream closes.
+ * `markInUse` runs at each keep-alive. A dashboard can show only this stream for many days and send no other request,
+ * so the keep-alive tells that its login is still in use.
  */
-export function machineEventRoutes(feed: MachineChangeFeed, loginOf: (c: Context<LoggedInEnv>) => string) {
+export function machineEventRoutes(
+  feed: MachineChangeFeed,
+  loginOf: (c: Context<LoggedInEnv>) => string,
+  markInUse: (c: Context<LoggedInEnv>) => void = () => {},
+) {
   const openStreams = new StreamsPerLogin(MAX_STREAMS_PER_LOGIN);
   return new Hono<LoggedInEnv>().get('/events', c => streamSSEWithLog(c, 'The live machine events', async stream => {
     let stopped = false;
@@ -70,7 +76,9 @@ export function machineEventRoutes(feed: MachineChangeFeed, loginOf: (c: Context
       await listSent;
       while (!stopped) {
         await Promise.race([stream.sleep(KEEP_ALIVE_MS), whenStopped]);
-        if (!stopped) await stream.write(KEEP_ALIVE_COMMENT);
+        if (stopped) break;
+        markInUse(c);
+        await stream.write(KEEP_ALIVE_COMMENT);
       }
     } finally {
       unsubscribe();
