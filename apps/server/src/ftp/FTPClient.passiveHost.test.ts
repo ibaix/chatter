@@ -923,6 +923,28 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // A control can restart during a transfer. Then the control connection closes before the data connection ends.
+  it('fails, closes the data connection, and does not retry, when the machine closes the control connection while the data comes', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => {
+      transfer = started;
+      started.data.write(firstPart);
+    });
+    await until(() => text() === firstPart);
+    let isClosed = false;
+    transfer?.data.on('close', () => { isClosed = true; });
+
+    await closeControl(transfer);
+
+    expect(await outcome).toMatch(CONTROL_CLOSED_ERROR);
+    // write(), not end(): the machine keeps its side open, so only the client can close the data connection
+    transfer?.data.write('LATE');
+    await until(() => isClosed);
+    expect(text()).toBe(firstPart);
+    expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   // The client must close its data connection after a stall. Else the machine can go on sending to it.
   it('closes the data connection after a stall, and gives the user no byte that comes later', async () => {
     let transfer: FileTransfer | undefined;
