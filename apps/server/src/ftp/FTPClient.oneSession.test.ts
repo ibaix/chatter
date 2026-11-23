@@ -4,6 +4,7 @@ import { PassThrough } from 'stream';
 import { FTPClient } from './FTPClient.js';
 import { MachineBusyError, MAX_WAITING_TASKS } from './sessionQueue.js';
 import { HOST, startEndlessMachine, type EndlessMachine } from './testSupport.js';
+import { captureLog, type CapturedLog } from '../logging/testSupport.js';
 
 // Many CNC FTP servers accept only one session at a time. A second session can fail, or confuse the control.
 // So FTPClient runs the FTP tasks of one machine one at a time: at most one control connection is open.
@@ -400,9 +401,12 @@ function outcomeOf(task: Promise<unknown>): Promise<unknown> {
 describe('FTPClient tasks that wait for a busy machine', () => {
   let endless: EndlessMachine | undefined;
   let machine: CountingMachine | undefined;
+  let log: CapturedLog | undefined;
 
   afterEach(async () => {
     vi.useRealTimers();
+    log?.restore();
+    log = undefined;
     await endless?.close();
     await machine?.close();
     endless = undefined;
@@ -507,19 +511,45 @@ describe('FTPClient tasks that wait for a busy machine', () => {
     expect(endless.commands).not.toContain('DELE');
   });
 
-  it('stops a running upload when its signal aborts, and starts the next task', async () => {
+  // A close of the data connection in the middle of a STOR leaves part of the file on many controls, also over the old
+  // program. So when the browser leaves, a running upload goes on to its end. Only the time limit stops it.
+  it('does not stop a running upload when its signal aborts, and logs a warning', async () => {
+    log = captureLog();
     machine = await startCountingMachine({ holdStor: true });
-    const client = new FTPClient({ host: HOST, port: machine.port });
+    const counting = machine;
+    const client = new FTPClient({ host: HOST, port: counting.port });
     const cancel = new AbortController();
 
     const upload = outcomeOf(client.uploadFile('/PROGRAMS/O4000', 'O4000\nM30\n', true, cancel.signal));
-    await until(() => machine?.uploads.has('/PROGRAMS/O4000') === true);
+    await until(() => counting.uploads.has('/PROGRAMS/O4000'));
     const listed = client.listFiles('/SUBS');
     cancel.abort(new Error('The browser left'));
+    counting.releaseStor();
 
-    expect(((await upload) as Error).message).toBe('FTP upload error: The browser left');
+    expect(await upload).toBe('fulfilled');
+    expect(counting.uploads.get('/PROGRAMS/O4000')).toBe('O4000\nM30\n');
     expect((await listed).map(file => file.name)).toEqual(['O9000']);
-    expect(machine.mostOpenAtCommand()).toBe(1);
+    expect(counting.mostOpenAtCommand()).toBe(1);
+    expect(log.text('warn')).toContain('The browser left during an upload');
+    expect(log.text('warn')).toContain('PROGRAMS/O4000');
+  });
+
+  it('does not stop a running upload batch when its signal aborts', async () => {
+    machine = await startCountingMachine({ holdStor: true });
+    const counting = machine;
+    const client = new FTPClient({ host: HOST, port: counting.port });
+    const cancel = new AbortController();
+
+    const batch = client.uploadFiles([
+      { remotePath: '/PROGRAMS/O4000', source: 'O4000\n' },
+      { remotePath: '/PROGRAMS/O5000', source: 'O5000\n' },
+    ], true, cancel.signal);
+    await until(() => counting.uploads.has('/PROGRAMS/O4000'));
+    cancel.abort(new Error('The browser left'));
+    counting.releaseStor();
+
+    expect(await batch).toEqual({ success: [{ remotePath: 'PROGRAMS/O4000' }, { remotePath: 'PROGRAMS/O5000' }], failed: [] });
+    expect(counting.uploads.get('/PROGRAMS/O5000')).toBe('O5000\n');
   });
 
   // An upload keeps the turn of the machine. A control that never confirms it must not block the other tasks forever.
