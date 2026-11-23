@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../app.js';
+import { captureLog, type CapturedLog } from '../logging/testSupport.js';
 import { HardwarePoller } from '../polling/poller.js';
 import { noHistory } from '../recording/testSupport.js';
 import { DEVICE_COOKIE, SESSION_COOKIE } from './authRoutes.js';
@@ -219,6 +220,36 @@ describe('known device cookie', () => {
 
     expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: old })).status).toBe(429);
     expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: again })).status).toBe(200);
+  });
+
+  describe('server log', () => {
+    let log: CapturedLog | undefined;
+    afterEach(() => {
+      log?.restore();
+      log = undefined;
+    });
+
+    it('tells that a login try used a known device, with its result', async () => {
+      const cookie = await knownDeviceOf(ADMIN);
+      log = captureLog();
+      await send(ADMIN_COMPUTER, '/api/auth/login', WRONG, { cookie });
+      await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie });
+
+      const lines = log.lines.filter(line => line.text.includes('knownDevice=true'));
+      expect(lines).toHaveLength(2);
+      expect(lines[0].text).toContain('username=admin');
+      expect(lines[0].text).toContain(`address=${ADMIN_COMPUTER}`);
+      expect(lines[0].text).toContain('result=wrong-password');
+      expect(lines[1].text).toContain('result=logged-in');
+      expect(log.text()).not.toContain(cookie.split('=')[1]);
+    });
+
+    it('writes no known device line for a login without a device cookie', async () => {
+      log = captureLog();
+      await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN);
+
+      expect(log.text()).not.toContain('knownDevice');
+    });
   });
 
   it('keeps the device cookie on logout', async () => {

@@ -138,8 +138,11 @@ async function withPasswordCheck<Value>(
   { address }: RequestOrigin,
   { username, device, success, check }: PasswordTry<Value>,
 ): Promise<Checked<Value>> {
-  const recordTry = (result: LoginResult) =>
+  const recordTry = (result: LoginResult) => {
+    // The login log on the Logins tab does not show the device, so the server log tells it
+    if (device) log.info('Login try from a known browser', { username, address, result, knownDevice: true });
     withoutFailing('[Login log] Could not save a login try', () => loginLog.record({ username, address, result }));
+  };
   if (limiter.isBlocked(address, username, device)) {
     if (limiter.isFirstBlockedTry(address, username, device)) recordTry('locked');
     return { ok: false, reply: tooManyTries(c) };
