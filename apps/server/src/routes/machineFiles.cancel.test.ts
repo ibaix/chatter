@@ -31,17 +31,21 @@ function appFor(machine: EndlessMachine) {
 }
 
 describe('a program download that the browser cancels', () => {
-  let machine: EndlessMachine;
-  let server: Server;
+  let machine: EndlessMachine | undefined;
+  let server: Server | undefined;
   let browser: Socket | undefined;
-  let log: CapturedLog;
+  let log: CapturedLog | undefined;
 
   afterEach(async () => {
-    log.restore();
+    log?.restore();
     browser?.destroy();
-    server.closeAllConnections();
-    server.close();
-    await machine.close();
+    server?.closeAllConnections();
+    if (server) await new Promise<void>((resolve, reject) => server!.close(err => (err ? reject(err) : resolve())));
+    await machine?.close();
+    log = undefined;
+    browser = undefined;
+    server = undefined;
+    machine = undefined;
   });
 
   it('closes the data and control connections to the machine, and logs no error', async () => {
@@ -63,7 +67,7 @@ describe('a program download that the browser cancels', () => {
 
     // The browser cancels the download
     browser.destroy();
-    await waitFor(() => machine.openDataConnections() === 0 && machine.openControlConnections() === 0);
+    await waitFor(() => machine!.openDataConnections() === 0 && machine!.openControlConnections() === 0);
 
     expect(machine.openDataConnections()).toBe(0);
     expect(machine.openControlConnections()).toBe(0);
