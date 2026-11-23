@@ -15,6 +15,8 @@ export interface EndlessMachine {
   openDataConnections(): number;
   /** The number of control connections that are open now */
   openControlConnections(): number;
+  /** With `holdData`: start to send the file */
+  releaseData(): void;
   close(): Promise<void>;
 }
 
@@ -28,18 +30,35 @@ function trackOpen(sockets: Set<net.Socket>, socket: net.Socket): void {
   socket.on('error', () => undefined);
 }
 
+const CHUNK = 'G01 X1 Y1\n';
+
 /** Send chunks on the data connection until it closes */
 function sendForever(dataSocket: net.Socket): void {
-  const timer = setInterval(() => dataSocket.write('G01 X1 Y1\n'), CHUNK_INTERVAL_MS);
+  const timer = setInterval(() => dataSocket.write(CHUNK), CHUNK_INTERVAL_MS);
   dataSocket.on('close', () => clearInterval(timer));
 }
 
-/**
- * A machine that sends an endless file. With `refuseFirstPasv`, the raw RETR of FTPClient fails,
- * and the download of basic-ftp (the fallback) gets the file.
- */
-export async function startEndlessMachine({ refuseFirstPasv = false } = {}): Promise<EndlessMachine> {
+/** Send one chunk, then end the data connection cleanly. The machine sends no 226 reply. */
+function sendOneChunkWithoutReply(dataSocket: net.Socket): void {
+  dataSocket.end(CHUNK);
+}
+
+export interface EndlessMachineOptions {
+  /** The raw RETR of FTPClient fails, and the download of basic-ftp (the fallback) gets the file */
+  refuseFirstPasv?: boolean;
+  /** The machine sends no data until the test calls releaseData() */
+  holdData?: boolean;
+  /** The file is one chunk, and the machine never sends its 226 reply */
+  endWithoutReply?: boolean;
+}
+
+/** A machine that sends an endless file. The options change what it does (see EndlessMachineOptions). */
+export async function startEndlessMachine({
+  refuseFirstPasv = false, holdData = false, endWithoutReply = false,
+}: EndlessMachineOptions = {}): Promise<EndlessMachine> {
   const commands: string[] = [];
+  let release: () => void = () => undefined;
+  const released = holdData ? new Promise<void>(resolve => { release = resolve; }) : Promise.resolve();
   const dataSockets = new Set<net.Socket>();
   const controlSockets = new Set<net.Socket>();
   let waitingDataSocket: Promise<net.Socket> | undefined;
@@ -62,7 +81,12 @@ export async function startEndlessMachine({ refuseFirstPasv = false } = {}): Pro
       socket.write(isRefused ? '425 Cannot open data connection\r\n' : `${pasvReply}\r\n`);
     } else if (command === 'RETR') {
       socket.write('150 Opening data connection\r\n');
-      sendForever(await waitingDataSocket!);
+      const dataSocket = await waitingDataSocket!;
+      await released;
+      // The client can close the data connection while the machine holds the data
+      if (dataSocket.destroyed) return;
+      if (endWithoutReply) sendOneChunkWithoutReply(dataSocket);
+      else sendForever(dataSocket);
     } else socket.write('200 OK\r\n');
   };
 
@@ -88,6 +112,7 @@ export async function startEndlessMachine({ refuseFirstPasv = false } = {}): Pro
     commands,
     openDataConnections: () => dataSockets.size,
     openControlConnections: () => controlSockets.size,
+    releaseData: () => release(),
     async close() {
       [...dataSockets, ...controlSockets].forEach(socket => socket.destroy());
       await Promise.all([controlServer, dataServer].map(server => new Promise(resolve => server.close(resolve))));
