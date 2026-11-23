@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Adds files to the GitHub Release of a tag. Makes the release first, if there is none yet.
-# A file that is already in the release is replaced, so the release job can run again.
-# The release job in .github/workflows/docker.yml runs it with the update file and the Docker packages.
+# A file that is already in the release is replaced, so a job can run again.
+# In .github/workflows/docker.yml, the sign job runs it with the update file, and the release job with the Docker
+# packages.
 #
 # Run:   GH_TOKEN=<token> tools/release/add-to-release.sh v1.2.0 update-files/*.tar
 # Needs: gh (the GitHub command line tool)

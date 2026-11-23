@@ -1,0 +1,32 @@
+# Dependabot opens pull requests that update the dependencies.
+#
+# github-actions: each workflow pins its actions by a full commit, with the version in a comment
+# (tools/guardrails checks this). Dependabot updates the commit and the comment together.
+# npm: the app (the root lockfile covers apps/server, apps/web and packages/shared) and the docs site.
+# One pull request for each group, once a month, so that the updates do not fill the list of pull requests.
+# Security updates (a setting of the repo on GitHub) do not wait for this schedule.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: npm
+    directories:
+      - /
+      - /docs
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: chore

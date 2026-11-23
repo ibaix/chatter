@@ -57,6 +57,8 @@ You do not build the card of a release by hand. For a release tag, `.github/work
 
 The workflow sets `CHATTER_VERSION` from the tag, and `CHATTER_IMAGE_URL` to the download link of `chatter.img.xz` in the release of its own repo. It also sets `CHATTER_USE_RELEASE_IMAGE=1`. Then `build.sh` builds no Chatter container: it downloads the published `ghcr.io/toolpath/chatter:<CHATTER_VERSION>` for `linux/arm/v7`. So the card has the same Chatter as the update file of the release.
 
+Push `main` first, and then the tag. The jobs of a tag first check that the tag commit is on `main`, and stop if it is not. So do not tag a commit before it is on `main`. The check stops a mistake, not an attack: see [Updates on the Pi card](../security.md#updates-on-the-pi-card).
+
 ### Test a release before it is public
 
 To test a release on a real Pi with the normal update steps, make it a GitHub pre-release first. Make the pre-release before the tag, so that the workflows see it:
