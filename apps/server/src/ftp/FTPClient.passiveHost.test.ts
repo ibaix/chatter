@@ -675,6 +675,31 @@ async function until(condition: () => boolean): Promise<void> {
   }
 }
 
+/** Start a download of O1000 from a new fake machine. `outcome` is 'success' or the error message. */
+async function startDownload({ sendFile, timeoutMs }: { sendFile: (transfer: FileTransfer) => void; timeoutMs: number }) {
+  const machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, sendFile });
+  const ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs });
+  const destination = new PassThrough();
+  const text = collectText(destination);
+  const download = ftpClient.downloadFile('O1000', destination);
+  // Keep the result, so a rejection before the test reads it is not unhandled
+  const outcome = download.then(() => 'success', (err: Error) => err.message);
+  return { machine, text, outcome };
+}
+
+/** Wait for the next turn of the event loop, so the client can read what came on its sockets */
+function nextTurn(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve));
+}
+
+/** True when the promise has settled. It waits some turns of the event loop first. */
+async function hasSettled(promise: Promise<unknown>): Promise<boolean> {
+  let isSettled = false;
+  void promise.then(() => { isSettled = true; });
+  for (let turn = 0; turn < 10; turn += 1) await nextTurn();
+  return isSettled;
+}
+
 // A machine (or a rogue device) can send part of a file and then stop, with the data connection open. The raw RETR
 // writes each byte to the user at once, so a cut file must fail, and it must never come back as a success.
 describe('FTPClient raw RETR that stops in the middle of a file', () => {
@@ -694,14 +719,9 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
   });
 
   async function downloadFrom(sendFile: (transfer: FileTransfer) => void) {
-    machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, sendFile });
-    const ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs });
-    const destination = new PassThrough();
-    const text = collectText(destination);
-    const download = ftpClient.downloadFile('O1000', destination);
-    // Keep the result, so a rejection before the test reads it is not unhandled
-    const outcome = download.then(() => 'success', (err: Error) => err.message);
-    return { text, outcome };
+    const download = await startDownload({ sendFile, timeoutMs });
+    machine = download.machine;
+    return download;
   }
 
   it('fails, and does not retry, when the machine sends part of the file and then goes silent', async () => {
@@ -755,6 +775,11 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
   async function sendPartAndClose(text: () => string, transfer: FileTransfer): Promise<void> {
     transfer.data.write(firstPart);
     await until(() => text() === firstPart);
+    await closeData(transfer);
+  }
+
+  /** Close the data connection on the machine, and wait until the client closed it too */
+  async function closeData(transfer: FileTransfer): Promise<void> {
     let isClosed = false;
     transfer.data.on('close', () => { isClosed = true; });
     transfer.data.end();
@@ -775,9 +800,10 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
   });
 
   it.each([
-    { code: 426, reply: '426 Connection closed; transfer aborted' },
-    { code: 451, reply: '451 Local error in processing' },
-  ])('fails when the data connection closes and the machine sends $code', async ({ reply }) => {
+    { code: 426, reply: '426 Connection closed; transfer aborted', error: '426 Connection closed; transfer aborted' },
+    { code: 451, reply: '451 Local error in processing', error: '451 Local error in processing' },
+    { code: 350, reply: '350 Restarting at 0', error: 'Unexpected reply to RETR: 350 Restarting at 0' },
+  ])('fails when the data connection closes and the machine sends $code', async ({ reply, error }) => {
     let transfer: FileTransfer | undefined;
     const { text, outcome } = await downloadFrom(started => { transfer = started; });
     await until(() => transfer !== undefined);
@@ -785,10 +811,152 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
 
     transfer?.control.write(`${reply}\r\n`);
 
-    expect(await outcome).toBe(`FTP download error: ${reply}`);
+    expect(await outcome).toBe(`FTP download error: ${error}`);
     expect(text()).toBe(firstPart);
     expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The client must close its data connection after a stall. Else the machine can go on sending to it.
+  it('closes the data connection after a stall, and gives the user no byte that comes later', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => {
+      transfer = started;
+      started.data.write(firstPart);
+    });
+    await until(() => text() === firstPart);
+    let isClosed = false;
+    transfer?.data.on('close', () => { isClosed = true; });
+
+    vi.advanceTimersByTime(timeoutMs);
+
+    expect(await outcome).toBe('FTP download error: The machine stopped sending the file. Try again.');
+    transfer?.data.write('LATE');
+    await until(() => isClosed);
+    expect(text()).toBe(firstPart);
+  });
+
+  it('gives the user no byte that comes after a stall, also before the data connection closes', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => {
+      transfer = started;
+      started.data.write(firstPart);
+    });
+    await until(() => text() === firstPart);
+    // Keep the data connection of the client open, so later bytes can still come to it
+    const realDestroy = net.Socket.prototype.destroy;
+    let clientDataSocket: net.Socket | undefined;
+    vi.spyOn(net.Socket.prototype, 'destroy').mockImplementation(function (this: net.Socket, ...args: [Error?]) {
+      if (this.remotePort === machine?.dataPort && clientDataSocket === undefined) {
+        clientDataSocket = this;
+        return this;
+      }
+      return realDestroy.apply(this, args);
+    });
+
+    vi.advanceTimersByTime(timeoutMs);
+
+    expect(await outcome).toBe('FTP download error: The machine stopped sending the file. Try again.');
+    transfer?.data.write('LATE');
+    await until(() => clientDataSocket?.bytesRead === firstPart.length + 'LATE'.length);
+    expect(text()).toBe(firstPart);
+    vi.restoreAllMocks();
+    clientDataSocket?.destroy();
+  });
+
+  it('downloads the whole file when the 226 comes before the end of the data', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => {
+      transfer = started;
+      started.data.write(firstPart);
+    });
+    await until(() => text() === firstPart);
+
+    transfer?.control.write('226 Transfer complete\r\n');
+    await nextTurn();
+    transfer?.data.end(PROGRAM_TEXT.slice(firstPart.length));
+
+    expect(await outcome).toBe('success');
+    expect(text()).toBe(PROGRAM_TEXT);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('downloads the whole file when the 226 comes some time after the end of the data', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => { transfer = started; });
+    await until(() => transfer !== undefined);
+    if (transfer) await sendPartAndClose(text, transfer);
+
+    vi.advanceTimersByTime(timeoutMs / 2);
+    transfer?.control.write('226 Transfer complete\r\n');
+
+    expect(await outcome).toBe('success');
+    expect(text()).toBe(firstPart);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('fails when the data connection breaks and the machine sends no 226', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => {
+      transfer = started;
+      started.data.write(firstPart);
+    });
+    await until(() => text() === firstPart);
+
+    transfer?.data.resetAndDestroy();
+
+    expect(await outcome).toMatch(/^FTP download error: .*ECONNRESET/);
+    expect(text()).toBe(firstPart);
+    expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The end of the data starts the wait for the reply again. Else a slow last chunk leaves too little time for the 226.
+  it('starts the wait for the reply again when the data connection closes', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => { transfer = started; });
+    await until(() => transfer !== undefined);
+    transfer?.data.write(firstPart);
+    await until(() => text() === firstPart);
+    vi.advanceTimersByTime(timeoutMs * 0.75);
+    if (transfer) await closeData(transfer);
+
+    vi.advanceTimersByTime(timeoutMs * 0.75);
+
+    expect(await hasSettled(outcome)).toBe(false);
+    transfer?.control.write('226 Transfer complete\r\n');
+    expect(await outcome).toBe('success');
+  });
+});
+
+// The same checks with real timers. A fake clock cannot show a timer of a socket, such as the timeout of the control
+// connection. The margins are large, so a slow CI computer does not make the test fail.
+describe('FTPClient raw RETR with real timers', () => {
+  const timeoutMs = 300;
+  const pauseMs = 40;
+  let machine: FakeMachine | undefined;
+
+  afterEach(async () => {
+    await machine?.close();
+    machine = undefined;
+  });
+
+  it('downloads a file that comes in small parts for much longer than the timeout', async () => {
+    let transfer: FileTransfer | undefined;
+    const download = await startDownload({ sendFile: started => { transfer = started; }, timeoutMs });
+    machine = download.machine;
+    await until(() => transfer !== undefined);
+    const started = Date.now();
+
+    for (const letter of PROGRAM_TEXT) {
+      await new Promise(resolve => setTimeout(resolve, pauseMs));
+      transfer?.data.write(letter);
+    }
+    if (transfer) sendWholeFile(transfer, '');
+
+    expect(await download.outcome).toBe('success');
+    expect(download.text()).toBe(PROGRAM_TEXT);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(timeoutMs * 2);
   });
 });
 
