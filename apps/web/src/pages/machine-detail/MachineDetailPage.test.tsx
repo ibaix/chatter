@@ -350,7 +350,7 @@ describe('MachineDetailPage', () => {
 
     // The server cuts a list at 5000 entries, at 200 folders, after 2 minutes, or after a folder list that is too long.
     // The user must know that files can be missing.
-    const CUT_SHORT_NOTE = 'List cut short. The machine has too many files or folders, or it answers too slowly. Chatter shows only part of the list.';
+    const CUT_SHORT_NOTE = 'List cut short. The machine has too many files or folders, answers too slowly, or stopped a folder list. Chatter shows only part of the list.';
     const PROGRAM = { name: 'O1000', path: '/O1000', type: 'file', size: 10 } as FTPTreeNode;
 
     it('tells the user when the server cut the file list short', async () => {
