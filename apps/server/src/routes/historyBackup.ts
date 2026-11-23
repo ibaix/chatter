@@ -5,10 +5,11 @@ import { BackupRefusedError, tooLargeMessage, type BackupMachine, type HistoryBa
 import { HistoryUnavailableError } from '../history-backup/victoriaHistory.js';
 import { createLogger } from '../logging/logger.js';
 import type { HardwarePoller } from '../polling/poller.js';
+import { HISTORY_BACKUP_DISABLED_ERROR } from '../sidecarConfig.js';
 import { allowLongUpload } from '../webServerOptions.js';
 import { checkedJson } from './checks.js';
 import { rawFileUpload } from './rawFileUpload.js';
-import { notFound } from './responses.js';
+import { notFound, refuseSidecarOutbound } from './responses.js';
 import { streamWithoutErrorText } from './streamReplies.js';
 import { historyBackupSchema, historyRestoreSchema } from './schemas.js';
 
@@ -40,15 +41,21 @@ function machineOf(poller: HardwarePoller, id: string): BackupMachine | null {
  * The machine Settings tab, Advanced > Backup and restore.
  * A user who manages machines can back up the history of a machine. Only an admin (manage-chatter) can restore,
  * because a restore writes into the history.
+ * When `blockHistory` is true, each backup and restore route answers 503 and calls no history database.
  */
-export function historyBackupRoutes(poller: HardwarePoller, backups: HistoryBackup) {
+export function historyBackupRoutes(
+  poller: HardwarePoller,
+  backups: HistoryBackup,
+  { blockHistory = false }: { blockHistory?: boolean } = {},
+) {
   const canManageMachines = requirePermission('manage-machines');
   const canManageChatter = requirePermission('manage-chatter');
+  const noHistory = refuseSidecarOutbound(blockHistory, HISTORY_BACKUP_DISABLED_ERROR);
   const [requireRawFile, requireLengthFirst, fileSizeLimit] = rawFileUpload('the backup file', ARCHIVE_LIMITS.archiveBytes, tooLargeMessage());
 
   return new Hono<LoggedInEnv>()
     // Step 1 of a backup: read the history into files. Gives the id for the download.
-    .post('/machine/:id/history-backup', canManageMachines, checkedJson(historyBackupSchema), async c => {
+    .post('/machine/:id/history-backup', canManageMachines, noHistory, checkedJson(historyBackupSchema), async c => {
       const machine = machineOf(poller, c.req.param('id'));
       if (!machine) return notFound(c);
       const { from = null, to = Date.now(), averagesOnly = false } = c.req.valid('json');
@@ -59,7 +66,7 @@ export function historyBackupRoutes(poller: HardwarePoller, backups: HistoryBack
     })
 
     // Step 2 of a backup: the .tar.gz file. Its files on the disk are deleted after the download.
-    .get('/machine/:id/history-backup/:backupId', canManageMachines, c => {
+    .get('/machine/:id/history-backup/:backupId', canManageMachines, noHistory, c => {
       try {
         const { fileName, stream } = backups.download(c.req.param('backupId'), c.req.param('id'), c.var.user.username);
         return c.body(streamWithoutErrorText(c, stream, 'The history backup download'), 200, {
@@ -74,7 +81,7 @@ export function historyBackupRoutes(poller: HardwarePoller, backups: HistoryBack
     })
 
     // Step 1 of a restore: receive and check the file. Nothing is written yet. Gives the preview.
-    .post('/machine/:id/history-restore', canManageChatter, allowLongUpload, requireRawFile, requireLengthFirst, fileSizeLimit, async c => {
+    .post('/machine/:id/history-restore', canManageChatter, noHistory, allowLongUpload, requireRawFile, requireLengthFirst, fileSizeLimit, async c => {
       const machine = machineOf(poller, c.req.param('id'));
       if (!machine) return notFound(c);
       const body = c.req.raw.body;
@@ -84,14 +91,14 @@ export function historyBackupRoutes(poller: HardwarePoller, backups: HistoryBack
     })
 
     // Step 2 of a restore: the user confirmed the preview
-    .post('/machine/:id/history-restore/:restoreId', canManageChatter, checkedJson(historyRestoreSchema), async c => {
+    .post('/machine/:id/history-restore/:restoreId', canManageChatter, noHistory, checkedJson(historyRestoreSchema), async c => {
       const machine = machineOf(poller, c.req.param('id'));
       if (!machine) return notFound(c);
       const options = c.req.valid('json');
       return replyOrRefusal(c, async () => c.json(await backups.restore(c.req.param('restoreId'), machine, options, c.var.user.username)));
     })
 
-    .delete('/machine/:id/history-restore/:restoreId', canManageChatter, async c => replyOrRefusal(c, async () => {
+    .delete('/machine/:id/history-restore/:restoreId', canManageChatter, noHistory, async c => replyOrRefusal(c, async () => {
       await backups.cancelRestore(c.req.param('restoreId'), c.req.param('id'));
       return c.json({ message: 'The restore file is deleted' });
     }));

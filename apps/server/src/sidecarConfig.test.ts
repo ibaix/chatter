@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { parseSidecarFlags, startOutboundNotifications } from './sidecarConfig.js';
+import { parseSidecarFlags, startAlertSync, startOutboundNotifications } from './sidecarConfig.js';
 
 describe('parseSidecarFlags', () => {
   it('leaves CHATTER_DISABLE_HISTORY, CHATTER_DISABLE_UPDATE_CHECK, and CHATTER_DISABLE_WEB_UI off when they are unset', () => {
@@ -75,6 +75,22 @@ describe('startOutboundNotifications', () => {
       CHATTER_DISABLE_UPDATE_CHECK: '1',
       CHATTER_DISABLE_WEB_UI: '1',
     }))).toBe(false);
+    expect(start).not.toHaveBeenCalled();
+  });
+});
+
+describe('startAlertSync', () => {
+  it('starts vmalert alert sync when CHATTER_DISABLE_HISTORY is off', () => {
+    const start = vi.fn();
+
+    expect(startAlertSync({ start }, parseSidecarFlags({}))).toBe(true);
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it('leaves vmalert alert sync stopped when CHATTER_DISABLE_HISTORY is on', () => {
+    const start = vi.fn();
+
+    expect(startAlertSync({ start }, parseSidecarFlags({ CHATTER_DISABLE_HISTORY: '1' }))).toBe(false);
     expect(start).not.toHaveBeenCalled();
   });
 });

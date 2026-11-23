@@ -5,6 +5,7 @@ import {
   main,
   readBootstrapOptions,
   type BootstrapOptions,
+  type FetchLike,
 } from './bootstrap-viewer.js';
 
 const ADMIN_PASSWORD = 'admin-secret-password';

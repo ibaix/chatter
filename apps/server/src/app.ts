@@ -134,9 +134,9 @@ export function createApp({
     .route('/', uploadHistoryRoutes())
     .route('/', historyRoutes(poller, history, statePeriods))
     .route('/', reportRoutes(poller, history, statePeriods))
-    .route('/', historyBackupRoutes(poller, historyBackup))
+    .route('/', historyBackupRoutes(poller, historyBackup, { blockHistory: sidecar.disableHistory }))
     .route('/', alertRoutes(alerts))
-    .route('/', alertRuleRoutes(poller, alertRules))
+    .route('/', alertRuleRoutes(poller, alertRules, { blockHistory: sidecar.disableHistory }))
     .route('/', machineEventRoutes(new MachineChangeFeed(poller), c => loginOf(c, auth), c => isStillLoggedIn(c, auth)))
     .route('/', proxySettingsRoutes(proxySettings))
     .route('/', loginSettingsRoutes(loginGuard))
@@ -144,7 +144,7 @@ export function createApp({
     .route('/', focasLibraryRoutes(focasLibrary))
     .route('/', updateRoutes(updates, { blockOutbound: sidecar.disableUpdateCheck }))
     .route('/', notificationRoutes(notifications, { blockOutbound: sidecar.disableHistory }))
-    .route('/', diagnosticRoutes({ poller, updates, version, notifications }, diagnostics));
+    .route('/', diagnosticRoutes({ poller, updates, version, notifications, sidecar }, diagnostics));
 
   // No CORS headers: only pages from this server can call the API from a browser
   // The security headers also go on the web app routes that index.ts adds after these
@@ -168,9 +168,14 @@ const noStore = createMiddleware(async (c, next) => {
 
 /** Settings > Diagnostics and the health of the machines: the log, the restarts, the connection test */
 function diagnosticRoutes(
-  { poller, updates, version, notifications }: { poller: HardwarePoller; updates: UpdateService; version: string; notifications: Notifications },
+  { poller, updates, version, notifications, sidecar }: {
+    poller: HardwarePoller; updates: UpdateService; version: string; notifications: Notifications; sidecar: SidecarFlags;
+  },
   {
-    serverLog = new ServerLog(), connections = new ConnectionLog(), system = {}, historyHealthUrls = DEFAULT_HISTORY_HEALTH_URLS,
+    serverLog = new ServerLog(),
+    connections = new ConnectionLog(),
+    system = {},
+    historyHealthUrls = sidecar.disableHistory ? {} : DEFAULT_HISTORY_HEALTH_URLS,
   }: Pick<AppParts, 'serverLog' | 'connections' | 'system' | 'historyHealthUrls'>,
 ) {
   return new Hono()

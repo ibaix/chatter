@@ -2,8 +2,9 @@ import { Hono } from 'hono';
 import type { AlertRuleService } from '../alert-rules/AlertRuleService.js';
 import { requirePermission } from '../auth/authRoutes.js';
 import type { HardwarePoller } from '../polling/poller.js';
+import { ALERT_RULES_DISABLED_ERROR } from '../sidecarConfig.js';
 import { checkedJson } from './checks.js';
-import { notFound } from './responses.js';
+import { notFound, refuseSidecarOutbound } from './responses.js';
 import { alertRulesSchema, copyAlertRulesSchema, testAlertQuerySchema } from './schemas.js';
 
 /**
@@ -12,9 +13,17 @@ import { alertRulesSchema, copyAlertRulesSchema, testAlertQuerySchema } from './
  */
 const RULES_BODY_LIMIT_BYTES = 512 * 1024;
 
-/** Read, change and copy the alert rules of a machine. Only a role with manage-machines can change them. */
-export function alertRuleRoutes(poller: HardwarePoller, alertRules: AlertRuleService) {
+/**
+ * Read, change and copy the alert rules of a machine. Only a role with manage-machines can change them.
+ * When `blockHistory` is true, changes and query tests answer 503 and call neither vmalert nor VictoriaMetrics.
+ */
+export function alertRuleRoutes(
+  poller: HardwarePoller,
+  alertRules: AlertRuleService,
+  { blockHistory = false }: { blockHistory?: boolean } = {},
+) {
   const canManageMachines = requirePermission('manage-machines');
+  const noHistory = refuseSidecarOutbound(blockHistory, ALERT_RULES_DISABLED_ERROR);
   const isKnownMachine = (machineId: string) => poller.getMachine(machineId) !== null;
 
   return new Hono()
@@ -24,7 +33,7 @@ export function alertRuleRoutes(poller: HardwarePoller, alertRules: AlertRuleSer
       return c.json({ rules: alertRules.rulesOf(machineId) });
     })
 
-    .put('/machine/:id/alert-rules', canManageMachines, checkedJson(alertRulesSchema, RULES_BODY_LIMIT_BYTES), async c => {
+    .put('/machine/:id/alert-rules', canManageMachines, noHistory, checkedJson(alertRulesSchema, RULES_BODY_LIMIT_BYTES), async c => {
       const machineId = c.req.param('id');
       if (!isKnownMachine(machineId)) return notFound(c);
       const result = await alertRules.saveRules(machineId, c.req.valid('json').rules);
@@ -32,7 +41,7 @@ export function alertRuleRoutes(poller: HardwarePoller, alertRules: AlertRuleSer
       return c.json({ rules: result.rules, vmalertReloaded: result.vmalertReloaded });
     })
 
-    .post('/machine/:id/alert-rules/copy', canManageMachines, checkedJson(copyAlertRulesSchema), async c => {
+    .post('/machine/:id/alert-rules/copy', canManageMachines, noHistory, checkedJson(copyAlertRulesSchema), async c => {
       const machineId = c.req.param('id');
       if (!isKnownMachine(machineId)) return notFound(c);
       const { machineIds } = c.req.valid('json');
@@ -41,7 +50,7 @@ export function alertRuleRoutes(poller: HardwarePoller, alertRules: AlertRuleSer
       return c.json(await alertRules.copyRules(machineId, machineIds));
     })
 
-    .post('/alert-rules/test', canManageMachines, checkedJson(testAlertQuerySchema), async c => {
+    .post('/alert-rules/test', canManageMachines, noHistory, checkedJson(testAlertQuerySchema), async c => {
       const { machineId, query } = c.req.valid('json');
       if (!isKnownMachine(machineId)) return notFound(c);
       return c.json(await alertRules.testQuery(machineId, query));

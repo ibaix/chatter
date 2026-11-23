@@ -41,7 +41,7 @@ import { ReleaseWatcher, releasesRepo, sqliteCheckSettingStore } from './updates
 import { createLogger } from './logging/logger.js';
 import { ConnectionLog } from './logging/ConnectionLog.js';
 import { startServerLog } from './logging/startServerLog.js';
-import { parseSidecarFlags, startOutboundNotifications } from './sidecarConfig.js';
+import { parseSidecarFlags, startAlertSync, startOutboundNotifications } from './sidecarConfig.js';
 
 const log = createLogger('server');
 
@@ -117,7 +117,9 @@ async function start(): Promise<void> {
     }
     // vmalert does not send again a resolve that Chatter could not get, for example during a restart
     const alertSync = new VmalertAlertSync({ url: VMALERT_URL, store: alerts, afterSync: () => notifications.findAlertChanges() });
-    alertSync.start();
+    if (!startAlertSync(alertSync, sidecar)) {
+      log.info('vmalert alert sync disabled by CHATTER_DISABLE_HISTORY');
+    }
     // The alert rules of each machine. Chatter writes them to a file that vmalert reads.
     const alertRules = new AlertRuleService({
       store: new AlertRuleStore(getDb()),
@@ -151,7 +153,7 @@ async function start(): Promise<void> {
     const historyBackup = new HistoryBackup({
       folder: historyBackupFolder(), history: new VictoriaHistory(VICTORIA_METRICS_URL), statePeriods, alertRules, version,
     });
-    await historyBackup.removeLeftovers();
+    if (!sidecar.disableHistory) await historyBackup.removeLeftovers();
     log.info('Chatter started', { version, logLevel: process.env.LOG_LEVEL || 'info' });
     if (TWILIO_ADDRESS.warning) log.warn(TWILIO_ADDRESS.warning);
     // Asks GitHub once a day for the newest release, while the Admin has the check on (the default)
@@ -162,7 +164,9 @@ async function start(): Promise<void> {
     const app = createApp({
       poller, auth, accounts, history, statePeriods, alerts, alertRules, proxySettings, loginLog: new LoginLog(getDb()), version, updates,
       notifications, serverLog, connections, historyBackup, sidecar,
-      historyHealthUrls: { victoriaMetrics: `${VICTORIA_METRICS_URL}/health`, vmalert: `${VMALERT_URL}/health` },
+      historyHealthUrls: sidecar.disableHistory
+        ? {}
+        : { victoriaMetrics: `${VICTORIA_METRICS_URL}/health`, vmalert: `${VMALERT_URL}/health` },
     });
     if (WEB_DIR && !sidecar.disableWebUi) app.route('/', webAppRoutes(WEB_DIR));
     if (sidecar.disableWebUi) log.info('Web UI disabled by CHATTER_DISABLE_WEB_UI (headless protocol gateway mode)');
@@ -194,7 +198,7 @@ async function start(): Promise<void> {
       // After poller.stop(), so the disconnects it sent end first. It takes at most a few seconds.
       const focasStopped = focasThreads.shutDown();
       if (!sidecar.disableUpdateCheck) releases.stop();
-      alertSync.stop();
+      if (!sidecar.disableHistory) alertSync.stop();
       if (alertServer) {
         alertServer.close();
         alertServer.closeAllConnections();

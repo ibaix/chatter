@@ -23,6 +23,12 @@ export const UPDATE_OUTBOUND_ERROR = 'Chatter sends no update request. The updat
 /** The reply when history is off and the action would send a notification. */
 export const NOTIFICATION_OUTBOUND_ERROR = 'Chatter sends no notification. Notification sending is off.';
 
+/** The reply when history is off and the action would back up or restore history. */
+export const HISTORY_BACKUP_DISABLED_ERROR = 'Chatter does no history backup or restore. Machine history is off.';
+
+/** The reply when history is off and the action would change or test alert rules. */
+export const ALERT_RULES_DISABLED_ERROR = 'Chatter changes or tests no alert rules. Machine history is off.';
+
 const TRUTHY = new Set(['1', 'true', 'yes', 'on']);
 
 export function parseSidecarFlags(env: NodeJS.ProcessEnv = process.env): SidecarFlags {
@@ -38,10 +44,20 @@ export function parseSidecarFlags(env: NodeJS.ProcessEnv = process.env): Sidecar
 /**
  * Start the notification sender.
  * Returns false when history is off.
- * The sender then stays stopped, so a saved queue sends no Slack, Twilio, webhook, or Apprise message.
+ * The sender then stays stopped, so a saved queue sends no Slack, Twilio, Discord, Telegram, ntfy, webhook, or Apprise message.
  */
 export function startOutboundNotifications(notifications: { start(): void }, flags: SidecarFlags): boolean {
   if (flags.disableHistory) return false;
   notifications.start();
+  return true;
+}
+
+/**
+ * Start the vmalert alert sync.
+ * Returns false when history is off, so Chatter makes no request to vmalert.
+ */
+export function startAlertSync(alertSync: { start(): void }, flags: SidecarFlags): boolean {
+  if (flags.disableHistory) return false;
+  alertSync.start();
   return true;
 }
