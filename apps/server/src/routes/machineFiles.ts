@@ -186,7 +186,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
       const received = await receive(file);
       const nameOnMachine = targetName || received.name;
       try {
-        // The signal of the request: a browser that leaves stops the upload, also while it waits for the machine
+        // The signal of the request: a browser that leaves stops the upload only while it waits for the machine
         await connector.uploadFile(remotePath, received.content, isTrueText(overwrite), c.req.raw.signal);
       } catch (error) {
         if (error instanceof Error && error.message.includes(FILE_EXISTS_TEXT)) {

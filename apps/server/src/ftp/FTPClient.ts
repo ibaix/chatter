@@ -227,6 +227,7 @@ class TaskStop {
   private timer: NodeJS.Timeout | undefined;
   private readonly callerSignal: AbortSignal | undefined;
   private readonly stopOnSignal = () => this.controller.abort(this.callerSignal?.reason);
+  private onCallerLeft: (() => void) | undefined;
 
   constructor(callerSignal: AbortSignal | undefined) {
     this.callerSignal = callerSignal;
@@ -241,6 +242,16 @@ class TaskStop {
     this.timer = setTimeout(() => this.controller.abort(tooSlowError()), timeLimitMs);
   }
 
+  /**
+   * From now on, the signal of the caller does not stop the task. `onCallerLeft` runs when the caller leaves later.
+   * Only the time limit stops the task then.
+   */
+  ignoreCallerFromNow(onCallerLeft: () => void): void {
+    this.callerSignal?.removeEventListener('abort', this.stopOnSignal);
+    this.onCallerLeft = onCallerLeft;
+    this.callerSignal?.addEventListener('abort', onCallerLeft, { once: true });
+  }
+
   /** The reason of the stop when the task stopped, else `err`. After a stop, the error of the closed connection tells less. */
   reasonOr(err: unknown): unknown {
     return this.controller.signal.aborted ? this.controller.signal.reason : err;
@@ -249,6 +260,7 @@ class TaskStop {
   end(): void {
     clearTimeout(this.timer);
     this.callerSignal?.removeEventListener('abort', this.stopOnSignal);
+    if (this.onCallerLeft) this.callerSignal?.removeEventListener('abort', this.onCallerLeft);
   }
 }
 
@@ -771,7 +783,8 @@ export class FTPClient {
 
   /**
    * Upload one file. The upload stops at UPLOAD_TIME_LIMIT_MS, which starts when the upload gets its turn.
-   * `signal` stops the upload, and takes a waiting upload out of the queue, for example when the browser leaves.
+   * `signal` takes a waiting upload out of the queue, for example when the browser leaves. It does not stop an upload
+   * that runs: a cut STOR can leave part of the file on the machine, also over the old program.
    */
   async uploadFile(
     remotePath: string,
@@ -785,7 +798,7 @@ export class FTPClient {
 
     try {
       assertSafeFtpArgument(relativePath);
-      await this.withUploadConnection(stop, async client => {
+      await this.withUploadConnection(stop, relativePath, async client => {
         if (!allowOverwrite && await this.fileExists(client, relativePath)) {
           throw new Error(alreadyExistsMessage(relativePath));
         }
@@ -805,14 +818,16 @@ export class FTPClient {
 
   /**
    * Upload several files over one connection. Each file passes or fails on its own. The time limit and `signal` are
-   * for the whole batch, as for uploadFile. After a stop, each file that is not on the machine fails with the reason.
+   * for the whole batch, as for uploadFile. After a stop at the time limit, each file that is not on the machine fails
+   * with the reason.
    */
   async uploadFiles(files: FTPUploadFile[], allowOverwrite = false, signal?: AbortSignal): Promise<FTPUploadResult> {
     const results: FTPUploadResult = { success: [], failed: [] };
     const stop = new TaskStop(signal);
 
     try {
-      await this.withUploadConnection(stop, async client => {
+      const paths = files.map(file => toRelativeRemotePath(file.remotePath)).join(', ');
+      await this.withUploadConnection(stop, paths, async client => {
         await trySetBinaryMode(client);
         for (const file of files) {
           const outcome = await this.uploadBatchFile(client, { file, allowOverwrite, stop });
@@ -877,10 +892,19 @@ export class FTPClient {
     }, options.signal);
   }
 
-  /** withConnection for an upload: `stop` has the signal of the caller, and gets the upload time limit at the turn */
-  private withUploadConnection<T>(stop: TaskStop, work: (client: ftp.Client) => Promise<T>): Promise<T> {
+  /**
+   * withConnection for an upload: `stop` has the signal of the caller, and gets the upload time limit at the turn.
+   * The signal of the caller stops only the wait for the turn. After the turn, only the time limit stops the upload.
+   */
+  private withUploadConnection<T>(stop: TaskStop, paths: string, work: (client: ftp.Client) => Promise<T>): Promise<T> {
     const { uploadTimeLimitMs } = this.downloadLimits;
-    const onTurn = () => stop.startTimeLimit(uploadTimeLimitMs, () => uploadTooSlowError(uploadTimeLimitMs));
+    const onTurn = () => {
+      stop.startTimeLimit(uploadTimeLimitMs, () => uploadTooSlowError(uploadTimeLimitMs));
+      stop.ignoreCallerFromNow(() => log.warn(
+        'The browser left during an upload. Chatter completes the upload, so the machine does not keep part of a file.',
+        { host: this.host, file: paths }
+      ));
+    };
     return this.withConnection({ verbose: true, signal: stop.signal, onTurn }, work);
   }
 

@@ -220,7 +220,7 @@ export abstract class BaseMachineConnector extends EventEmitter {
     return this.ftpClient.downloadFile(filePath, writableStream, signal);
   }
 
-  /** `signal` stops the upload, also while it waits for its turn, for example when the browser leaves */
+  /** `signal` stops the upload only while it waits for its turn, for example when the browser leaves */
   async uploadFile(
     remotePath: string,
     source: Buffer | string | NodeJS.ReadableStream,
