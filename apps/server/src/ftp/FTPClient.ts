@@ -389,6 +389,25 @@ async function trySetBinaryMode(client: ftp.Client): Promise<void> {
   }
 }
 
+/** "213 1234": the reply to SIZE. Only a plain number counts. */
+const SIZE_REPLY_PATTERN = /^213 (\d+)\s*$/;
+
+/**
+ * The size of a file in bytes from SIZE, or undefined when the machine does not give a clear size.
+ * basic-ftp sets binary mode (TYPE I) at login, so the size is the byte count of a transfer.
+ * Only an error reply gives undefined. A closed connection or a timeout fails, as the RETR would.
+ */
+async function sizeOf(client: ftp.Client, filePath: string): Promise<number | undefined> {
+  try {
+    const reply = await client.send(`SIZE ${filePath}`);
+    const match = SIZE_REPLY_PATTERN.exec(reply.message);
+    return match ? Number(match[1]) : undefined;
+  } catch (err) {
+    if (err instanceof ftp.FTPError) return undefined;
+    throw err;
+  }
+}
+
 /**
  * The address of the passive data connection. A rogue machine can name any host in its PASV reply,
  * so Chatter would connect to a host of its choice. So the host is always the address of the control
@@ -764,11 +783,14 @@ export class FTPClient {
    * connection first, then send RETR. More compatible with limited FTP servers like Speedio.
    * When the download fails after the RETR, or the machine sends no reply to RETR, the client closes: a late 226 or
    * 426 must not go to the next command.
+   * When no reply to RETR comes, the size from SIZE decides: the file is complete only when all its bytes came.
+   * A machine that gives no size keeps the old behavior: Chatter accepts the file and logs a warning.
    */
   private async downloadOverPassiveSocket(client: ftp.Client, filePath: string, sink: DownloadSink): Promise<void> {
     // basic-ftp refuses only CR, LF and NUL in a command, so this check is stricter
     assertSafeFtpArgument(filePath);
     await trySetBinaryMode(client);
+    const expectedSize = await sizeOf(client, filePath);
     const { host, port } = await requestPassiveAddress(client.ftp);
     const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
     let isConfirmed: boolean;
@@ -779,12 +801,15 @@ export class FTPClient {
       client.close();
       throw err;
     }
-    if (!isConfirmed) {
-      log.warn('The machine did not confirm the end of the file (no reply to RETR). Chatter accepts the file, because the data connection ended correctly.', {
-        host: this.host, file: filePath, bytes: sink.bytesWritten
-      });
-      // A late reply must not go to the next command
-      client.close();
+    if (isConfirmed) return;
+    // A late reply must not go to the next command
+    client.close();
+    const context = { host: this.host, file: filePath, bytes: sink.bytesWritten };
+    if (expectedSize === undefined) {
+      log.warn('The machine did not confirm the end of the file (no reply to RETR), and gave no size. Chatter accepts the file, because the data connection ended correctly.', context);
+    } else if (sink.bytesWritten !== expectedSize) {
+      log.warn('The machine did not confirm the end of the file (no reply to RETR), and the file does not have the size that SIZE gave.', { ...context, size: expectedSize });
+      throw new Error(`The file is not complete. The machine sent ${sink.bytesWritten} of ${expectedSize} bytes. Try again.`);
     }
   }
 
