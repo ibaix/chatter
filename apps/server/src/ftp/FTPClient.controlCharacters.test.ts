@@ -63,11 +63,16 @@ describe('FTPClient with a control character in a path', () => {
     const { port } = dataServer.address() as net.AddressInfo;
     mockRequest.mockResolvedValue({ code: 227, message: `227 Entering Passive Mode (127,0,0,1,${Math.floor(port / 256)},${port % 256})` });
     const manualDownload = ftpClient as unknown as {
-      downloadOverPassiveSocket(client: typeof mockFtpClient, filePath: string, destination: PassThrough): Promise<void>;
+      downloadOverPassiveSocket(
+        client: typeof mockFtpClient,
+        options: { filePath: string; sink: { destination: PassThrough; bytesWritten: number }; signal: AbortSignal }
+      ): Promise<void>;
     };
 
     try {
-      await expect(manualDownload.downloadOverPassiveSocket(mockFtpClient, 'O1000\r\nDELE O1234', new PassThrough()))
+      await expect(manualDownload.downloadOverPassiveSocket(mockFtpClient, {
+        filePath: 'O1000\r\nDELE O1234', sink: { destination: new PassThrough(), bytesWritten: 0 }, signal: new AbortController().signal
+      }))
         .rejects.toThrow(CONTROL_CHARACTER_ERROR);
     } finally {
       dataServer.close();

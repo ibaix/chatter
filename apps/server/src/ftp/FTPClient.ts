@@ -57,6 +57,11 @@ const DOWNLOAD_TIME_LIMIT_MS = 30 * 60_000;
  */
 export const REPLY_AFTER_DATA_WAIT_MS = 3_000;
 /**
+ * The download waits this long for the reply to SIZE. Some limited servers do not answer a command that they do not
+ * know, and the FTP timeout (30 s) is too long to wait before each download.
+ */
+export const SIZE_REPLY_WAIT_MS = 3_000;
+/**
  * The raw LIST waits this long for its reply (usually 226) after a clean end of the data connection, and for more data
  * after its reply. Some old servers send no reply, and some do not close the data connection. A tree walk waits once
  * for each folder, so this time is shorter than the wait of the raw RETR.
@@ -402,22 +407,6 @@ async function trySetBinaryMode(client: ftp.Client): Promise<void> {
 const SIZE_REPLY_PATTERN = /^213 (\d+)\s*$/;
 
 /**
- * The size of a file in bytes from SIZE, or undefined when the machine does not give a clear size.
- * basic-ftp sets binary mode (TYPE I) at login, so the size is the byte count of a transfer.
- * Only an error reply gives undefined. A closed connection or a timeout fails, as the RETR would.
- */
-async function sizeOf(client: ftp.Client, filePath: string): Promise<number | undefined> {
-  try {
-    const reply = await client.send(`SIZE ${filePath}`);
-    const match = SIZE_REPLY_PATTERN.exec(reply.message);
-    return match ? Number(match[1]) : undefined;
-  } catch (err) {
-    if (err instanceof ftp.FTPError) return undefined;
-    throw err;
-  }
-}
-
-/**
  * The address of the passive data connection. A rogue machine can name any host in its PASV reply,
  * so Chatter would connect to a host of its choice. So the host is always the address of the control
  * connection (the machine), and only the port comes from the reply. EPSV in basic-ftp does the same.
@@ -636,7 +625,7 @@ export class FTPClient {
         const sink: DownloadSink = { destination: writableStream, bytesWritten: 0 };
         try {
           // When the signal closes the client, the RETR fails, and the raw RETR closes its data connection
-          await this.downloadOverPassiveSocket(client, remotePath, sink);
+          await this.downloadOverPassiveSocket(client, { filePath: remotePath, sink, signal: stop.signal });
         } catch (err) {
           // The user already has part of the file. A second download would add to that part, so the download fails.
           if (stop.signal.aborted || sink.bytesWritten > 0 || err instanceof NoFallbackError) throw err;
@@ -792,14 +781,18 @@ export class FTPClient {
    * connection first, then send RETR. More compatible with limited FTP servers like Speedio.
    * When the download fails after the RETR, or the machine sends no reply to RETR, the client closes: a late 226 or
    * 426 must not go to the next command.
-   * When no reply to RETR comes, the size from SIZE decides: the file is complete only when all its bytes came.
+   * When no reply to RETR comes, the size from SIZE decides: the file is cut short when fewer bytes came. More bytes
+   * than the size are accepted with a warning, because a control can convert a program on the transfer.
    * A machine that gives no size keeps the old behavior: Chatter accepts the file and logs a warning.
    */
-  private async downloadOverPassiveSocket(client: ftp.Client, filePath: string, sink: DownloadSink): Promise<void> {
+  private async downloadOverPassiveSocket(
+    client: ftp.Client,
+    { filePath, sink, signal }: { filePath: string; sink: DownloadSink; signal: AbortSignal }
+  ): Promise<void> {
     // basic-ftp refuses only CR, LF and NUL in a command, so this check is stricter
     assertSafeFtpArgument(filePath);
     await trySetBinaryMode(client);
-    const expectedSize = await sizeOf(client, filePath);
+    const expectedSize = await this.sizeOf(client, { filePath, signal });
     const { host, port } = await requestPassiveAddress(client.ftp);
     const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
     let isConfirmed: boolean;
@@ -816,9 +809,41 @@ export class FTPClient {
     const context = { host: this.host, file: filePath, bytes: sink.bytesWritten };
     if (expectedSize === undefined) {
       log.warn('The machine did not confirm the end of the file (no reply to RETR), and gave no size. Chatter accepts the file, because the data connection ended correctly.', context);
-    } else if (sink.bytesWritten !== expectedSize) {
-      log.warn('The machine did not confirm the end of the file (no reply to RETR), and the file does not have the size that SIZE gave.', { ...context, size: expectedSize });
+    } else if (sink.bytesWritten < expectedSize) {
+      log.warn('The machine did not confirm the end of the file (no reply to RETR), and sent fewer bytes than SIZE gave.', { ...context, size: expectedSize });
       throw new Error(`The file is not complete. The machine sent ${sink.bytesWritten} of ${expectedSize} bytes. Try again.`);
+    } else if (sink.bytesWritten > expectedSize) {
+      log.warn('The machine did not confirm the end of the file (no reply to RETR), and sent more bytes than SIZE gave. Chatter accepts the file, because the data connection ended correctly.', { ...context, size: expectedSize });
+    }
+  }
+
+  /**
+   * The size of a file in bytes from SIZE, or undefined when the machine does not give a clear size.
+   * basic-ftp sets binary mode (TYPE I) at login, so the size is the byte count of a transfer.
+   * When no reply comes in SIZE_REPLY_WAIT_MS, or the machine closes the connection, the size is unknown. A late reply
+   * must not go to the next command, so the client logs in again on a new connection. A stop of the download
+   * (by the user or by the time limit) stops it here, with no new login.
+   */
+  private async sizeOf(
+    client: ftp.Client,
+    { filePath, signal }: { filePath: string; signal: AbortSignal }
+  ): Promise<number | undefined> {
+    const timer = setTimeout(() => client.close(), Math.min(this.timeoutMs, SIZE_REPLY_WAIT_MS));
+    try {
+      const reply = await client.send(`SIZE ${filePath}`);
+      const match = SIZE_REPLY_PATTERN.exec(reply.message);
+      return match ? Number(match[1]) : undefined;
+    } catch (err) {
+      if (err instanceof ftp.FTPError) return undefined;
+      signal.throwIfAborted();
+      log.warn('The machine gave no reply to SIZE. Chatter connects again, and downloads the file with no size.', {
+        host: this.host, file: filePath, error: errorText(err)
+      });
+      client.close();
+      await this.login(client);
+      return undefined;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
