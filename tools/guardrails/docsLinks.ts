@@ -90,17 +90,20 @@ export function headingLinksIn(markdown: string, file: string): HeadingLink[] {
     for (const [, target] of withoutCode.matchAll(/\]\(\s*<?([^)\s>]*)>?(?:\s+"[^"]*")?\s*\)/g)) {
       const hash = target.indexOf('#');
       if (hash < 0 || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
-      const page = target.slice(0, hash);
+      const page = target.slice(0, hash).replace(/\?.*$/, '');
       const anchor = decodeURIComponent(target.slice(hash + 1));
-      if (page === '') {
-        links.push({ file, anchor });
-        continue;
-      }
-      const path = page.startsWith('/') ? page.slice(1) : posix.join(posix.dirname(file), page);
-      links.push({ file: docsPageFile(posix.normalize(path).replace(/\.md$/, '')), anchor });
+      links.push({ file: page === '' ? file : linkedPageFile(page, file), anchor });
     }
   }
   return links;
+}
+
+/** The Markdown file (from docs/) of a link to a page (with no #anchor), from the page in file */
+function linkedPageFile(page: string, file: string): string {
+  const joined = page.startsWith('/') ? page.slice(1) : posix.join(posix.dirname(file), page);
+  // A link to a folder ("/", "../", "./sub/") goes to the index page of the folder
+  const path = posix.normalize(joined).replace(/^\.(\/|$)/, '');
+  return docsPageFile(path.replace(/\.md$/, ''));
 }
 
 /** The text of a heading as the page shows it: a link gives its text only. */

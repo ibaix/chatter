@@ -126,6 +126,20 @@ describe('headingLinksIn', () => {
     expect(headingLinksIn('---\ntext: "[a](#front)"\n---\n[b](#real)', 'a.md')).toEqual([{ file: 'a.md', anchor: 'real' }]);
   });
 
+  it('finds the index page of a folder link, and drops a query', () => {
+    const markdown = '[a](/#x) [b](../#x) [c](./#x) [d](./x.md?y=1#x) [e](/guide/../x.md#a) [f](./sub/#x) [g](..#x)';
+
+    expect(headingLinksIn(markdown, 'guide/a.md')).toEqual([
+      { file: 'index.md', anchor: 'x' },
+      { file: 'index.md', anchor: 'x' },
+      { file: 'guide/index.md', anchor: 'x' },
+      { file: 'guide/x.md', anchor: 'x' },
+      { file: 'x.md', anchor: 'a' },
+      { file: 'guide/sub/index.md', anchor: 'x' },
+      { file: 'index.md', anchor: 'x' },
+    ]);
+  });
+
   it('reads a link in angle brackets', () => {
     expect(headingLinksIn('[a](<./x.md#angle>)', 'guide/a.md')).toEqual([{ file: 'guide/x.md', anchor: 'angle' }]);
   });
