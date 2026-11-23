@@ -335,6 +335,55 @@ describe('Haas live values when the control stops giving them', () => {
       expect((await connector.poll()).data.spindleLoad).toBeUndefined();
     });
   });
+
+  it('forgets the old run status and spindle load when a query fails', async () => {
+    let endless = false;
+    const sockets: net.Socket[] = [];
+    const server = net.createServer(socket => {
+      sockets.push(socket);
+      socket.on('data', chunk => {
+        if (endless) {
+          void sendForever(socket);
+          return;
+        }
+        const query = chunk.toString('ascii').trim();
+        socket.write(query === '?Q500' ? '>STATUS, BUSY\r\n' : query === '?Q600 1098' ? '>MACRO, 55.0\r\n' : `>?, ${query}\r\n`);
+      });
+    });
+    const connector = queryPortConnector(await listen(server).then(() => server));
+    try {
+      expect((await connector.poll()).data).toMatchObject({ execution: 'ACTIVE', spindleLoad: 55 });
+
+      endless = true;
+      const status = await connector.poll();
+
+      expect(status.errors[0]).toMatch(/^Query error:/);
+      expect(status.data.execution).toBeUndefined();
+      expect(status.data.spindleLoad).toBeUndefined();
+    } finally {
+      connector.disconnect();
+      for (const socket of sockets) socket.destroy();
+      await close(server);
+    }
+  });
+
+  it('forgets the old run status when the query port is down', async () => {
+    const server = await startFakeQueryPort({ '?Q500': 'STATUS, BUSY' });
+    const sockets: net.Socket[] = [];
+    server.on('connection', socket => sockets.push(socket));
+    const connector = queryPortConnector(server);
+    try {
+      expect((await connector.poll()).data.execution).toBe('ACTIVE');
+
+      for (const socket of sockets) socket.destroy();
+      await close(server);
+      await vi.waitFor(() => expect(connector.checkConnection()).toBe(false));
+
+      expect((await connector.poll()).data.execution).toBeUndefined();
+    } finally {
+      connector.disconnect();
+    }
+  });
 });
 
 describe('Haas data stream', () => {

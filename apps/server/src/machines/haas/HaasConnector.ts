@@ -468,11 +468,21 @@ export class HaasConnector extends BaseMachineConnector {
     });
   }
 
+  /**
+   * Send each query and save its value. After a failed query, or with the query port down, the other queries get no
+   * reply, so the live values (run status, spindle load) do not keep an old value. Throws the error of a failed query.
+   */
   private async pollCommands(): Promise<void> {
+    let failure: unknown = null;
     for (const cmd of this.commands) {
-      if (!this.queryConnected) break;
-
-      const reply = await this.sendQuery(cmd);
+      let reply: string | null = null;
+      if (failure === null && this.queryConnected) {
+        try {
+          reply = await this.sendQuery(cmd);
+        } catch (err) {
+          failure = err;
+        }
+      }
       if (cmd.saveLive) {
         cmd.saveLive(reply, this.data);
         continue;
@@ -483,6 +493,7 @@ export class HaasConnector extends BaseMachineConnector {
         this.saveQueryValue(cmd.label, value);
       }
     }
+    if (failure !== null) throw failure;
   }
 
   /** The mode is text, the part count a whole number, and a macro a number when it can be one */
@@ -512,12 +523,10 @@ export class HaasConnector extends BaseMachineConnector {
 
     this.prevData = { ...this.data };
 
-    if (this.queryConnected) {
-      try {
-        await this.pollCommands();
-      } catch (err) {
-        this.addError(`Query error: ${errorMessage(err)}`);
-      }
+    try {
+      await this.pollCommands();
+    } catch (err) {
+      this.addError(`Query error: ${errorMessage(err)}`);
     }
 
     this.updateAlarmText();
