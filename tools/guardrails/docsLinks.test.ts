@@ -74,6 +74,10 @@ describe('anchorsOf', () => {
     expect(anchorsOf('```inline``` code\n## Real')).toEqual(['real']);
   });
 
+  it('reads a heading with up to 3 spaces before it, as in a list item', () => {
+    expect(anchorsOf('- x\n  ## In a list\n   ### Three spaces\n    # Code, not a heading')).toEqual(['in-a-list', 'three-spaces']);
+  });
+
   it('skips a code block in a list item', () => {
     expect(anchorsOf('- x\n  ```\n  # fake\n  ```\n## Real')).toEqual(['real']);
   });

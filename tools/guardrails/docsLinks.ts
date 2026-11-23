@@ -27,7 +27,7 @@ export function docsPageFile(page: string): string {
 export function anchorsOf(markdown: string): string[] {
   const anchors: string[] = [];
   for (const line of linesOutsideCodeBlocks(markdown)) {
-    const heading = /^#{1,6}\s+(.*)$/.exec(line);
+    const heading = /^ {0,3}#{1,6}\s+(.*)$/.exec(line);
     if (!heading) continue;
     const custom = /\{#([^}]+)\}\s*$/.exec(heading[1]);
     if (custom) {
