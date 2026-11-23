@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { resetAdmins } from './adminReset.js';
 import { authParts } from './testSupport.js';
 
@@ -18,5 +18,18 @@ describe('resetAdmins (npm run reset-password)', () => {
     expect(users.find(sam.id)).not.toBeNull();
     expect(auth.sessionOf(samSession)).toBeNull();
     expect(auth.knownDeviceOf(samDevice, 'sam')).toBeNull();
+  });
+
+  it('changes nothing when the device cookies cannot stop', async () => {
+    const { users, sessions, auth } = authParts();
+    const adminSession = (await auth.setUp({ username: 'admin', password: 'admin-password' }, BROWSER))!;
+    vi.spyOn(users, 'forgetAllDevices').mockImplementation(() => {
+      throw new Error('disk full');
+    });
+
+    expect(() => resetAdmins(users, sessions)).toThrow('disk full');
+
+    expect(users.hasAdmin()).toBe(true);
+    expect(auth.sessionOf(adminSession)).not.toBeNull();
   });
 });
