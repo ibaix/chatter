@@ -114,7 +114,7 @@ interface TreeWalk {
   stopReason?: TreeCutReason;
 }
 
-type TreeCutReason = 'entries' | 'folders' | 'time' | 'longList' | 'cutList';
+type TreeCutReason = 'entries' | 'folders' | 'time' | 'longList' | 'cutList' | 'login';
 
 function cutWalk(walk: TreeWalk, reason: TreeCutReason): void {
   walk.cutReason ??= reason;
@@ -143,7 +143,7 @@ interface FolderListing {
 
 /**
  * The text of a raw LIST, whether Chatter stopped it at MAX_FOLDER_LIST_BYTES, and whether it ended before it was
- * complete (an error reply or a stall after some bytes, or a last line with no line end and no reply)
+ * complete (an error reply, or a stall after some bytes, that cut a line)
  */
 interface RawListing {
   text: string;
@@ -568,7 +568,9 @@ export class FTPClient {
 
   /**
    * The file tree, and whether the walk cut it short: at MAX_TREE_ENTRIES entries, at MAX_TREE_FOLDERS folders,
-   * at TREE_WALK_TIME_LIMIT_MS, or after a folder listing that is too long. The depth limit does not count as a cut.
+   * at TREE_WALK_TIME_LIMIT_MS, after a folder listing that is too long ('longList'), after a folder listing that
+   * ended before it was complete ('cutList'), or when a new login during the walk failed ('login').
+   * The depth limit does not count as a cut.
    */
   async readFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FileTree> {
     const key = `${depth}:${path}`;
@@ -949,11 +951,14 @@ export class FTPClient {
    * - An error reply (for example 426) or a stall after some bytes cuts the listing short. An error with no byte
    *   rejects, so the fallback can try. After an error reply, the client still reads the data until it ends, for
    *   REPLY_AFTER_LIST_WAIT_MS at most, because the data can come after the reply.
-   * - Some old servers send no reply. A listing whose data ended cleanly is then complete after REPLY_AFTER_LIST_WAIT_MS.
+   * - Some old servers send no reply. A listing whose data ended cleanly is then complete after
+   *   REPLY_AFTER_LIST_WAIT_MS, with all its text, also a last line with no line end (as before the reply check).
    * - Some servers do not close the data connection. A listing with a 2xx reply is then complete when no data
-   *   comes in REPLY_AFTER_LIST_WAIT_MS.
-   * Each listing that is not complete keeps only its complete lines, and is cut short when it lost a line.
-   * When the reply did not come, the client closes, so a late reply cannot go to the next command.
+   *   comes in REPLY_AFTER_LIST_WAIT_MS. A pause of that length in the middle of the data also ends it. When the
+   *   pause cuts a line, the listing is cut short.
+   * A listing whose data did not end cleanly, or that got an error reply, keeps only its complete lines, and is cut
+   * short when it lost a line. When the reply did not come, the client closes, so a late reply cannot go to the next
+   * command. The walk then logs in again only when it opens another folder.
    */
   private receiveListing(client: ftp.Client, dataSocket: net.Socket): Promise<RawListing> {
     return new Promise((resolve, reject) => {
@@ -969,7 +974,8 @@ export class FTPClient {
 
       const listing = (isCut: boolean): RawListing => {
         const text = Buffer.concat(chunks).toString();
-        if (hasDataEnded && isReplyDone && !isCut && !replyError) return { text, isTooLong, isCut: false };
+        // A clean end of the data ends the listing, also with no reply: some old servers send none
+        if (hasDataEnded && !isCut && !replyError) return { text, isTooLong, isCut: false };
         const lines = completeLines(text);
         return { text: lines, isTooLong, isCut: isCut || lines.length < text.length };
       };
@@ -1046,6 +1052,8 @@ export class FTPClient {
         return `A folder list on ${this.host} is too long. Chatter reads at most ${MAX_FOLDER_LIST_MB} MB of one folder list, and then opens no more folders.`;
       case 'cutList':
         return `A folder list on ${this.host} ended before it was complete. Chatter shows the complete lines that it read.`;
+      case 'login':
+        return `The connection to ${this.host} closed during the file tree, and Chatter could not log in again. Chatter shows the part that it read.`;
     }
   }
 
@@ -1055,25 +1063,45 @@ export class FTPClient {
   }
 
   /**
-   * List the current folder: bare LIST first, then basic-ftp's list. An empty list when both fail.
-   * A raw listing that is too long keeps its first lines, and the fallback does not run.
+   * List the folder `path`, which is the current folder: bare LIST first, then basic-ftp's list. An empty list when
+   * both fail. A raw listing that is too long keeps its first lines, and the fallback does not run.
    * basic-ftp keeps nothing of a listing that is too long.
+   * A raw LIST that got no reply closed the client. The fallback then logs in again, and opens `path` again, because
+   * a new session starts in the login folder.
    */
-  private async listCurrentDirectory(client: ftp.Client): Promise<FolderListing> {
+  private async listCurrentDirectory(
+    client: ftp.Client,
+    { path, walk }: { path: string; walk: TreeWalk }
+  ): Promise<FolderListing> {
     let raw: RawListing;
     try {
       raw = await this.rawListCurrentDirectory(client);
     } catch {
-      // A raw LIST that got no reply closed the client
-      await this.loginWhenClosed(client);
+      if (client.closed) {
+        if (!(await this.loginAgainForWalk(client, walk))) return emptyListing();
+        await openFolder(client, path);
+      }
       return listWithBasicFtp(client);
     }
     return { entries: parseRawList(raw.text), isTooLong: raw.isTooLong, isCut: raw.isCut };
   }
 
-  /** Log in again on a client that closed, for example after a raw LIST that got no reply */
-  private async loginWhenClosed(client: ftp.Client): Promise<void> {
-    if (client.closed) await this.login(client);
+  /**
+   * Log in again when the client closed, for example after a raw LIST that got no reply. False when the walk must
+   * stop: after its time limit (which closed the client), or when the new login fails. The walk then keeps what it read.
+   * It does not use stopReasonOf, because the folder limit is reached while the last folder is still in the list.
+   */
+  private async loginAgainForWalk(client: ftp.Client, walk: TreeWalk): Promise<boolean> {
+    if (!client.closed) return true;
+    if (walk.stopReason) return false;
+    try {
+      await this.login(client);
+      return true;
+    } catch (err) {
+      stopWalk(walk, 'login');
+      log.debug('The new login of the file tree walk failed', { host: this.host, error: errorText(err) });
+      return false;
+    }
   }
 
   /**
@@ -1100,7 +1128,7 @@ export class FTPClient {
           return top.nodes;
         }
         walk.foldersLeft -= 1;
-        const { entries, isTooLong, isCut } = await this.listFolder(client, folder.path);
+        const { entries, isTooLong, isCut } = await this.listFolder(client, { path: folder.path, walk });
         if (isTooLong) stopWalk(walk, 'longList');
         if (isCut) cutWalk(walk, 'cutList');
         const kept = entries.slice(0, walk.entriesLeft);
@@ -1123,18 +1151,27 @@ export class FTPClient {
   /**
    * The entries of one folder. A folder that cannot be opened gives an empty list.
    * When the client closed, for example after a listing that got no reply, it logs in again first.
-   * When that login fails, the walk fails.
+   * When that login fails, or the time limit came, the walk stops and keeps what it read.
    */
-  private async listFolder(client: ftp.Client, path: string): Promise<FolderListing> {
-    await this.loginWhenClosed(client);
+  private async listFolder(client: ftp.Client, { path, walk }: { path: string; walk: TreeWalk }): Promise<FolderListing> {
     try {
-      await client.cd(path);
-      await client.pwd();
-      return await this.listCurrentDirectory(client);
+      if (!(await this.loginAgainForWalk(client, walk))) return emptyListing();
+      await openFolder(client, path);
+      return await this.listCurrentDirectory(client, { path, walk });
     } catch {
-      return { entries: [], isTooLong: false, isCut: false };
+      return emptyListing();
     }
   }
+}
+
+/** Make `path` the current folder, as the walk always did: CWD, then PWD */
+async function openFolder(client: ftp.Client, path: string): Promise<void> {
+  await client.cd(path);
+  await client.pwd();
+}
+
+function emptyListing(): FolderListing {
+  return { entries: [], isTooLong: false, isCut: false };
 }
 
 function treeNodeOf(entry: RawListEntry, parentPath: string): FTPTreeNode {
@@ -1152,6 +1189,6 @@ async function listWithBasicFtp(client: ftp.Client): Promise<FolderListing> {
     const list = await client.list();
     return { entries: list.map(item => ({ name: item.name, isDir: item.isDirectory, size: item.size })), isTooLong: false, isCut: false };
   } catch (err) {
-    return { entries: [], isTooLong: isListingTooLong(err), isCut: false };
+    return { ...emptyListing(), isTooLong: isListingTooLong(err) };
   }
 }
