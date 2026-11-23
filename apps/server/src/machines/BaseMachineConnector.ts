@@ -202,8 +202,9 @@ export abstract class BaseMachineConnector extends EventEmitter {
   // FTP Operations (shared by all connectors)
   // ============================================
 
-  async listFiles(path = '/'): Promise<FTPTreeNode[]> {
-    const files = await this.ftpClient.listFiles(path);
+  /** `signal` takes a waiting list out of the queue, for example when the browser leaves */
+  async listFiles(path = '/', signal?: AbortSignal): Promise<FTPTreeNode[]> {
+    const files = await this.ftpClient.listFiles(path, signal);
     return files.map(f => ({ ...f, children: undefined }));
   }
 
