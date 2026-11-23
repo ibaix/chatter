@@ -73,9 +73,9 @@ describe('webAppRoutes', () => {
       expect(res.headers.get('Cache-Control')).toBeNull();
     });
 
-    it('does not change the API replies', async () => {
+    it('keeps the no-store of the API replies', async () => {
       const res = await app.request('/api/machines', loggedIn);
-      expect(res.headers.get('Cache-Control')).toBeNull();
+      expect(res.headers.get('Cache-Control')).toBe('no-store');
     });
   });
 

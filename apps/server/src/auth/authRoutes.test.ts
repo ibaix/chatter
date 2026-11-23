@@ -646,6 +646,8 @@ describe('the Secure flag of a login cookie from plain HTTP', () => {
     expect(setCookie).toContain('SameSite=Lax');
     expect(setCookie).toContain('Path=/;');
     expect(setCookie).toContain(`Max-Age=${SESSION_LIFETIME_SECONDS}`);
+    // A shared cache in the proxy must not give this cookie to other browsers
+    expect(res.headers.get('Cache-Control')).toBe('no-store');
   });
 
   it('sets the cookie again when a visible page tells over HTTPS that its login is in use', async () => {
