@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LogFile } from './LogFile.js';
+import { appendToExistingLog, LogFile } from './LogFile.js';
 
 describe('LogFile', () => {
   let folder: string;
@@ -84,5 +84,34 @@ describe('LogFile', () => {
     await file.close();
     expect(existsSync(filePath)).toBe(false);
     expect(process.stderr.write).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('appendToExistingLog (a second process, such as npm run reset-password)', () => {
+  let folder: string;
+  let filePath: string;
+
+  beforeEach(() => {
+    folder = mkdtempSync(path.join(os.tmpdir(), 'log-file-'));
+    filePath = path.join(folder, 'logs', 'chatter.log');
+  });
+
+  afterEach(() => {
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  it('adds the line to the log file of the server', () => {
+    mkdirSync(path.dirname(filePath));
+    writeFileSync(filePath, 'server line\n');
+
+    expect(appendToExistingLog(filePath, 'reset line')).toBe(true);
+
+    expect(readFileSync(filePath, 'utf8')).toBe('server line\nreset line\n');
+  });
+
+  it('makes no file and no folder, so a run as root cannot make a file that the server cannot write', () => {
+    expect(appendToExistingLog(filePath, 'reset line')).toBe(false);
+
+    expect(existsSync(path.dirname(filePath))).toBe(false);
   });
 });
