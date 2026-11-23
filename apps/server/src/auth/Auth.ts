@@ -127,8 +127,10 @@ export class Auth {
    * Only the user of the session changes: a user cannot stop the device cookies of a different user.
    */
   logOutOtherBrowsers(session: Session): void {
-    this.sessions.deleteOthersOf(session);
-    this.users.forgetDevicesOf(session.userId);
+    this.users.inTransaction(() => {
+      this.sessions.deleteOthersOf(session);
+      this.users.forgetDevicesOf(session.userId);
+    });
   }
 
   /** True when a user has this username. Only the login log uses it: a login reply never tells it. */

@@ -155,6 +155,14 @@ export class UserStore {
     this.db.prepare('UPDATE users SET device_epoch = device_epoch + 1').run();
   }
 
+  /**
+   * Run the work in one transaction: when it throws, no write of the work stays.
+   * The session store uses the same database (see index.ts), so its writes in the work are in the transaction too.
+   */
+  inTransaction<T>(work: () => T): T {
+    return this.db.transaction(work)();
+  }
+
   markLoggedIn(id: number): void {
     this.db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(this.now(), id);
   }
