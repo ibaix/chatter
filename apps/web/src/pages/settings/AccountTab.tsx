@@ -105,7 +105,13 @@ function SessionsPanel() {
   return (
     <Panel
       title="Where you are logged in"
-      description="A browser stays logged in for 1 year, or until you log it out. Programs that send the password are not on this list. After Log out all other browsers, each other browser is a new browser for the login limits. This includes the browsers that are logged out."
+      description={
+        <>
+          A browser stays logged in for 1 year, or until you log it out. Programs that send the password are not on this list.
+          When you click <strong>Log out all other browsers</strong>, each other browser is a new browser for the login
+          limits. This includes the browsers that are logged out.
+        </>
+      }
       actions={logOutOthersButton}
     >
       {loadError && <Notice tone="error" title={loadError} className="mx-5 my-4" />}

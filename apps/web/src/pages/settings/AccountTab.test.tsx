@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { changePassword, fetchSessions, logOutOtherBrowsers, type SessionsReport } from '../../api/auth';
 import { ThemeProvider } from '../../theme/ThemeProvider';
@@ -65,7 +65,12 @@ describe('AccountTab', () => {
 
   it('tells that the other browsers are new browsers for the login limits after the log out', async () => {
     await renderTab(twoBrowsers);
-    expect(screen.getByText(/each other browser is a new browser for the login limits/)).toBeInTheDocument();
+    const description = screen.getByText(/each other browser is a new browser for the login limits/);
+    expect(description).toHaveTextContent(
+      'When you click Log out all other browsers, each other browser is a new browser for the login limits.',
+    );
+    // The name of the button is in bold, so it reads as the name of the button
+    expect(within(description).getByText('Log out all other browsers').tagName).toBe('STRONG');
   });
 
   it('loads the list again after a new password, because the other browsers are logged out', async () => {
