@@ -74,4 +74,44 @@ describe('a program download that the browser cancels', () => {
     expect(machine.commands.filter(command => command === 'RETR')).toHaveLength(1);
     expect(log.lines.filter(line => line.level === 'error')).toEqual([]);
   });
+
+  // The machine has one FTP session at a time, so the second download waits. The cancel of the first must free the turn.
+  it('starts a waiting download of a second browser when the first browser cancels its download', async () => {
+    machine = await startEndlessMachine();
+    server = startWebServer(appFor(machine), 0, { hostname: '127.0.0.1' });
+    await once(server, 'listening');
+    const port = (server.address() as AddressInfo).port;
+    let requestCount = 0;
+    server.on('request', () => { requestCount += 1; });
+    const first = startBrowserDownload(port);
+    browser = first.socket;
+    await first.gotData;
+    const second = startBrowserDownload(port);
+
+    try {
+      await waitFor(() => requestCount === 2);
+      expect(requestCount).toBe(2);
+      expect(machine.commands.filter(command => command === 'USER')).toHaveLength(1);
+      first.socket.destroy();
+      await second.gotData;
+
+      expect(machine.commands.filter(command => command === 'USER')).toHaveLength(2);
+      expect(machine.openControlConnections()).toBe(1);
+    } finally {
+      second.socket.destroy();
+    }
+  });
 });
+
+/** A browser that asks for a program download. `gotData` resolves at the first line of the program. */
+function startBrowserDownload(port: number): { socket: Socket; gotData: Promise<void> } {
+  const socket = connect(port, '127.0.0.1');
+  socket.on('error', () => {});
+  socket.on('connect', () => socket.write('GET /machine/1/files/download?path=O1000 HTTP/1.1\r\nHost: localhost\r\n\r\n'));
+  let reply = '';
+  const gotData = new Promise<void>(resolve => socket.on('data', chunk => {
+    reply += chunk.toString();
+    if (reply.includes('G01 X1 Y1')) resolve();
+  }));
+  return { socket, gotData };
+}
