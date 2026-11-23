@@ -1235,10 +1235,24 @@ describe('FTPClient raw RETR to a slow destination', () => {
     machine = undefined;
   });
 
-  it('stops to read from the machine while the destination is full, and does not time out', async () => {
-    const bigText = 'G01 X1 Y1\n'.repeat(1_600_000);
+  const bigText = 'G01 X1 Y1\n'.repeat(1_600_000);
+
+  it.each([
+    { name: 'the raw RETR', sendFile: (transfer: FileTransfer) => sendWholeFile(transfer, bigText) },
+    {
+      name: 'the fallback',
+      sendFile: (transfer: FileTransfer) => {
+        if (transfer.retrNumber > 1) {
+          sendWholeFile(transfer, bigText);
+          return;
+        }
+        transfer.control.write('425 Cannot open data connection\r\n');
+        transfer.data.end();
+      }
+    },
+  ])('stops to read from the machine in $name while the destination is full, and does not time out', async ({ sendFile }) => {
     const slow = slowDestination();
-    const download = await startDownload({ programText: bigText, timeoutMs: 100, destination: slow.destination });
+    const download = await startDownload({ sendFile, timeoutMs: 100, destination: slow.destination });
     machine = download.machine;
 
     await new Promise(resolve => setTimeout(resolve, 400));
