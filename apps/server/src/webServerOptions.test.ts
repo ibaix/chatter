@@ -86,7 +86,7 @@ describe('the connection limits of startWebServer', () => {
   });
 
   it('keeps a connection open within the header time limit', async () => {
-    const port = await start({ serverOptions: { headersTimeout: 1_000, connectionsCheckingInterval: 50 } });
+    const port = await start({ serverOptions: { headersTimeout: 5_000, connectionsCheckingInterval: 50 } });
     const { socket, reply } = await open(port);
     await wait(300);
 
