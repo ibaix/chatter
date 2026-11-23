@@ -84,7 +84,7 @@ function sharedCertificateManager(): OPCUACertificateManager | undefined {
   // A SINUMERIK server certificate is self-signed. automaticallyAcceptUnknownCertificate makes Chatter accept
   // each new or changed server certificate with no check by a person. It does not pin a certificate to a host,
   // and it moves even a certificate in rejected/ to trusted/. So signAndEncrypt hides the data, but does not
-  // prove which control answers. For this risk, see docs/security.md.
+  // prove which control answers. For this risk, see docs/security.md#how-chatter-is-made-to-be-used.
   certificateManager ??= new OPCUACertificateManager({
     rootFolder: certificateFolder,
     automaticallyAcceptUnknownCertificate: true,
