@@ -1,6 +1,6 @@
 // Puts each changed line in one part of the table. The first rule that matches wins:
-// 1. Not counted: binary, lock, build output, SVG and generated files
-// 2. Tests: test files, test folders, testSupport.ts and the vitest setup files (also their comments)
+// 1. Not counted: binary files, symlinks, lock files, build output, SVG and generated files
+// 2. Tests: test files, test folders, test helpers and the vitest setup files (also their comments)
 // 3. Docs: docs/ and each .md file
 // 4. Source: comment lines go to "Docs and comments", each other line (also a blank line) to "Application code"
 import type { FileHunks, FileStat } from './diff';
@@ -31,8 +31,16 @@ export interface FileComments {
 /** The `setupFiles` of the vitest configs. A test in classify.test.ts finds a new one. */
 const SETUP_FILES = new Set(['apps/server/src/logging/quietLogsInTests.ts']);
 
-function notCountedReason(path: string, { binary, generated }: { binary: boolean; generated: boolean }): string | undefined {
+/** `generated`: git check-attr marks the file linguist-generated. `symlink`: the file is a symlink in the base or in the head. */
+export interface PathFlags {
+  binary: boolean;
+  generated: boolean;
+  symlink?: boolean;
+}
+
+function notCountedReason(path: string, { binary, generated, symlink }: PathFlags): string | undefined {
   if (binary) return 'binary';
+  if (symlink) return 'symlink';
   if (/(^|\/)package-lock\.json$/.test(path)) return 'package-lock.json';
   if (/(^|\/)dist\//.test(path) || path.startsWith('coverage/') || path.startsWith('docs/.vitepress/cache/')) return 'build output';
   if (/\.svg$/i.test(path)) return 'SVG';
@@ -42,12 +50,15 @@ function notCountedReason(path: string, { binary, generated }: { binary: boolean
 
 function isTest(path: string): boolean {
   return (
-    /\.test\.(ts|tsx|sh)$/.test(path) || /(^|\/)test\//.test(path) || /(^|\/)testSupport\.ts$/.test(path) || SETUP_FILES.has(path)
+    /\.(test|spec)\.[^/]+$/.test(path) ||
+    /(^|\/)(test|__tests__|fixtures?)\//.test(path) ||
+    /[tT]estSupport\.tsx?$/.test(path) ||
+    SETUP_FILES.has(path)
   );
 }
 
-/** The part of a file from its path. `generated`: git check-attr marks the file linguist-generated. */
-export function classifyPath(path: string, flags: { binary: boolean; generated: boolean }): PathClass {
+/** The part of a file from its path */
+export function classifyPath(path: string, flags: PathFlags): PathClass {
   const reason = notCountedReason(path, flags);
   if (reason) return { part: 'notCounted', reason };
   if (isTest(path)) return { part: 'tests' };

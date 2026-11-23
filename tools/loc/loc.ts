@@ -4,7 +4,7 @@
 import { execFileSync } from 'node:child_process';
 import { classifyPath, countFile, type FileComments } from './classify';
 import { commentLines, languageOf } from './comments';
-import { parseHunks, parseNumstat, type FileStat } from './diff';
+import { parseHunks, parseNumstat, parseSymlinks, type FileStat } from './diff';
 import { filesTable, sizeTable, totalsOf } from './table';
 
 export interface LocArgs {
@@ -46,8 +46,23 @@ export function argsFrom(args: string[]): LocArgs {
   return result;
 }
 
-// The options make the output the same on each computer: no colors, no external diff tools, paths not quoted
-const DIFF = ['-c', 'core.quotePath=false', 'diff', '--no-color', '--no-ext-diff', '--no-textconv', '--src-prefix=a/', '--dst-prefix=b/', '--find-renames'];
+// The options make the output the same with each git config: the same diff algorithm, rename limit and file order,
+// no colors, no external diff tools, paths not quoted
+const DIFF = [
+  '-c',
+  'core.quotePath=false',
+  'diff',
+  '--no-color',
+  '--no-ext-diff',
+  '--no-textconv',
+  '--src-prefix=a/',
+  '--dst-prefix=b/',
+  '--diff-algorithm=myers',
+  '--indent-heuristic',
+  '--find-renames',
+  '-l1000',
+  '-O/dev/null',
+];
 
 function gitIn(cwd: string) {
   return (args: string[], input?: string) =>
@@ -58,12 +73,14 @@ function gitIn(cwd: string) {
 function generatedFiles(git: ReturnType<typeof gitIn>, head: string, paths: string[]): Set<string> {
   if (paths.length === 0) return new Set();
   const input = paths.join('\0') + '\0';
+  // The attributes file of the user does not count. (.git/info/attributes still counts.)
+  const checkAttr = ['-c', 'core.attributesFile=/dev/null', 'check-attr'];
   let output: string;
   try {
-    output = git(['check-attr', '--source', head, '-z', '--stdin', 'linguist-generated'], input);
+    output = git([...checkAttr, '--source', head, '-z', '--stdin', 'linguist-generated'], input);
   } catch {
     // git before 2.40 has no --source. Then the attributes of the working tree count.
-    output = git(['check-attr', '-z', '--stdin', 'linguist-generated'], input);
+    output = git([...checkAttr, '-z', '--stdin', 'linguist-generated'], input);
   }
   const fields = output.split('\0');
   const generated = new Set<string>();
@@ -73,20 +90,26 @@ function generatedFiles(git: ReturnType<typeof gitIn>, head: string, paths: stri
   return generated;
 }
 
-/** Reads many files from git with one process. The key is "<commit>:<path>". */
-function readBlobs(cwd: string, names: string[]): Map<string, string> {
+/**
+ * Reads many files from git with one process. The key is "<commit>:<path>".
+ * A name that is not a file (a folder, a submodule, a missing path) or that has a new line gets no entry.
+ */
+export function readBlobs(cwd: string, names: string[]): Map<string, string> {
   const blobs = new Map<string, string>();
-  if (names.length === 0) return blobs;
-  const output = execFileSync('git', ['cat-file', '--batch'], { cwd, input: names.join('\n') + '\n', maxBuffer: 256 * 1024 * 1024 });
+  // One name on each line of the input: a new line in a name would break the order of the output
+  const safe = names.filter(name => !name.includes('\n'));
+  if (safe.length === 0) return blobs;
+  const output = execFileSync('git', ['cat-file', '--batch'], { cwd, input: safe.join('\n') + '\n', maxBuffer: 256 * 1024 * 1024 });
   let offset = 0;
-  for (const name of names) {
+  for (const name of safe) {
     const lineEnd = output.indexOf(0x0a, offset);
     const header = output.subarray(offset, lineEnd).toString('utf8');
     offset = lineEnd + 1;
-    const match = / blob (\d+)$/.exec(header);
+    // "<sha> <type> <size>", then the body and a new line. "<name> missing" has no body.
+    const match = / (\w+) (\d+)$/.exec(header);
     if (!match) continue;
-    const size = Number(match[1]);
-    blobs.set(name, output.subarray(offset, offset + size).toString('utf8'));
+    const size = Number(match[2]);
+    if (match[1] === 'blob') blobs.set(name, output.subarray(offset, offset + size).toString('utf8'));
     offset += size + 1;
   }
   return blobs;
@@ -96,8 +119,11 @@ function count(cwd: string, mergeBase: string, headSha: string) {
   const git = gitIn(cwd);
   const stats = parseNumstat(git([...DIFF, '--numstat', '-z', mergeBase, headSha]));
   const hunks = parseHunks(git([...DIFF, '--unified=0', mergeBase, headSha]));
+  const symlinks = parseSymlinks(git([...DIFF, '--raw', '-z', mergeBase, headSha]));
   const generated = generatedFiles(git, headSha, stats.map(stat => stat.path));
-  const classes = stats.map(stat => classifyPath(stat.path, { binary: stat.binary, generated: generated.has(stat.path) }));
+  const classes = stats.map(stat =>
+    classifyPath(stat.path, { binary: stat.binary, generated: generated.has(stat.path), symlink: symlinks.has(stat.path) }),
+  );
 
   // Source files with comments: read the head version for the added lines and the base version for the removed lines
   const withComments = (stat: FileStat, index: number) => classes[index].part === 'source' && languageOf(stat.path) !== 'none';
@@ -149,7 +175,8 @@ export function runLoc(argv: string[], cwd: string): LocResult {
 
   const files = count(cwd, mergeBase, headSha);
   const totals = totalsOf(files);
-  const short = (sha: string) => git(['rev-parse', '--short', sha]).trim();
+  // A fixed length: `--short` changes with core.abbrev and with the size of the repo
+  const short = (sha: string) => sha.slice(0, 8);
 
   if (args.json) {
     const json = { base: { ref: args.base, sha: mergeBase }, head: { ref: args.head, sha: headSha }, ...totals, files };

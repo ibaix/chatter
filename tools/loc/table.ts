@@ -42,7 +42,7 @@ export function notCountedNote(reasons: string[]): string {
   return [...counts]
     .map(([reason, count]) => {
       if (reason === 'binary') return `${count} binary ${count === 1 ? 'file' : 'files'}`;
-      return count === 1 ? reason : `${reason} (${count} files)`;
+      return count === 1 ? reason : `${count} ${reason} files`;
     })
     .join('; ');
 }
@@ -57,7 +57,8 @@ export function sizeTable(totals: Totals, refs: Refs): string {
     '',
     '| Part | Added | Removed |',
     '|---|---:|---:|',
-    ...PARTS.map(([part, label]) => {
+    // A change with no file that is not counted gets no "Not counted" row
+    ...PARTS.filter(([part]) => part !== 'notCounted' || totals.notCounted.length > 0).map(([part, label]) => {
       const name = part === 'notCounted' && note ? `${label} (${cell(note)})` : label;
       return `| ${name} | ${counts(totals.parts[part])} |`;
     }),

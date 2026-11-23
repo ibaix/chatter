@@ -40,6 +40,26 @@ export function parseNumstat(z: string): FileStat[] {
   return stats;
 }
 
+/**
+ * `git diff --raw -z`: ":oldmode newmode oldsha newsha status NUL path NUL" for each file.
+ * For a rename or a copy, the old path and the new path follow. Mode 120000 is a symlink.
+ * Gives the path in the head (for a deleted file, the path in the base) of each symlink.
+ */
+export function parseSymlinks(z: string): Set<string> {
+  const fields = z.split('\0');
+  const links = new Set<string>();
+  for (let i = 0; i < fields.length; i++) {
+    const match = /^:(\d+) (\d+) \S+ \S+ ([A-Z])/.exec(fields[i]);
+    if (!match) continue;
+    const [, oldMode, newMode, status] = match;
+    const twoPaths = status === 'R' || status === 'C';
+    const path = fields[i + (twoPaths ? 2 : 1)];
+    if (oldMode === '120000' || newMode === '120000') links.add(path);
+    i += twoPaths ? 2 : 1;
+  }
+  return links;
+}
+
 const ESCAPES: Record<string, string> = { a: '\x07', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '"': '"', '\\': '\\' };
 
 /** git puts a path in quotes when it has a control character, a quote or a backslash, and escapes it as C does */
