@@ -297,7 +297,8 @@ describe('release signing', () => {
   const environmentOf = (job: WorkflowJob) => (typeof job.environment === 'object' ? job.environment.name : job.environment);
   const needsOf = (job: WorkflowJob) => [job.needs ?? []].flat();
   const stepIndex = (job: WorkflowJob, test: (step: WorkflowStep) => boolean) => (job.steps ?? []).findIndex(test);
-  const onMainCheck = (step: WorkflowStep) => step.run?.includes('git merge-base --is-ancestor "$GITHUB_SHA" origin/main') ?? false;
+  // The check is one script with its own shell test (tools/release/test/check-tag-on-main.test.sh)
+  const onMainCheck = (step: WorkflowStep) => step.run?.trim() === 'tools/release/check-tag-on-main.sh';
 
   it('gives the signing key only to the sign job', () => {
     expect(allJobs().filter(({ job }) => JSON.stringify(job).includes('UPDATE_SIGNING_KEY')).map(({ id }) => id)).toEqual([SIGN_JOB]);
@@ -348,7 +349,7 @@ describe('release signing', () => {
     const guarded = stepIndex(job, isGuarded);
     expect(check).toBeGreaterThanOrEqual(0);
     expect(guarded).toBeGreaterThan(check);
-    // merge-base needs the history of main
+    // The check script needs the history of main
     expect(job.steps?.find(step => step.uses?.startsWith('actions/checkout@'))?.with?.['fetch-depth']).toBe(0);
   });
 });

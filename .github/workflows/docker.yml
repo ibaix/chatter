@@ -43,11 +43,7 @@ jobs:
       # Only a commit on main can become a release. A tag on another branch publishes nothing.
       - name: Check that the tag is on main
         if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::The tag $GITHUB_REF_NAME is not on main. Tag only a commit on main."
-            exit 1
-          fi
+        run: tools/release/check-tag-on-main.sh
 
       # Emulates the ARM processors on the Intel build computer
       - name: Set up QEMU
@@ -137,11 +133,7 @@ jobs:
           fetch-depth: 0
 
       - name: Check that the tag is on main
-        run: |
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::The tag $GITHUB_REF_NAME is not on main. Tag only a commit on main."
-            exit 1
-          fi
+        run: tools/release/check-tag-on-main.sh
 
       # A login is not needed for a public package, but it avoids the pull limits of ghcr.io.
       # A run step, and not an action, so that no action runs in this job.
