@@ -387,20 +387,24 @@ describe('test runs', () => {
     expect(projects).toContain(`'tools/${name}'`);
   });
 
-  // npm test does not run the shell tests of the Pi card (they need Linux or Docker). Only a workflow runs them,
-  // so a test script that no workflow names never runs. The *.lib.sh files and in-linux.sh are helpers, not tests.
-  const PI_TESTS = 'tools/pi-image/test';
-  const piTestScripts = readdirSync(join(ROOT, PI_TESTS)).filter(file => file.endsWith('.test.sh'));
-  const workflows = readdirSync(join(ROOT, '.github/workflows'))
-    .filter(file => /\.ya?ml$/.test(file))
-    .map(file => read(join('.github/workflows', file)))
+  // npm test does not run the shell tests of the Pi card and of the release scripts (some need Linux or Docker).
+  // Only a workflow runs them, so a test script that no workflow runs never runs. The *.lib.sh files and
+  // in-linux.sh are helpers, not tests. Only the run text of the steps counts, not a comment.
+  const shellTests = ['tools/pi-image/test', 'tools/release/test'].flatMap(dir =>
+    readdirSync(join(ROOT, dir)).filter(file => file.endsWith('.test.sh')).map(file => `${dir}/${file}`),
+  );
+  const runText = workflowFiles
+    .flatMap(file => Object.values(workflow(file).jobs).flatMap(job => (job.steps ?? []).map(step => step.run ?? '')))
     .join('\n');
 
-  it('finds the shell tests of the Pi card', () => {
-    expect(piTestScripts).toContain('update-chatter-check.test.sh');
+  it('finds the shell tests of the Pi card and of the release scripts', () => {
+    expect(shellTests).toEqual(expect.arrayContaining([
+      'tools/pi-image/test/update-chatter-check.test.sh',
+      'tools/release/test/check-tag-on-main.test.sh',
+    ]));
   });
 
-  it.each(piTestScripts)(`runs ${PI_TESTS}/%s in a workflow`, file => {
-    expect(workflows).toContain(`${PI_TESTS}/${file}`);
+  it.each(shellTests)('runs %s in a workflow', path => {
+    expect(runText).toContain(path);
   });
 });

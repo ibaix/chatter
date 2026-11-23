@@ -13,6 +13,6 @@ Tests that keep the guardrails in [AGENTS.md](../../AGENTS.md#guardrails):
 - Each workflow pins each action by a full commit, with the version in a comment. A local action (`./`) is not pinned.
 - Only the sign job in `docker.yml` gets the update signing key and the `release` environment. It runs after the publish job, runs no action except the checkout, and gets only `contents: write` and `packages: read`. No job gets all the secrets (`secrets: inherit`).
 - The publish job and the sign job run `tools/release/check-tag-on-main.sh` before they publish or sign. The script stops the job when the tag is not on main.
-- A workflow runs each shell test of the Pi card (`tools/pi-image/test/*.test.sh`). `npm test` does not run them.
+- A workflow step runs each shell test of the Pi card (`tools/pi-image/test/*.test.sh`) and of the release scripts (`tools/release/test/*.test.sh`). `npm test` does not run them.
 
 `npm test` runs them (through `npm run test:tools`). If one fails, fix the change, not the test.

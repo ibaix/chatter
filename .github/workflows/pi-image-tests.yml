@@ -1,10 +1,11 @@
 name: Pi update helper
 
 # Runs the shell tests of the Pi card: the update helper on the Pi (tools/pi-image/in-pi/update-chatter.sh),
-# the round trip with the release script, and the scripts that build the card. npm test does not run them.
+# the round trip with the release script, and the scripts that build the card. It also runs the shell tests of the
+# release scripts (tools/release/test). npm test does not run them.
 # The helper tests need Linux tools and run in a Debian container (tools/pi-image/test/in-linux.sh).
 # The other tests run on the runner, which has Docker. A guardrail test (tools/guardrails) fails when
-# a tools/pi-image/test/*.test.sh file is not named in a workflow.
+# a tools/pi-image/test/*.test.sh or tools/release/test/*.test.sh file is not named in a workflow.
 # The paths are the helper, its tests, the release script and the files that the round trip reads,
 # and the status contract in packages/shared.
 
@@ -64,6 +65,22 @@ jobs:
             tools/pi-image/test/imager-list.test.sh \
             tools/pi-image/test/load-images.test.sh \
             tools/pi-image/test/update-mounts.test.sh; do
+            echo "==> $test_script"
+            "$test_script" || status=1
+          done
+          exit "$status"
+
+      # The scripts that make the release files and check the release tag. The runner has zip, unzip, OpenSSL 3
+      # and GNU tar. Each script runs, also when one before it fails.
+      - name: Test the release scripts
+        run: |
+          status=0
+          for test_script in \
+            tools/release/test/add-download-table.test.sh \
+            tools/release/test/check-tag-on-main.test.sh \
+            tools/release/test/make-docker-package.test.sh \
+            tools/release/test/make-update-file.test.sh \
+            tools/release/test/moving-tags.test.sh; do
             echo "==> $test_script"
             "$test_script" || status=1
           done
