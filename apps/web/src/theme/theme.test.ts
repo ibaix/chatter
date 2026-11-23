@@ -95,8 +95,22 @@ describe('applyTheme', () => {
 });
 
 describe('index.html', () => {
-  it('has no script in the page, so the Content-Security-Policy of the server can block such scripts', () => {
-    expect(indexHtml).not.toMatch(/<script>/);
+  // The Content-Security-Policy of the server blocks scripts in the page, so the page must have none
+  const page = new DOMParser().parseFromString(indexHtml, 'text/html');
+
+  it('loads each script from a file and has no script text in the page', () => {
+    const scripts = [...page.querySelectorAll('script')];
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const script of scripts) {
+      expect(script.getAttribute('src'), script.outerHTML).toBeTruthy();
+      expect(script.textContent?.trim(), script.outerHTML).toBe('');
+    }
+  });
+
+  it('has no event attribute (such as onload), because that is also a script in the page', () => {
+    const eventAttributes = [...page.querySelectorAll('*')].flatMap(element =>
+      element.getAttributeNames().filter(name => name.toLowerCase().startsWith('on')).map(name => `<${element.localName} ${name}>`));
+    expect(eventAttributes).toEqual([]);
   });
 
   it('runs the theme start script before the page draws', () => {
