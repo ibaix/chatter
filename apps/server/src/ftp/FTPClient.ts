@@ -4,6 +4,7 @@ import * as ftp from 'basic-ftp';
 import { ftpErrorMessage } from './ftpErrorMessage.js';
 import { FILE_TREE_ENTRY_LIMIT } from '@local-chatter/shared';
 import { createLogger } from '../logging/logger.js';
+import { sizeText } from '../http/sizeText.js';
 import type { FileTree, FTPConfig, FTPFileInfo, FTPTreeNode, FTPUploadFile, FTPUploadResult } from '../types/index.js';
 
 const DEFAULT_FTP_PORT = 21;
@@ -334,15 +335,8 @@ function onAbort(signal: AbortSignal | undefined, stop: () => void): void {
   else signal?.addEventListener('abort', stop, { once: true });
 }
 
-const BYTES_IN_MB = 1024 * 1024;
 const MS_IN_MINUTE = 60_000;
 const MS_IN_SECOND = 1_000;
-
-/** "64 MB", or the number of bytes when the size is not a whole number of MB */
-function sizeText(bytes: number): string {
-  const megabytes = bytes / BYTES_IN_MB;
-  return Number.isInteger(megabytes) ? `${megabytes} MB` : `${bytes} bytes`;
-}
 
 /** "30 minutes", or the number of seconds when the time is not a whole number of minutes */
 function durationText(ms: number): string {

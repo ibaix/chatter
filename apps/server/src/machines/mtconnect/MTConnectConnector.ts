@@ -10,7 +10,8 @@ import type {
   MachineDataSnapshot,
 } from '../../types/index.js';
 import { createLogger } from '../../logging/logger.js';
-import { ReplyTooLargeError, readTextUpTo, warnReplyTooLarge } from '../replyLimit.js';
+import { ReplyTooLargeError, warnReplyTooLarge } from '../replyLimit.js';
+import { BodyTooLargeError, readTextUpTo } from '../../http/readTextUpTo.js';
 
 const log = createLogger('mtconnect');
 
@@ -202,6 +203,7 @@ async function getText(url: string, timeoutMs: number): Promise<string> {
     if (err instanceof Error && err.name === 'AbortError') {
       throw new Error(`Request timeout after ${timeoutMs}ms`, { cause: err });
     }
+    if (err instanceof BodyTooLargeError) throw new ReplyTooLargeError(err.maxBytes);
     throw err;
   } finally {
     clearTimeout(timeoutId);

@@ -1,7 +1,7 @@
 import type { SendContext, SendResult } from './ChannelType.js';
 import { networkFailure } from './networkFailure.js';
 import { REDIRECTS } from './webAddress.js';
-import { readTextUpTo } from '../../machines/replyLimit.js';
+import { readTextUpTo } from '../../http/readTextUpTo.js';
 
 /** One JSON request of a channel type */
 export interface JsonPost {
