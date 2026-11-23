@@ -25,6 +25,13 @@ const ROOT_PATH = '/';
  */
 export const MAX_FOLDER_LIST_BYTES = 1024 * 1024;
 const MAX_FOLDER_LIST_MB = MAX_FOLDER_LIST_BYTES / 1024 / 1024;
+/** The most folders that one tree walk opens. Each folder costs some commands and a LIST on the machine. */
+export const MAX_TREE_FOLDERS = 200;
+/**
+ * One tree walk stops after this time, and keeps what it read. The raw LIST waits 1 s for each folder,
+ * so a normal walk of many folders can take some time.
+ */
+export const TREE_WALK_TIME_LIMIT_MS = 120_000;
 /** One folder list of listFiles, and the check for a file before an upload, stops after this time */
 export const FOLDER_LIST_TIME_LIMIT_MS = 60_000;
 const FOLDER_LIST_TOO_LONG_MESSAGE = `The folder list on the machine is too long. Chatter reads at most ${MAX_FOLDER_LIST_MB} MB of it.`;
@@ -70,25 +77,34 @@ export interface RawListEntry {
 /** The entries that one tree walk can still add */
 interface TreeWalk {
   entriesLeft: number;
+  foldersLeft: number;
   /** Why the walk left out an entry or a folder. Undefined when the tree is complete. */
   cutReason?: TreeCutReason;
   /**
-   * Set when the walk must open no more folders. After a listing that is too long, the machine can still send
-   * its reply to that LIST, and that late reply must not go to the next command.
+   * Set when the walk must open no more folders: after its time limit, or after a listing that is too long.
+   * After a listing that is too long, the machine can still send its reply to that LIST,
+   * and that late reply must not go to the next command.
    */
   stopReason?: TreeCutReason;
 }
 
-type TreeCutReason = 'entries' | 'longList';
+type TreeCutReason = 'entries' | 'folders' | 'time' | 'longList';
 
 function cutWalk(walk: TreeWalk, reason: TreeCutReason): void {
   walk.cutReason ??= reason;
+}
+
+/** Cut the walk, and open no more folders */
+function stopWalk(walk: TreeWalk, reason: TreeCutReason): void {
+  cutWalk(walk, reason);
+  walk.stopReason ??= reason;
 }
 
 /** The reason why the walk must open no more folders, or undefined when it can go on */
 function stopReasonOf(walk: TreeWalk): TreeCutReason | undefined {
   if (walk.stopReason) return walk.stopReason;
   if (walk.entriesLeft <= 0) return 'entries';
+  if (walk.foldersLeft <= 0) return 'folders';
   return undefined;
 }
 
@@ -444,17 +460,21 @@ export class FTPClient {
   }
 
   /**
-   * The file tree, and whether the walk cut it short: at MAX_TREE_ENTRIES entries, or after a folder listing
-   * that is too long. The depth limit does not count as a cut.
+   * The file tree, and whether the walk cut it short: at MAX_TREE_ENTRIES entries, at MAX_TREE_FOLDERS folders,
+   * at TREE_WALK_TIME_LIMIT_MS, or after a folder listing that is too long. The depth limit does not count as a cut.
    */
   async readFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FileTree> {
-    const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES };
+    const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, foldersLeft: MAX_TREE_FOLDERS };
     try {
       assertSafeFtpArgument(path);
       if (depth <= 0) {
         return { nodes: [], isCutShort: false };
       }
-      const nodes = await this.withConnection({ verbose: false }, client => this.buildTree(client, { path, depth: Math.min(depth, MAX_TREE_DEPTH), walk }));
+      const nodes = await this.withConnection({ verbose: false }, client => closeClientAfter(
+        client,
+        { timeLimitMs: TREE_WALK_TIME_LIMIT_MS, onTimeUp: () => stopWalk(walk, 'time') },
+        () => this.buildTree(client, { path, depth: Math.min(depth, MAX_TREE_DEPTH), walk })
+      ));
       if (walk.cutReason) {
         log.warn(this.treeCutMessage(walk.cutReason), { path });
       }
@@ -677,6 +697,10 @@ export class FTPClient {
     switch (reason) {
       case 'entries':
         return `The file tree on ${this.host} is too large. Chatter shows only the first ${MAX_TREE_ENTRIES} entries.`;
+      case 'folders':
+        return `The file tree on ${this.host} has too many folders. Chatter opens at most ${MAX_TREE_FOLDERS} folders.`;
+      case 'time':
+        return `The file tree on ${this.host} took too long. Chatter stops a walk after ${TREE_WALK_TIME_LIMIT_MS / 1000} s.`;
       case 'longList':
         return `A folder list on ${this.host} is too long. Chatter reads at most ${MAX_FOLDER_LIST_MB} MB of one folder list, and then opens no more folders.`;
     }
@@ -707,7 +731,8 @@ export class FTPClient {
    * The walk lists all the folders of one level before it opens the level below it,
    * so the entry limit cuts the deepest level first and the upper levels stay complete.
    * A folder that cannot be opened gives an empty list, so one bad folder does not hide the rest of the tree.
-   * When the walk has no entries left, or after a folder listing that is too long, it opens no more folders.
+   * The walk opens no more folders when it has no entries or folders left, after its time limit,
+   * or after a folder listing that is too long.
    * Each folder that it did not open has no children.
    */
   private async buildTree(
@@ -724,11 +749,9 @@ export class FTPClient {
           cutWalk(walk, stopReason);
           return top.nodes;
         }
+        walk.foldersLeft -= 1;
         const { entries, isTooLong } = await this.listFolder(client, folder.path);
-        if (isTooLong) {
-          cutWalk(walk, 'longList');
-          walk.stopReason = 'longList';
-        }
+        if (isTooLong) stopWalk(walk, 'longList');
         const kept = entries.slice(0, walk.entriesLeft);
         walk.entriesLeft -= kept.length;
         if (kept.length < entries.length) cutWalk(walk, 'entries');
