@@ -677,7 +677,8 @@ export class FTPClient {
   }
 
   private startTreeWalk(key: string, path: string, depth: number): SharedTreeWalk {
-    const willWait = this.sessions.hasRunningTask;
+    // A walk of depth 0 lists no folder, so it does not wait for the machine
+    const willWait = depth > 0 && this.sessions.hasRunningTask;
     const waitingWalks = [...this.treeWalks.values()].filter(other => other.isWaiting).length;
     if (willWait && waitingWalks >= MAX_WAITING_TREE_WALKS) throw SessionQueue.busyError();
     const stop = new AbortController();
