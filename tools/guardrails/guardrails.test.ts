@@ -137,6 +137,8 @@ describe('docs links', () => {
 });
 
 interface WorkflowStep {
+  if?: string;
+  'continue-on-error'?: unknown;
   uses?: string;
   run?: string;
   with?: Record<string, unknown>;
@@ -322,7 +324,7 @@ describe('release signing', () => {
   // A push to main and a pre-release tag such as v1.2.0-rc1 get no update file. The update helper accepts only a
   // version such as 1.2.0.
   const releaseTagOnly = "startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')";
-  const conditionOf = (job: WorkflowJob) => job.if?.replace(/\s+/g, ' ').trim();
+  const conditionOf = (jobOrStep: { if?: string }) => jobOrStep.if?.replace(/\s+/g, ' ').trim();
 
   it('signs only for a release tag such as v1.2.0', () => {
     expect(conditionOf(sign)).toBe(releaseTagOnly);
@@ -351,6 +353,18 @@ describe('release signing', () => {
     expect(guarded).toBeGreaterThan(check);
     // The check script needs the history of main
     expect(job.steps?.find(step => step.uses?.startsWith('actions/checkout@'))?.with?.['fetch-depth']).toBe(0);
+  });
+
+  // The sign job runs only for a tag, so its check has no condition. The publish job also builds for a push to main,
+  // so its check runs for each tag. A failed check must stop the job.
+  it.each([
+    ['publish', publish, "startsWith(github.ref, 'refs/tags/v')"],
+    ['sign', sign, undefined],
+  ] as const)('stops the %s job when the tag is not on main', (_name, job, condition) => {
+    const checks = (job.steps ?? []).filter(onMainCheck);
+    expect(checks).toHaveLength(1);
+    expect(conditionOf(checks[0])).toBe(condition);
+    expect(checks[0]['continue-on-error']).toBeUndefined();
   });
 });
 
