@@ -4,6 +4,7 @@ import { PassThrough, Writable } from 'stream';
 import * as ftp from 'basic-ftp';
 import { FTPClient, MAX_FOLDER_LIST_BYTES, REPLY_AFTER_DATA_WAIT_MS, type DownloadLimits } from './FTPClient.js';
 import { captureLog } from '../logging/testSupport.js';
+import type { FTPTreeNode } from '../types/index.js';
 
 // A rogue machine can name any host in its PASV reply, so Chatter would open a connection to a host of its choice.
 // The data connection must go only to the host of the control connection, and only the port comes from the reply.
@@ -39,11 +40,11 @@ interface FakeMachine {
   close(): Promise<void>;
 }
 
-/** One RETR on the fake machine, after its 150 reply */
+/** One RETR or LIST on the fake machine, after its 150 reply */
 interface FileTransfer {
   control: net.Socket;
   data: net.Socket;
-  /** 1 for the first RETR of the machine, 2 for the next, and so on */
+  /** 1 for the first RETR (or LIST) of the machine, 2 for the next, and so on */
   retrNumber: number;
 }
 
@@ -111,12 +112,14 @@ function readAll(socket: net.Socket): Promise<string> {
 
 /** Reply to the commands of FTPClient and basic-ftp. RETR, LIST and STOR use the next data connection. */
 function answerCommands(socket: net.Socket, {
-  pasvReply, epsvReply, nextDataSocket, onUpload, commands, sendFile, listing, passReply
+  pasvReply, epsvReply, nextDataSocket, onUpload, commands, sendFile, sendListing, passReply, replies, storReply
 }: {
   pasvReply: () => string;
   passReply: string;
   sendFile: (transfer: Omit<FileTransfer, 'retrNumber'>) => void;
-  listing: string;
+  sendListing: (transfer: Omit<FileTransfer, 'retrNumber'>) => void;
+  replies: Record<string, string>;
+  storReply: string;
   epsvReply: string;
   nextDataSocket: () => Promise<net.Socket>;
   onUpload: (text: string) => void;
@@ -132,7 +135,8 @@ function answerCommands(socket: net.Socket, {
       buffered = buffered.slice(lineEnd + 2);
       const command = line.split(' ')[0].toUpperCase();
       commands.push(command);
-      if (command === 'USER') socket.write('331 Password\r\n');
+      if (replies[command] !== undefined) socket.write(`${replies[command]}\r\n`);
+      else if (command === 'USER') socket.write('331 Password\r\n');
       else if (command === 'PASS') socket.write(`${passReply}\r\n`);
       else if (command === 'PASV') socket.write(`${pasvReply()}\r\n`);
       else if (command === 'EPSV') socket.write(`${epsvReply}\r\n`);
@@ -143,11 +147,11 @@ function answerCommands(socket: net.Socket, {
         sendFile({ control: socket, data: await nextDataSocket() });
       } else if (command === 'LIST') {
         socket.write('150 Opening data connection\r\n');
-        sendWholeFile({ control: socket, data: await nextDataSocket(), retrNumber: 0 }, listing);
+        sendListing({ control: socket, data: await nextDataSocket() });
       } else if (command === 'STOR') {
         socket.write('150 Ready for data\r\n');
         onUpload(await readAll(await nextDataSocket()));
-        socket.write('226 Transfer complete\r\n');
+        socket.write(`${storReply}\r\n`);
       } else socket.write('200 OK\r\n');
     }
   });
@@ -171,24 +175,33 @@ interface FakeMachineOptions {
   sendFile?: (transfer: FileTransfer) => void;
   /** The text that each LIST sends */
   listing?: string;
+  /** What the machine does for a LIST after its 150 reply. The default is sendWholeFile with listing. */
+  sendListing?: (transfer: FileTransfer) => void;
+  /** A fixed reply to a command, by its first word. For example { SIZE: '213 23' }. */
+  replies?: Record<string, string>;
+  /** The reply after the data of a STOR */
+  storReply?: string;
   /** The machine refuses the login from this control connection on (1 for the first) */
   refuseLoginFrom?: number;
 }
 
 const MACHINE_DEFAULTS = {
   controlHost: CONTROL_HOST, pasvReplyHost: PASV_REPLY_HOST, supportsEpsv: false, bareAddress: false, refuseFirstPasv: false,
-  programText: PROGRAM_TEXT, listing: LISTING
+  programText: PROGRAM_TEXT, listing: LISTING, replies: {}, storReply: '226 Transfer complete'
 };
 
 /** A decoy listens at the host of the PASV reply only when that host is on this computer */
 async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeMachine> {
   const {
-    controlHost, pasvReplyHost, supportsEpsv, bareAddress, pasvReplyFor, refuseFirstPasv, programText, listing,
-    refuseLoginFrom = Infinity, sendFile = (transfer: FileTransfer) => sendWholeFile(transfer, programText)
+    controlHost, pasvReplyHost, supportsEpsv, bareAddress, pasvReplyFor, refuseFirstPasv, programText, listing, replies, storReply,
+    refuseLoginFrom = Infinity, sendFile = (transfer: FileTransfer) => sendWholeFile(transfer, programText),
+    sendListing = (transfer: FileTransfer) => sendWholeFile(transfer, listing)
   } = { ...MACHINE_DEFAULTS, ...options };
   const dataSockets: net.Socket[] = [];
   const dataWaiters: Array<(socket: net.Socket) => void> = [];
-  const machine = { dataConnections: 0, decoyConnections: 0, controlConnections: 0, retrCount: 0, uploadedText: '', commands: [] as string[] };
+  const machine = {
+    dataConnections: 0, decoyConnections: 0, controlConnections: 0, retrCount: 0, listCount: 0, uploadedText: '', commands: [] as string[]
+  };
 
   const openDataSockets = new Set<net.Socket>();
   const dataServer = net.createServer(socket => {
@@ -230,10 +243,14 @@ async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeM
     const passReply = machine.controlConnections >= refuseLoginFrom ? '530 Login incorrect' : '230 Logged in';
     answerCommands(socket, {
       passReply,
-      pasvReply: nextPasvReply, epsvReply, nextDataSocket, listing, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands,
+      pasvReply: nextPasvReply, epsvReply, nextDataSocket, replies, storReply, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands,
       sendFile: transfer => {
         machine.retrCount += 1;
         sendFile({ ...transfer, retrNumber: machine.retrCount });
+      },
+      sendListing: transfer => {
+        machine.listCount += 1;
+        sendListing({ ...transfer, retrNumber: machine.listCount });
       }
     });
   });
@@ -1058,6 +1075,331 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
     expect(await hasSettled(outcome)).toBe(false);
     transfer?.control.write('226 Transfer complete\r\n');
     expect(await outcome).toBe('success');
+  });
+});
+
+/** Close the data connection on the machine, and wait until the client closed it too */
+async function endData(transfer: FileTransfer): Promise<void> {
+  let isClosed = false;
+  transfer.data.on('close', () => { isClosed = true; });
+  transfer.data.end();
+  await until(() => isClosed);
+}
+
+// After the file, an FTP server must send a reply (usually 226). Some old servers send none, so after a short wait
+// the client accepts a file whose data connection ended cleanly. A 426 that comes after this wait is never read. So
+// the client asks for the size of the file (SIZE) before the RETR. With no reply, it accepts the file only when it
+// has all the bytes of that size.
+describe('FTPClient raw RETR with no reply after the data, and the SIZE of the file', () => {
+  const timeoutMs = 200;
+  const firstPart = PROGRAM_TEXT.slice(0, 8);
+  const sizeReply = `213 ${PROGRAM_TEXT.length}`;
+  let machine: FakeMachine | undefined;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    await machine?.close();
+    machine = undefined;
+  });
+
+  /** The machine sends `sent`, ends the data connection, and sends no reply to RETR */
+  async function downloadWithNoReply({ sent, ...options }: FakeMachineOptions & { sent: string }) {
+    let transfer: FileTransfer | undefined;
+    const download = await startDownload({ sendFile: started => { transfer = started; }, timeoutMs, ...options });
+    machine = download.machine;
+    await until(() => transfer !== undefined);
+    transfer?.data.write(sent);
+    await until(() => download.text() === sent);
+    if (transfer) await endData(transfer);
+    vi.advanceTimersByTime(timeoutMs);
+    return { ...download, transfer };
+  }
+
+  const retrCount = () => machine?.commands.filter(command => command === 'RETR').length;
+
+  it.each([
+    { name: 'fewer bytes', sent: firstPart, error: `The file is not complete. The machine sent ${firstPart.length} of ${PROGRAM_TEXT.length} bytes. Try again.` },
+    { name: 'more bytes', sent: `${PROGRAM_TEXT}X`, error: `The file is not complete. The machine sent ${PROGRAM_TEXT.length + 1} of ${PROGRAM_TEXT.length} bytes. Try again.` },
+  ])('fails, and does not retry, when the data ends with $name than SIZE gave, and no reply comes', async ({ sent, error }) => {
+    const { outcome, text } = await downloadWithNoReply({ sent, replies: { SIZE: sizeReply } });
+
+    expect(await outcome).toBe(`FTP download error: ${error}`);
+    expect(text()).toBe(sent);
+    expect(machine?.commands.indexOf('SIZE')).toBeGreaterThan(-1);
+    expect(machine?.commands.indexOf('SIZE')).toBeLessThan(machine?.commands.indexOf('RETR') ?? -1);
+    expect(retrCount()).toBe(1);
+    expect(machine?.controlConnections).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('fails when a 426 comes after the wait for the reply, and the file is shorter than SIZE gave', async () => {
+    const { outcome, transfer } = await downloadWithNoReply({ sent: firstPart, replies: { SIZE: sizeReply } });
+    if (transfer && !transfer.control.destroyed) transfer.control.write('426 Connection closed; transfer aborted\r\n');
+
+    expect(await outcome).toMatch(/^FTP download error: The file is not complete/);
+  });
+
+  it('downloads the file, with no warning, when the data ends with all the bytes of SIZE and no reply comes', async () => {
+    const log = captureLog();
+    try {
+      const { outcome, text, transfer } = await downloadWithNoReply({ sent: PROGRAM_TEXT, replies: { SIZE: sizeReply } });
+      let isControlClosed = transfer?.control.destroyed === true;
+      transfer?.control.on('close', () => { isControlClosed = true; });
+
+      expect(await outcome).toBe('success');
+      expect(text()).toBe(PROGRAM_TEXT);
+      expect(log.text('warn')).toBe('');
+      expect(machine?.commands).toContain('SIZE');
+      // A late reply must not go to the next command
+      await until(() => isControlClosed);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      log.restore();
+    }
+  });
+
+  // Each server that does not give a clear size keeps the old behavior: the file is accepted with a warning
+  it.each([
+    { name: 'refuses SIZE', reply: '502 SIZE is not supported' },
+    { name: 'refuses SIZE in this mode', reply: '550 SIZE not allowed in ASCII mode' },
+    { name: 'gives a size that is not a number', reply: '213 1,234' },
+    { name: 'gives no size', reply: '213 ' },
+    { name: 'answers SIZE with another code', reply: '200 OK' },
+  ])('downloads the file with a warning, when the machine $name and no reply comes', async ({ reply }) => {
+    const log = captureLog();
+    try {
+      const { outcome, text } = await downloadWithNoReply({ sent: firstPart, replies: { SIZE: reply } });
+
+      expect(await outcome).toBe('success');
+      expect(text()).toBe(firstPart);
+      expect(log.text('warn')).toContain('did not confirm');
+      expect(retrCount()).toBe(1);
+    } finally {
+      log.restore();
+    }
+  });
+
+  // The 226 is the answer of the machine. A server can give a size that is not the byte count, so SIZE does not count then.
+  it('downloads the file when the 226 comes, also when SIZE gave another size', async () => {
+    const download = await startDownload({ timeoutMs, replies: { SIZE: '213 999' } });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('success');
+    expect(download.text()).toBe(PROGRAM_TEXT);
+  });
+});
+
+const FOLDER_LINE = 'drwxr-xr-x 1 cnc cnc 0 Jan 01 12:00 SUB\r\n';
+/** The start of a listing line, cut in the middle of the name O3000 */
+const CUT_LINE = '-rw-r--r-- 1 cnc cnc 30 Jan 01 12:00 O30';
+
+// The raw LIST must wait for the reply to LIST, as the raw RETR does. A 426 or 451 after part of a listing tells that
+// the listing is cut short. A late reply must not go to the next command of the tree walk.
+describe('FTPClient raw LIST that ends early', () => {
+  const timeoutMs = 200;
+  /** More than each wait of the raw LIST */
+  const longWaitMs = 1_000;
+  let machine: FakeMachine | undefined;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    await machine?.close();
+    machine = undefined;
+  });
+
+  /** Start a tree walk on a new fake machine. `tree` gives the tree, or the error message. */
+  async function startTree(sendListing: (transfer: FileTransfer) => void, depth = 1) {
+    machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, sendListing });
+    const ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs });
+    return { tree: ftpClient.readFileTree('/', depth).catch((err: Error) => err.message) };
+  }
+
+  /** The tree that the walk gave. A test fails when the walk gave an error. */
+  async function treeOf(tree: Promise<unknown>): Promise<{ nodes: FTPTreeNode[]; isCutShort: boolean }> {
+    const result = await tree;
+    expect(result).toEqual(expect.objectContaining({ nodes: expect.any(Array) }));
+    return result as { nodes: FTPTreeNode[]; isCutShort: boolean };
+  }
+
+  const listCount = () => machine?.commands.filter(command => command === 'LIST').length;
+  const namesOf = (nodes: FTPTreeNode[]) => nodes.map(node => node.name);
+
+  /** True from the time when the client closed its side of the data connection, so it has read all the data */
+  function trackClose(data: net.Socket): () => boolean {
+    let isClosed = data.destroyed;
+    data.on('close', () => { isClosed = true; });
+    return () => isClosed;
+  }
+
+  /** The tree must come with no move of the fake clock: no fixed wait is in the way */
+  async function treeWithNoWait(tree: Promise<unknown>) {
+    let isSettled = false;
+    void tree.then(() => { isSettled = true; });
+    await until(() => isSettled);
+    return treeOf(tree);
+  }
+
+  it('reads the listing as soon as the 226 comes, with no fixed wait', async () => {
+    const { tree } = await startTree(transfer => sendWholeFile(transfer, LISTING));
+
+    expect(await treeWithNoWait(tree)).toEqual({ nodes: expect.any(Array), isCutShort: false });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    { name: 'before', replyFirst: true },
+    { name: 'after', replyFirst: false },
+  ])('cuts the tree short, and drops the cut line, when a 426 comes $name the end of part of the listing', async ({ replyFirst }) => {
+    const reply = '426 Connection closed; transfer aborted\r\n';
+    const { tree } = await startTree(({ control, data }) => {
+      if (replyFirst) control.write(reply, () => setImmediate(() => data.end(LISTING + CUT_LINE)));
+      else data.end(LISTING + CUT_LINE, () => setImmediate(() => control.write(reply)));
+    });
+
+    const { nodes, isCutShort } = await treeWithNoWait(tree);
+    expect(isCutShort).toBe(true);
+    expect(namesOf(nodes)).toEqual(['O1000', 'O2000']);
+    // The machine answered, so a second LIST would not help
+    expect(listCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('cuts the tree short when a 451 comes after part of the listing', async () => {
+    const { tree } = await startTree(({ control, data }) => data.end(LISTING + CUT_LINE, () => {
+      setImmediate(() => control.write('451 Local error in processing\r\n'));
+    }));
+
+    const { nodes, isCutShort } = await treeWithNoWait(tree);
+    expect(isCutShort).toBe(true);
+    expect(namesOf(nodes)).toEqual(['O1000', 'O2000']);
+  });
+
+  it('cuts the tree short, and drops the cut line, when the data ends in the middle of a line and no reply comes', async () => {
+    let isClosed: (() => boolean) | undefined;
+    const { tree } = await startTree(({ data }) => {
+      isClosed = trackClose(data);
+      data.end(LISTING + CUT_LINE);
+    });
+    await until(() => isClosed?.() === true);
+
+    expect(await hasSettled(tree)).toBe(false);
+    vi.advanceTimersByTime(longWaitMs);
+
+    const { nodes, isCutShort } = await treeOf(tree);
+    expect(isCutShort).toBe(true);
+    expect(namesOf(nodes)).toEqual(['O1000', 'O2000']);
+  });
+
+  // Real timers: the client must read the data before its idle timer ends, and the test cannot see that read
+  it('cuts the tree short when the machine stops in the middle of a listing', async () => {
+    vi.useRealTimers();
+    const { tree } = await startTree(({ data }) => data.write(LISTING + CUT_LINE));
+
+    const { nodes, isCutShort } = await treeOf(tree);
+    expect(isCutShort).toBe(true);
+    expect(namesOf(nodes)).toEqual(['O1000', 'O2000']);
+    // A second LIST would stop in the same way
+    expect(listCount()).toBe(1);
+  });
+
+  it('keeps a last line with no line end when the 226 comes', async () => {
+    const { tree } = await startTree(transfer => sendWholeFile(transfer, `${LISTING}O3000`));
+
+    const { nodes, isCutShort } = await treeWithNoWait(tree);
+    expect(isCutShort).toBe(false);
+    expect(namesOf(nodes)).toEqual(['O1000', 'O2000', 'O3000']);
+  });
+
+  it('reads the whole listing when the 226 comes before the end of the data', async () => {
+    const { tree } = await startTree(({ control, data }) => {
+      data.write(LISTING.slice(0, 10));
+      control.write('226 Transfer complete\r\n', () => setImmediate(() => data.end(LISTING.slice(10))));
+    });
+
+    const { nodes, isCutShort } = await treeWithNoWait(tree);
+    expect(isCutShort).toBe(false);
+    expect(namesOf(nodes)).toEqual(['O1000', 'O2000']);
+  });
+
+  // Some old servers send no 226. The listing is complete when its data connection ends cleanly. A late 226 could
+  // then be read as the reply to the next CWD, so the walk opens the next folder on a new connection.
+  it('reads the next folder on a new connection after a listing with no reply', async () => {
+    let first: FileTransfer | undefined;
+    let isClosed: (() => boolean) | undefined;
+    const { tree } = await startTree(transfer => {
+      if (transfer.retrNumber > 1) {
+        sendWholeFile(transfer, LISTING);
+        return;
+      }
+      first = transfer;
+      isClosed = trackClose(transfer.data);
+      transfer.data.end(FOLDER_LINE + LISTING);
+    }, 2);
+    await until(() => isClosed?.() === true);
+    vi.advanceTimersByTime(longWaitMs);
+    if (first && !first.control.destroyed) first.control.write('226 Transfer complete\r\n');
+
+    const { nodes, isCutShort } = await treeOf(tree);
+    expect(isCutShort).toBe(false);
+    expect(namesOf(nodes)).toEqual(['SUB', 'O1000', 'O2000']);
+    expect(namesOf(nodes[0].children ?? [])).toEqual(['O1000', 'O2000']);
+    expect(machine?.controlConnections).toBe(2);
+  });
+
+  it('reads the listing through the fallback when the machine refuses the LIST after its 150 and sends no byte', async () => {
+    const { tree } = await startTree(transfer => {
+      if (transfer.retrNumber > 1) {
+        sendWholeFile(transfer, LISTING);
+        return;
+      }
+      transfer.control.write('450 Folder busy\r\n');
+      transfer.data.end();
+    });
+
+    const { nodes } = await treeWithNoWait(tree);
+    expect(namesOf(nodes)).toEqual(['O1000', 'O2000']);
+    // The raw LIST, then the "LIST -a" of basic-ftp
+    expect(listCount()).toBe(2);
+  });
+});
+
+// basic-ftp waits for the reply after the data of STOR. A 426 there tells that the program on the machine is not
+// complete, so the upload must fail. The cut file stays on the machine.
+describe('FTPClient upload that the machine ends with an error', () => {
+  const reply = '426 Connection closed; transfer aborted';
+  let machine: FakeMachine;
+  let ftpClient: FTPClient;
+
+  beforeEach(async () => {
+    machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, storReply: reply });
+    ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort });
+  });
+
+  afterEach(async () => {
+    await machine.close();
+  });
+
+  it('fails the upload when the machine sends 426 after the data of STOR', async () => {
+    await expect(ftpClient.uploadFile('O3000', PROGRAM_TEXT)).rejects.toThrow(`FTP upload error: ${reply}`);
+
+    expect(machine.uploadedText).toBe(PROGRAM_TEXT);
+  });
+
+  it('gives the file as failed in a batch upload when the machine sends 426 after the data of STOR', async () => {
+    const result = await ftpClient.uploadFiles([{ remotePath: 'O3000', source: PROGRAM_TEXT }]);
+
+    expect(result).toEqual({ success: [], failed: [{ remotePath: 'O3000', error: reply }] });
+    expect(machine.uploadedText).toBe(PROGRAM_TEXT);
   });
 });
 
