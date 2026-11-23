@@ -2,7 +2,7 @@ import { NOTIFICATION_MESSAGE_DAYS } from '@local-chatter/shared';
 import { Hono } from 'hono';
 import { requirePermission } from '../auth/authRoutes.js';
 import { channelTypeInfos } from '../notifications/channels/index.js';
-import type { Notifications } from '../notifications/Notifications.js';
+import { type Notifications, SecretNeededError } from '../notifications/Notifications.js';
 import { checkedJson, checkedParam, checkedQuery } from './checks.js';
 import { channelIdParam, channelInputSchema, notificationMessagesQuery, notificationSettingsSchema } from './schemas.js';
 
@@ -43,10 +43,16 @@ export function notificationRoutes(notifications: Notifications, now: () => numb
     })
 
     // The form of a saved channel: an empty secret uses the saved secret. The result goes in the message list.
+    // A wrong form gives a failed result. A saved secret that would go to a new address gives 400, as a save does.
     .post('/notification-channels/:id/test', canManageChatter, checkedParam(channelIdParam), checkedJson(channelInputSchema), async c => {
       const { id } = c.req.valid('param');
       if (!channels.get(id)) return c.json({ error: CHANNEL_NOT_THERE }, 404);
-      return c.json(await notifications.sendTest(c.req.valid('json'), id));
+      try {
+        return c.json(await notifications.sendTest(c.req.valid('json'), id));
+      } catch (error) {
+        if (error instanceof SecretNeededError) return c.json({ error: error.message }, 400);
+        throw error;
+      }
     })
 
     .get('/notification-messages', canManageChatter, checkedQuery(notificationMessagesQuery), c => {

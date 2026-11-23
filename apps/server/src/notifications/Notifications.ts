@@ -15,6 +15,9 @@ import { NotificationSettingsStore } from './NotificationSettingsStore.js';
 
 const log = createLogger('notifications');
 
+/** A test that would send a saved secret to a new address. The route refuses the request, as it refuses the save. */
+export class SecretNeededError extends Error {}
+
 /** An alert that vmalert stops sending ends with no new request, so Chatter also looks for changes this often */
 export const FIND_CHANGES_INTERVAL_MS = 60_000;
 export const CLEAN_UP_INTERVAL_MS = 60 * 60_000;
@@ -99,10 +102,14 @@ export class Notifications implements MachineRemovalListener {
   /**
    * "Send test": sends a test message at once with the values of the form, also when the form is not saved.
    * With `savedId`, an empty secret uses the saved secret, and the result goes in the message list of that channel.
+   * Throws SecretNeededError, and sends nothing, when the form moves a saved secret to a new address.
    */
   async sendTest(input: ChannelInput, savedId?: string): Promise<ChannelTestResult> {
     const check = this.channels.checkInput(input, savedId);
-    if (!check.ok) return check;
+    if (!check.ok) {
+      if (check.secretNeeded) throw new SecretNeededError(check.error);
+      return { ok: false, error: check.error };
+    }
     const message = testMessage(this.textOptions());
     const sent = await sendWithTimeLimit(check, message, { fetch: this.fetch, now: this.now, timeoutMs: SEND_TIMEOUT_MS });
     // The browser needs no retry flag: a test is tried one time only
