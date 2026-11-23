@@ -10,6 +10,8 @@ import type {
   MachineDataSnapshot,
 } from '../../types/index.js';
 import { createLogger } from '../../logging/logger.js';
+import { ReplyTooLargeError, warnReplyTooLarge } from '../replyLimit.js';
+import { BodyTooLargeError, readTextUpTo } from '../../http/readTextUpTo.js';
 
 const log = createLogger('mtconnect');
 
@@ -52,6 +54,15 @@ type XmlElement = Record<string, unknown>;
 
 const XML_OPTIONS = { explicitArray: false };
 const DEFAULT_SCAN_TIMEOUT_MS = 2000;
+
+/*
+ * The largest replies that Chatter reads from an agent. A Pi can have 512 MB of RAM, so an endless reply must stop.
+ * The limit must also keep the XML parse small: xml2js makes a tree of about 10 times the size of the reply.
+ */
+/** /probe tells all the data items of the agent. A real /probe is tens of KB to about 2 MB. */
+export const MAX_MTCONNECT_PROBE_BYTES = 4 * 1024 * 1024;
+/** /current gives only the data items that Chatter reads and the conditions (see fetchCurrentData), some KB. */
+export const MAX_MTCONNECT_CURRENT_BYTES = 1024 * 1024;
 
 const EMERGENCY_STOP_PRESSED = 'TRIGGERED';
 const EMERGENCY_STOP_ALARM_CODE = 'EMERGENCY_STOP';
@@ -170,11 +181,12 @@ function findSpindleLoadId(device: unknown, speedId: string): string | null {
 }
 
 /**
- * GET a URL and read its body. Throws when the reply is not OK, or takes longer than timeoutMs.
+ * GET a URL and read its body. Throws when the reply is not OK, is larger than maxBytes (ReplyTooLargeError),
+ * or takes longer than timeoutMs.
  * Does not follow a redirect: an agent must not send Chatter to another address,
  * for example to VictoriaMetrics, which has no login.
  */
-async function getText(url: string, timeoutMs: number): Promise<string> {
+async function getText(url: string, timeoutMs: number, maxBytes: number): Promise<string> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -189,11 +201,12 @@ async function getText(url: string, timeoutMs: number): Promise<string> {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-    return await response.text();
+    return await readTextUpTo(response, maxBytes);
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       throw new Error(`Request timeout after ${timeoutMs}ms`, { cause: err });
     }
+    if (err instanceof BodyTooLargeError) throw new ReplyTooLargeError(err.maxBytes);
     throw err;
   } finally {
     clearTimeout(timeoutId);
@@ -261,7 +274,7 @@ export class MTConnectConnector extends BaseMachineConnector {
   /** True when an MTConnect agent answers the probe on this port */
   static async probePort(host: string, port: number, timeout: number = DEFAULT_SCAN_TIMEOUT_MS): Promise<boolean> {
     try {
-      const text = await getText(`http://${host}:${port}/probe`, timeout);
+      const text = await getText(`http://${host}:${port}/probe`, timeout, MAX_MTCONNECT_PROBE_BYTES);
       return text.includes('MTConnectDevices') || text.includes('m:MTConnectDevices');
     } catch {
       return false;
@@ -298,7 +311,7 @@ export class MTConnectConnector extends BaseMachineConnector {
 
   /** Read the probe, and find the ids of the data items that Chatter reads */
   protected async probe(): Promise<void> {
-    const response = await this.httpGet(this.buildUrl('/probe'));
+    const response = await this.httpGet(this.buildUrl('/probe'), MAX_MTCONNECT_PROBE_BYTES);
     const parsed = await parseStringPromise(response, XML_OPTIONS);
 
     const root = parsed.MTConnectDevices || parsed['m:MTConnectDevices'];
@@ -389,7 +402,7 @@ export class MTConnectConnector extends BaseMachineConnector {
     const ids = this.dataItems.map(item => `@id="${item.id}"`);
     const path = `//DataItem[${['@category="CONDITION"', ...ids].join(' or ')}]`;
 
-    const response = await this.httpGet(this.buildUrl('/current', { path }));
+    const response = await this.httpGet(this.buildUrl('/current', { path }), MAX_MTCONNECT_CURRENT_BYTES);
     const parsed = await parseStringPromise(response, XML_OPTIONS);
 
     const root = parsed.MTConnectStreams || parsed['m:MTConnectStreams'];
@@ -524,7 +537,12 @@ export class MTConnectConnector extends BaseMachineConnector {
     return params ? `${url}?${new URLSearchParams(params).toString()}` : url;
   }
 
-  protected httpGet(url: string): Promise<string> {
-    return getText(url, this.timeout);
+  protected async httpGet(url: string, maxBytes: number): Promise<string> {
+    try {
+      return await getText(url, this.timeout, maxBytes);
+    } catch (err) {
+      if (err instanceof ReplyTooLargeError) warnReplyTooLarge(log, this.id, err);
+      throw err;
+    }
   }
 }

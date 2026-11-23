@@ -1,6 +1,7 @@
 import type { SendContext, SendResult } from './ChannelType.js';
 import { networkFailure } from './networkFailure.js';
 import { REDIRECTS } from './webAddress.js';
+import { readTextUpTo } from '../../http/readTextUpTo.js';
 
 /** One JSON request of a channel type */
 export interface JsonPost {
@@ -162,30 +163,8 @@ async function jsonOf(response: Response): Promise<JsonObject | undefined> {
  * A longer Content-Length stops it at once.
  */
 export async function textUpTo(response: Response, maxBytes: number): Promise<string | undefined> {
-  if (Number(response.headers.get('content-length')) > maxBytes) {
-    await response.body?.cancel().catch(() => {});
-    return undefined;
-  }
-  if (!response.body) return '';
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > maxBytes) {
-        reader.cancel().catch(() => {});
-        return undefined;
-      }
-      chunks.push(value);
-    }
-  } catch {
-    // The time limit ended, or the connection closed
-    return undefined;
-  }
-  return new TextDecoder().decode(Buffer.concat(chunks));
+  // A body that is too large, the time limit, or a closed connection
+  return readTextUpTo(response, maxBytes).catch(() => undefined);
 }
 
 export interface StatusTexts {

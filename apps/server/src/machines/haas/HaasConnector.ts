@@ -10,6 +10,7 @@ import type {
   MachineDataSnapshot,
 } from '../../types/index.js';
 import { createLogger } from '../../logging/logger.js';
+import { ReplyTooLargeError, warnReplyTooLarge } from '../replyLimit.js';
 
 const log = createLogger('haas');
 
@@ -20,6 +21,15 @@ const DEFAULT_QUERY_PORT = 5051;
 const DATA_STREAM_INIT = 'M_T_C_O_N_N_E_C_T_O_N\r\n';
 const DATA_STREAM_DISCONNECT = 'M_T_C_O_N_N_E_C_T_O_F_F\r\n';
 const DATA_DELIMITER = Buffer.from([0x0A, 0x03, 0x02]); // \n\x03\x02
+
+/**
+ * The longest data stream line that Chatter keeps while it waits for the delimiter. A line holds some key|value
+ * pairs. Nobody has seen the stream of a real Haas yet, so the limit has a wide margin. An endless line must stop,
+ * because a Pi can have 512 MB of RAM.
+ */
+export const MAX_HAAS_LINE_BYTES = 1024 * 1024;
+/** The longest query reply. A reply is one short line, such as ">MACRO, 123.456". */
+export const MAX_HAAS_QUERY_REPLY_BYTES = 64 * 1024;
 
 /** A query with no reply in this time gets no value */
 const QUERY_REPLY_TIMEOUT_MS = 2000;
@@ -195,12 +205,18 @@ export class HaasConnector extends BaseMachineConnector {
 
   private dataSocket: net.Socket | null = null;
   private querySocket: net.Socket | null = null;
-  private dataBuffer: Buffer = Buffer.alloc(0);
+  /** The chunks of the data stream line that waits for its delimiter, and their size */
+  private dataRest: Buffer[] = [];
+  private dataRestLength = 0;
+  /** The last bytes of the rest, so a delimiter that is split over two chunks is found */
+  private dataRestTail: Buffer = Buffer.alloc(0);
   private data: HaasMachineData = {};
   private prevData: HaasMachineData = {};
   private commands: HaasCommand[] = [];
   private dataStreamConnected = false;
   private queryConnected = false;
+  /** Why Chatter closed the data stream between two polls. The next poll shows it once. */
+  private dataStreamError: string | null = null;
 
   constructor(config: HaasMachineConfig) {
     super(config);
@@ -269,10 +285,12 @@ export class HaasConnector extends BaseMachineConnector {
 
   private async connectDataStream(): Promise<void> {
     this.dataSocket?.destroy();
+    // A part of a line from the old connection must not join the first line of the new one
+    this.clearDataRest();
 
     const socket = new net.Socket();
     this.dataSocket = socket;
-    socket.on('data', (chunk: Buffer) => this.handleDataStreamData(chunk));
+    socket.on('data', (chunk: Buffer) => this.handleDataStreamData(socket, chunk));
 
     await openSocket(socket, {
       host: this.host,
@@ -302,16 +320,46 @@ export class HaasConnector extends BaseMachineConnector {
     this.queryConnected = true;
   }
 
-  /** The data stream can split a line over several chunks, so keep the rest until its delimiter comes */
-  private handleDataStreamData(chunk: Buffer): void {
-    this.dataBuffer = Buffer.concat([this.dataBuffer, chunk]);
+  /**
+   * The data stream can split a line over several chunks, so keep the rest until its delimiter comes.
+   * A rest longer than MAX_HAAS_LINE_BYTES closes the data stream. The next poll connects it again.
+   */
+  private handleDataStreamData(socket: net.Socket, chunk: Buffer): void {
+    // Search only the new chunk and the last bytes before it. Join the chunks only when a line is complete.
+    // So a long line in many small chunks does not take more and more time.
+    const searched = Buffer.concat([this.dataRestTail, chunk]);
+    this.dataRestTail = Buffer.from(searched.subarray(-(DATA_DELIMITER.length - 1)));
+    this.dataRest.push(chunk);
+    this.dataRestLength += chunk.length;
+    if (searched.includes(DATA_DELIMITER)) this.parseCompleteLines();
 
-    let delimiterIndex: number;
-    while ((delimiterIndex = this.dataBuffer.indexOf(DATA_DELIMITER)) !== -1) {
-      const line = this.dataBuffer.slice(0, delimiterIndex).toString('ascii');
-      this.dataBuffer = this.dataBuffer.slice(delimiterIndex + DATA_DELIMITER.length);
-      this.parseDataStreamLine(line);
+    if (this.dataRestLength > MAX_HAAS_LINE_BYTES) {
+      const error = warnReplyTooLarge(log, this.id, new ReplyTooLargeError(MAX_HAAS_LINE_BYTES));
+      this.dataStreamError = `Data stream: ${error.message}`;
+      this.clearDataRest();
+      socket.destroy();
     }
+  }
+
+  /** Parse each complete line of the rest, and keep only the part after the last delimiter */
+  private parseCompleteLines(): void {
+    const data = Buffer.concat(this.dataRest);
+    let start = 0;
+    let end: number;
+    while ((end = data.indexOf(DATA_DELIMITER, start)) !== -1) {
+      this.parseDataStreamLine(data.toString('latin1', start, end));
+      start = end + DATA_DELIMITER.length;
+    }
+    // A copy, so the rest does not keep the joined lines in memory
+    const rest = Buffer.from(data.subarray(start));
+    this.dataRest = rest.length > 0 ? [rest] : [];
+    this.dataRestLength = rest.length;
+  }
+
+  private clearDataRest(): void {
+    this.dataRest = [];
+    this.dataRestLength = 0;
+    this.dataRestTail = Buffer.alloc(0);
   }
 
   /**
@@ -356,7 +404,8 @@ export class HaasConnector extends BaseMachineConnector {
     this.dataStreamConnected = false;
     this.queryConnected = false;
     this.connected = false;
-    this.dataBuffer = Buffer.alloc(0);
+    this.clearDataRest();
+    this.dataStreamError = null;
   }
 
   private updateAlarmText(): void {
@@ -376,27 +425,41 @@ export class HaasConnector extends BaseMachineConnector {
     }
   }
 
-  /** Send a query command and get the raw reply, or null when no reply comes in time */
+  /**
+   * Send a query command and get the raw reply, or null when no reply comes in time.
+   * A reply longer than MAX_HAAS_QUERY_REPLY_BYTES closes the query port and rejects.
+   */
   private async sendQuery(cmd: HaasCommand): Promise<string | null> {
     const socket = this.querySocket;
     if (!socket || !this.queryConnected) {
       return null;
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       let reply = '';
       const timeout = setTimeout(() => finish(null), QUERY_REPLY_TIMEOUT_MS);
 
       const onData = (chunk: Buffer) => {
-        reply += chunk.toString('ascii');
-        if (reply.includes('\n')) finish(reply);
+        const searchFrom = reply.length;
+        // latin1 gives one character for each byte. 'ascii' clears the high bit, so 0xA5 would read as % and 0x8A as \n.
+        reply += chunk.toString('latin1');
+        if (reply.includes('\n', searchFrom)) {
+          finish(reply);
+        } else if (reply.length > MAX_HAAS_QUERY_REPLY_BYTES) {
+          stop();
+          socket.destroy();
+          reject(warnReplyTooLarge(log, this.id, new ReplyTooLargeError(MAX_HAAS_QUERY_REPLY_BYTES)));
+        }
       };
       const onError = () => finish(null);
 
-      const finish = (result: string | null) => {
+      const stop = () => {
         clearTimeout(timeout);
         socket.removeListener('data', onData);
         socket.removeListener('error', onError);
+      };
+      const finish = (result: string | null) => {
+        stop();
         resolve(result);
       };
 
@@ -406,11 +469,21 @@ export class HaasConnector extends BaseMachineConnector {
     });
   }
 
+  /**
+   * Send each query and save its value. After a failed query, or with the query port down, the other queries get no
+   * reply, so the live values (run status, spindle load) do not keep an old value. Throws the error of a failed query.
+   */
   private async pollCommands(): Promise<void> {
+    let failure: unknown = null;
     for (const cmd of this.commands) {
-      if (!this.queryConnected) break;
-
-      const reply = await this.sendQuery(cmd);
+      let reply: string | null = null;
+      if (failure === null && this.queryConnected) {
+        try {
+          reply = await this.sendQuery(cmd);
+        } catch (err) {
+          failure = err;
+        }
+      }
       if (cmd.saveLive) {
         cmd.saveLive(reply, this.data);
         continue;
@@ -421,6 +494,7 @@ export class HaasConnector extends BaseMachineConnector {
         this.saveQueryValue(cmd.label, value);
       }
     }
+    if (failure !== null) throw failure;
   }
 
   /** The mode is text, the part count a whole number, and a macro a number when it can be one */
@@ -438,19 +512,22 @@ export class HaasConnector extends BaseMachineConnector {
 
   async poll(): Promise<HaasMachineStatus> {
     this.clearErrors();
-
-    if (!(await this.reconnectClosedPorts())) {
+    const reconnected = await this.reconnectClosedPorts();
+    // After the reconnect, because connect() clears the errors
+    if (this.dataStreamError) {
+      this.addError(this.dataStreamError);
+      this.dataStreamError = null;
+    }
+    if (!reconnected) {
       return this.getStatus();
     }
 
     this.prevData = { ...this.data };
 
-    if (this.queryConnected) {
-      try {
-        await this.pollCommands();
-      } catch (err) {
-        this.addError(`Query error: ${errorMessage(err)}`);
-      }
+    try {
+      await this.pollCommands();
+    } catch (err) {
+      this.addError(`Query error: ${errorMessage(err)}`);
     }
 
     this.updateAlarmText();
