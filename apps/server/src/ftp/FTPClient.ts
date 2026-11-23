@@ -81,6 +81,12 @@ export const SIZE_REPLY_WAIT_MS = 3_000;
  */
 const REPLY_AFTER_LIST_WAIT_MS = 1_000;
 /**
+ * After its 150, the raw LIST waits this long for the first byte. Some old servers send 150 in an empty folder, and then
+ * no data and no reply. A slow control can send its first byte some seconds after the 150, so this wait is longer than
+ * REPLY_AFTER_LIST_WAIT_MS. With no data and no reply in this time, the folder is empty, and the log gets a warning.
+ */
+export const FIRST_LIST_BYTE_AFTER_150_WAIT_MS = 5_000;
+/**
  * The raw RETR and the raw LIST stop when their data connection does not open in this time, and use the
  * fallback of basic-ftp. On a shop network a connection opens in a few milliseconds. The FTP timeout (30 s)
  * would come for each folder of a tree walk, so this time is shorter.
@@ -1139,10 +1145,10 @@ export class FTPClient {
    * basic-ftp sends "LIST -a", which some limited FTP servers do not support.
    * The listing stops at MAX_FOLDER_LIST_BYTES: then the data socket is destroyed, and the listing has the complete lines.
    */
-  private async rawListCurrentDirectory(client: ftp.Client): Promise<RawListing> {
+  private async rawListCurrentDirectory(client: ftp.Client, path: string): Promise<RawListing> {
     const { host, port } = await requestPassiveAddress(client.ftp);
     const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
-    return this.receiveListing(client, dataSocket);
+    return this.receiveListing(client, { dataSocket, path });
   }
 
   /**
@@ -1159,16 +1165,20 @@ export class FTPClient {
    *   comes in REPLY_AFTER_LIST_WAIT_MS. A pause of that length in the middle of the data also ends it. When the
    *   pause cuts a line, the listing is cut short.
    * - Some old servers send 150 in an empty folder, and then no data and no reply, and do not close the data
-   *   connection. So the 150 also starts (or starts again) the wait of REPLY_AFTER_LIST_WAIT_MS. With no data and no reply in that
-   *   time, the folder is empty, and the listing is not cut short (as before the reply check). Data that comes starts
-   *   the wait again. A 2xx reply still ends the listing at once, and an error reply with no byte still lets the
-   *   fallback try.
+   *   connection. So the 150 starts the wait for the first byte, FIRST_LIST_BYTE_AFTER_150_WAIT_MS (5 s, longer
+   *   than 1 s for a slow control). With no data and no reply in that time, the folder is empty, the listing is not
+   *   cut short (as before the reply check), and the log gets a warning. When data came before the 150, the 150
+   *   starts the wait of REPLY_AFTER_LIST_WAIT_MS again, as new data does. A 2xx reply still ends the listing at once,
+   *   and an error reply with no byte still lets the fallback try.
    * - Before the first byte and before the 150, the wait for data is the FTP timeout. With no byte, the fallback can try.
    * A listing whose data broke, or that got an error reply, keeps only its complete lines, and is cut short when it
    * lost a line. When the reply did not come, the client closes, so a late reply cannot go to the next command. The
    * walk then logs in again only when it opens another folder.
    */
-  private receiveListing(client: ftp.Client, dataSocket: net.Socket): Promise<RawListing> {
+  private receiveListing(
+    client: ftp.Client,
+    { dataSocket, path }: { dataSocket: net.Socket; path: string }
+  ): Promise<RawListing> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       let byteCount = 0;
@@ -1207,6 +1217,13 @@ export class FTPClient {
       const startIdleTimer = () => startTimer(this.timeoutMs, () => fail(new Error('Timeout: the raw LIST data connection is idle')));
       const finish = () => (replyError ? fail(replyError) : settle({ isCut: false }));
       const startReplyWait = () => startTimer(Math.min(this.timeoutMs, REPLY_AFTER_LIST_WAIT_MS), finish);
+      const firstByteWaitMs = Math.min(this.timeoutMs, FIRST_LIST_BYTE_AFTER_150_WAIT_MS);
+      const finishEmptyAfter150 = () => {
+        log.warn(`The machine answered LIST with 150, and then sent no data and no reply in ${durationText(firstByteWaitMs)}. Chatter shows the folder as empty.`, {
+          host: this.host, path,
+        });
+        finish();
+      };
       const settleWhenComplete = () => {
         if (hasDataEnded && isReplyDone) finish();
         else startReplyWait();
@@ -1236,6 +1253,7 @@ export class FTPClient {
         else if (reply.code >= 300) task.reject(new Error(`Unexpected reply to LIST: ${reply.message}`));
         // A 1xx reply (for example 150) tells that the transfer starts. An empty folder can send no data after it.
         // When data came first, the wait starts again, as for new data.
+        else if (byteCount === 0 && !hasDataEnded) startTimer(firstByteWaitMs, finishEmptyAfter150);
         else startReplyWait();
       }).then(() => {
         isReplyDone = true;
@@ -1286,7 +1304,7 @@ export class FTPClient {
   ): Promise<FolderListing> {
     let raw: RawListing;
     try {
-      raw = await this.rawListCurrentDirectory(client);
+      raw = await this.rawListCurrentDirectory(client, path);
     } catch {
       if (client.closed) {
         if (!(await this.loginAgainForWalk(client, walk))) return emptyListing();
