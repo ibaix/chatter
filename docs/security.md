@@ -110,9 +110,9 @@ On Linux, Docker sends the traffic of a published port around the rules of ufw a
 
 - **A rule in the `DOCKER-USER` chain.** Docker sends this traffic through that chain first. For example, this rule stops each computer that is not in `192.168.1.0/24`:
   ```bash
-  sudo iptables -I DOCKER-USER -p tcp -m conntrack --ctorigdstport 3001 --ctdir ORIGINAL ! -s 192.168.1.0/24 -j DROP
+  sudo iptables -I DOCKER-USER -i <LAN interface> -p tcp -m conntrack --ctorigdstport 3001 --ctdir ORIGINAL ! -s 192.168.1.0/24 -j DROP
   ```
-  Put your own network in place of `192.168.1.0/24`. The rule is lost when the computer restarts. To keep it, save it, for example with the package `iptables-persistent`. This rule does not stop IPv6.
+  Put your own network in place of `192.168.1.0/24`. To let only a reverse proxy through, put the address of the proxy there (see [Use HTTPS](./guide/https.md)). Put the name of the network interface of the computer in place of `<LAN interface>`, for example `eth0`. To see the names, run `ip -br addr`. With `-i`, the rule stops only the traffic that comes in from the network. So a proxy in a Docker container on the same computer can still reach Chatter. The rule is lost when the computer restarts. To keep it, save it, for example with the package `iptables-persistent`. This rule does not stop IPv6.
 - **Publish the port on one address only.** In `docker-compose.yml`, change `"3001:3001"` to `"<address>:3001:3001"`, for example `"192.168.1.20:3001:3001"`, then run `docker compose up -d`. Chatter then answers only on that address of the computer, and not on IPv6. Each computer that can reach that address can still open Chatter. An update replaces `docker-compose.yml`, so do the change again after each update (see [Update Chatter](./guide/update.md)). On the Pi card, the update helper replaces the file, so use the `DOCKER-USER` rule.
 
 ## Locked out after wrong passwords
