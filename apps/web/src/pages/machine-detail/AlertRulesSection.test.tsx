@@ -42,6 +42,12 @@ async function renderSection(rules: AlertRule[] = [OFFLINE, HIGH_LOAD], role: Ro
 
 const limitBox = () => screen.getByRole('spinbutton', { name: 'Limit' });
 
+/**
+ * The "+ Add rule" button, when its menu can open. The rules can show before React runs the effects
+ * of that render. Until then, the Base UI menu ignores a click, and the button has no aria-expanded.
+ */
+const addRuleButton = () => screen.findByRole('button', { name: /Add rule/, expanded: false });
+
 describe('AlertRulesSection', () => {
   beforeEach(() => {
     vi.mocked(saveAlertRules).mockReset();
@@ -141,7 +147,7 @@ describe('AlertRulesSection', () => {
     await renderSection([]);
     vi.mocked(saveAlertRules).mockRejectedValue(new RuleSaveError('VictoriaMetrics refused the query: bad syntax', 0));
 
-    fireEvent.click(screen.getByRole('button', { name: /Add rule/ }));
+    fireEvent.click(await addRuleButton());
     fireEvent.click(await screen.findByRole('menuitem', { name: /Custom query/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
