@@ -39,8 +39,12 @@ const FOLDER_LIST_TOO_SLOW_MESSAGE = 'The folder list on the machine took too lo
 
 /** The raw RETR stops when the machine stops in the middle of a file */
 const DOWNLOAD_STALLED_MESSAGE = 'The machine stopped sending the file. Try again.';
-/** The raw RETR stops when the data connection closes, but the 226 reply does not come */
-const DOWNLOAD_NOT_CONFIRMED_MESSAGE = 'The machine did not confirm that the file is complete. Try again.';
+/**
+ * After a clean end of the data connection, the raw RETR waits this long for the reply to RETR (usually 226).
+ * Some old, simple FTP servers never send this reply. Then the file is complete without it. The wait is never
+ * longer than the FTP timeout.
+ */
+export const REPLY_AFTER_DATA_WAIT_MS = 3_000;
 /** The raw LIST does not wait for the server to close the data connection, so it waits this long for the listing */
 const RAW_LIST_TRANSFER_WAIT_MS = 1_000;
 /**
@@ -643,7 +647,8 @@ export class FTPClient {
   /**
    * Download with raw FTP commands over our own data socket: open the data
    * connection first, then send RETR. More compatible with limited FTP servers like Speedio.
-   * When the download fails after the RETR, the client closes: a late 226 or 426 must not go to the next command.
+   * When the download fails after the RETR, or the machine sends no reply to RETR, the client closes: a late 226 or
+   * 426 must not go to the next command.
    */
   private async downloadOverPassiveSocket(client: ftp.Client, filePath: string, sink: DownloadSink): Promise<void> {
     // basic-ftp refuses only CR, LF and NUL in a command, so this check is stricter
@@ -651,47 +656,57 @@ export class FTPClient {
     await trySetBinaryMode(client);
     const { host, port } = await requestPassiveAddress(client.ftp);
     const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
+    let isConfirmed: boolean;
     try {
-      await this.receiveFile(client, { filePath, dataSocket, sink });
+      isConfirmed = await this.receiveFile(client, { filePath, dataSocket, sink });
     } catch (err) {
       dataSocket.destroy();
       client.close();
       throw err;
     }
+    if (!isConfirmed) {
+      log.warn('The machine did not confirm the end of the file (no reply to RETR). Chatter accepts the file, because the data connection ended correctly.', {
+        host: this.host, file: filePath, bytes: sink.bytesWritten
+      });
+      // A late reply must not go to the next command
+      client.close();
+    }
   }
 
   /**
-   * Send RETR and write the data to the sink. The download is complete only when the data connection closes
+   * Send RETR and write the data to the sink. The download is complete when the data connection ends cleanly
    * and the machine sends its 226 (or another 2xx) reply. An error reply (for example 426) fails the download.
-   * The timer stops a download when no data and no reply comes in the FTP timeout. Each chunk starts it again.
+   * When no reply comes in REPLY_AFTER_DATA_WAIT_MS after a clean end, the download is also complete, and the
+   * promise gives false: some old FTP servers send no 226. A data connection that breaks fails the download.
+   * The timer stops a download when no data comes in the FTP timeout. Each chunk starts it again.
    */
   private receiveFile(
     client: ftp.Client,
     { filePath, dataSocket, sink }: { filePath: string; dataSocket: net.Socket; sink: DownloadSink }
-  ): Promise<void> {
+  ): Promise<boolean> {
     return new Promise((resolve, reject) => {
-      let isDataDone = false;
+      let hasDataEnded = false;
       let isReplyDone = false;
       let isSettled = false;
-      let idleTimer: NodeJS.Timeout | undefined;
+      let timer: NodeJS.Timeout | undefined;
 
-      const settle = (err?: Error) => {
+      /** An error fails the download. Else `isConfirmed` tells if the machine sent its reply. */
+      const settle = (outcome: Error | { isConfirmed: boolean }) => {
         if (isSettled) return;
         isSettled = true;
-        clearTimeout(idleTimer);
-        if (err) reject(err);
-        else resolve();
+        clearTimeout(timer);
+        if (outcome instanceof Error) reject(outcome);
+        else resolve(outcome.isConfirmed);
       };
-      const startIdleTimer = () => {
-        clearTimeout(idleTimer);
-        // A late chunk or close event after the end must not start a timer that nothing stops
+      const startTimer = (waitMs: number, onTimeUp: () => void) => {
+        clearTimeout(timer);
+        // A late chunk or end event after the end must not start a timer that nothing stops
         if (isSettled) return;
-        idleTimer = setTimeout(() => {
-          settle(new Error(isDataDone ? DOWNLOAD_NOT_CONFIRMED_MESSAGE : DOWNLOAD_STALLED_MESSAGE));
-        }, this.timeoutMs);
+        timer = setTimeout(onTimeUp, waitMs);
       };
+      const startIdleTimer = () => startTimer(this.timeoutMs, () => settle(new Error(DOWNLOAD_STALLED_MESSAGE)));
       const settleWhenComplete = () => {
-        if (isDataDone && isReplyDone) settle();
+        if (hasDataEnded && isReplyDone) settle({ isConfirmed: true });
       };
 
       dataSocket.on('data', (chunk: Buffer) => {
@@ -700,9 +715,11 @@ export class FTPClient {
         sink.bytesWritten += chunk.length;
         sink.destination.write(chunk);
       });
-      dataSocket.on('close', () => {
-        isDataDone = true;
-        startIdleTimer();
+      // 'end' comes only when the machine closes the data connection cleanly, not when the connection breaks
+      dataSocket.on('end', () => {
+        hasDataEnded = true;
+        // The wait starts again here, so a slow last chunk leaves the full wait for the reply
+        startTimer(Math.min(this.timeoutMs, REPLY_AFTER_DATA_WAIT_MS), () => settle({ isConfirmed: false }));
         settleWhenComplete();
       });
       dataSocket.on('error', err => settle(err));
@@ -717,7 +734,7 @@ export class FTPClient {
         isReplyDone = true;
         settleWhenComplete();
       }, (err: Error) => settle(err));
-      // The timer above watches the transfer. The control connection is quiet until the 226, so its own timeout stops.
+      // The timers above watch the transfer. The control connection is quiet until the 226, so its own timeout stops.
       client.ftp.socket.setTimeout(0);
     });
   }
