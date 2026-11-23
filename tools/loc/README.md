@@ -14,18 +14,25 @@ The tool compares the head with the merge base of the base and the head, as a pu
 It counts commits only. It does not count changes that are not committed, and it writes a note on stderr when there are some.
 It is a report. It never fails on a size.
 
+The same refs give the same text on each computer. The tool sets the diff algorithm (myers), the rename limit and the file order, and it does not read the attributes file of the user (`core.attributesFile`).
+The `.gitattributes` of the head and `.git/info/attributes` still count.
+Each sha in the first line has 8 characters.
+
+In the CI, the job summary of a pull request shows the table. There, the head is the merge commit that GitHub makes (`refs/pull/<n>/merge`), not the last commit of the branch. The counts are the same as for the branch when the branch has the latest base.
+
 ## The parts
 
 The first rule that matches a file wins.
 
 | Part | What it holds |
 | --- | --- |
-| Not counted | Binary files, `package-lock.json`, `dist/`, `coverage/`, `docs/.vitepress/cache/`, SVG files, and each file that `.gitattributes` marks `linguist-generated` |
-| Tests | `*.test.ts`, `*.test.tsx`, `*.test.sh`, each file in a `test/` folder, `testSupport.ts`, and the vitest `setupFiles`. The comments in these files are tests too. |
+| Not counted | Binary files, symlinks, `package-lock.json`, `dist/`, `coverage/`, `docs/.vitepress/cache/`, SVG files, and each file that `.gitattributes` marks `linguist-generated` |
+| Tests | `*.test.*` and `*.spec.*` files, each file in a `test/`, `__tests__/`, `fixture/` or `fixtures/` folder, `testSupport.ts` and `*TestSupport.ts`, and the vitest `setupFiles`. The comments in these files are tests too. |
 | Docs and comments | Each file in `docs/`, each `.md` file, and the comment lines of a source file |
 | Application code | Each other line of a source file, also blank lines |
 
 The sum of the four parts is always the sum of `git diff --numstat`.
+The table shows the "Not counted" row only when the change has a file that is not counted.
 
 ## Comment lines
 
@@ -34,8 +41,8 @@ A line with code and a comment at its end is a code line.
 
 | Files | Comments |
 | --- | --- |
-| `.ts`, `.tsx`, `.js`, `.mjs`, `.mts` | The TypeScript parser finds them, so `//` in a string, a template, a regex or JSX text is not a comment. `{/* note */}` alone on a line is a comment line. |
-| `.sh`, `.yml`, `Dockerfile`, systemd units, `.gitignore`, `.dockerignore`, `.env.example` | A line that starts with `#`. A `#!` on line 1 is code. |
+| `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs` | The TypeScript parser finds them, so `//` in a string, a template, a regex or JSX text is not a comment. `{/* note */}` alone on a line is a comment line. A `#!` on line 1 is code. |
+| `.sh`, `.bash`, `.yml`, `.yaml`, `Dockerfile`, `Dockerfile.*`, systemd units (`.service`, `.path`, `.timer`), `.gitignore`, `.dockerignore`, `.gitattributes`, `.env.example` | A line that starts with `#`. A `#!` on line 1 is code. |
 | `.css` | `/* */`, but not in a quoted string |
 | `.html`, `.vue` | `<!-- -->` |
 | JSON and other files | No comments. Each line is code. Use `--files` to see these files. |
