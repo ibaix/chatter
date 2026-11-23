@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorsOf, docsLinksIn, docsPageFile } from './docsLinks';
+import { anchorsOf, docsLinksIn, docsPageFile, headingLinksIn } from './docsLinks';
 
 describe('docsLinksIn', () => {
   it('finds full links, DocsLink pages and docsUrl calls', () => {
@@ -59,5 +59,40 @@ describe('anchorsOf', () => {
 
   it('skips code blocks with tildes', () => {
     expect(anchorsOf('~~~bash\n# not a heading\n~~~\n## Real')).toEqual(['real']);
+  });
+});
+
+describe('headingLinksIn', () => {
+  it('finds links to a heading of another page or of the same page', () => {
+    const markdown = [
+      'See [Back up](./update.md#back-up) and [the plan](#the-plan).',
+      'Read [the security page](../security.md#keep-chatter-db-private) and [logs](logs.md#server-log).',
+      'Also [the API](/api/history.md#alerts), [no .md](/guide/update#back-up) and [a page link](./update.md).',
+    ].join('\n');
+
+    expect(headingLinksIn(markdown, 'guide/logs.md')).toEqual([
+      { file: 'guide/update.md', anchor: 'back-up' },
+      { file: 'guide/logs.md', anchor: 'the-plan' },
+      { file: 'security.md', anchor: 'keep-chatter-db-private' },
+      { file: 'guide/logs.md', anchor: 'server-log' },
+      { file: 'api/history.md', anchor: 'alerts' },
+      { file: 'guide/update.md', anchor: 'back-up' },
+    ]);
+  });
+
+  it('skips links to other sites, code blocks and inline code', () => {
+    const markdown = [
+      '[GitHub](https://github.com/toolpath/chatter#readme) and [mail](mailto:a@b.c#x)',
+      '```md',
+      '[in a block](./update.md#nothing)',
+      '```',
+      'Write `[a link](#not-a-link)` like this.',
+    ].join('\n');
+
+    expect(headingLinksIn(markdown, 'index.md')).toEqual([]);
+  });
+
+  it('decodes the anchor and reads a link with a title', () => {
+    expect(headingLinksIn('[x](./update.md#caf%C3%A9 "Title")', 'guide/a.md')).toEqual([{ file: 'guide/update.md', anchor: 'café' }]);
   });
 });
