@@ -57,18 +57,39 @@ describe('PUT /api/machine/:id and the saved passwords', () => {
   const savedRow = (type: string, id: string) =>
     db.prepare(`SELECT * FROM ${type}_machines WHERE id = ?`).get(id) as SavedRow;
 
-  describe.each(['brother', 'haas', 'mtconnect', 'fanuc'] as const)('a %s machine with a saved FTP password', type => {
+  describe.each(['brother', 'haas', 'mtconnect', 'fanuc', 'siemens'] as const)('a %s machine with a saved FTP password', type => {
     let id: string;
 
     beforeEach(async () => {
-      id = await addMachine({ type, name: 'Mill', host: HOST, ftpPassword: SAVED_PASSWORD });
+      // A Siemens machine has a second password, for OPC UA
+      const opcua = type === 'siemens' ? { opcuaPassword: SAVED_PASSWORD } : {};
+      id = await addMachine({ type, name: 'Mill', host: HOST, ftpPassword: SAVED_PASSWORD, ...opcua });
+    });
+
+    // The web form fills from the status and sends each field back. An empty password box is not sent.
+    it('keeps the passwords when the status comes back with no change', async () => {
+      const status = poller.getConnector(id)?.getStatus();
+
+      const res = await update(id, { ...status, name: 'Renamed' });
+
+      expect(res.status).toBe(200);
+      expect(savedRow(type, id)).toMatchObject({ name: 'Renamed', host: HOST, ftp_password: SAVED_PASSWORD });
+      expect(poller.getConnector(id)).toMatchObject({ name: 'Renamed', host: HOST, ftpPassword: SAVED_PASSWORD });
+      if (type === 'siemens') expect(savedRow(type, id)).toMatchObject({ opcua_password: SAVED_PASSWORD });
+    });
+
+    it('keeps the password when the IP address comes with spaces around it', async () => {
+      const res = await update(id, { host: ` ${HOST} ` });
+
+      expect(res.status).toBe(200);
+      expect(savedRow(type, id)).toMatchObject({ host: HOST, ftp_password: SAVED_PASSWORD });
     });
 
     it('refuses a new IP address with no password, and saves nothing', async () => {
       const res = await update(id, { name: 'Renamed', host: NEW_HOST });
 
       expect(res.status).toBe(400);
-      expect(await errorOf(res)).toMatch(/^Type the FTP password again/);
+      expect(await errorOf(res)).toMatch(/^Type the FTP password (again|and the OPC UA password again)\. /);
       expect(savedRow(type, id)).toMatchObject({ name: 'Mill', host: HOST, ftp_password: SAVED_PASSWORD });
       expect(poller.getConnector(id)).toMatchObject({ name: 'Mill', host: HOST, ftpPassword: SAVED_PASSWORD });
     });
@@ -145,6 +166,7 @@ describe('PUT /api/machine/:id and the saved passwords', () => {
       expect(res.status).toBe(400);
       expect(await errorOf(res)).toMatch(/^Type the OPC UA password again/);
       expect(savedRow('siemens', id)).toMatchObject({ opcua_port: 4840, opcua_password: SAVED_PASSWORD });
+      expect(poller.getConnector(id)).toMatchObject({ opcuaPort: 4840 });
     });
 
     it('saves a new OPC UA port with the new OPC UA password', async () => {
@@ -173,6 +195,7 @@ describe('PUT /api/machine/:id and the saved passwords', () => {
       expect(res.status).toBe(400);
       expect(await errorOf(res)).toMatch(/^Type the OPC UA password again/);
       expect(savedRow('siemens', id)).toMatchObject({ host: HOST, ftp_password: SAVED_PASSWORD, opcua_password: SAVED_PASSWORD });
+      expect(poller.getConnector(id)).toMatchObject({ host: HOST, ftpPassword: SAVED_PASSWORD });
     });
 
     it('asks for the two passwords in one message when both are missing', async () => {
@@ -181,7 +204,10 @@ describe('PUT /api/machine/:id and the saved passwords', () => {
       const res = await update(id, { host: NEW_HOST });
 
       expect(res.status).toBe(400);
-      expect(await errorOf(res)).toMatch(/^Type the FTP password and the OPC UA password again/);
+      expect(await errorOf(res)).toBe('Type the FTP password and the OPC UA password again. '
+        + 'You changed the IP address or a port. Chatter does not send a saved password to a new address. '
+        + 'To use no password, click Remove password.');
+      expect(poller.getConnector(id)).toMatchObject({ host: HOST });
     });
 
     it('saves a new IP address when each saved password comes again or is removed', async () => {
@@ -191,6 +217,34 @@ describe('PUT /api/machine/:id and the saved passwords', () => {
 
       expect(res.status).toBe(200);
       expect(savedRow('siemens', id)).toMatchObject({ host: NEW_HOST, ftp_password: '', opcua_password: NEW_PASSWORD });
+    });
+
+    it('saves a new IP address when the OPC UA password is removed', async () => {
+      const id = await addMachine({ ...SINUMERIK, opcuaPassword: SAVED_PASSWORD });
+
+      const res = await update(id, { host: NEW_HOST, opcuaPassword: '' });
+
+      expect(res.status).toBe(200);
+      expect(savedRow('siemens', id)).toMatchObject({ host: NEW_HOST, opcua_password: '' });
+      expect(poller.getConnector(id)).toMatchObject({ host: NEW_HOST, hasOpcuaPassword: false });
+    });
+
+    it('changes the IP address and the OPC UA port when only the FTP password is saved and comes again', async () => {
+      const id = await addMachine({ ...SINUMERIK, ftpPassword: SAVED_PASSWORD });
+
+      const res = await update(id, { host: NEW_HOST, opcuaPort: 4841, ftpPassword: SAVED_PASSWORD });
+
+      expect(res.status).toBe(200);
+      expect(savedRow('siemens', id)).toMatchObject({ host: NEW_HOST, opcua_port: 4841, ftp_password: SAVED_PASSWORD, opcua_password: '' });
+    });
+
+    it('changes the IP address and the OPC UA port when no password is saved', async () => {
+      const id = await addMachine(SINUMERIK);
+
+      const res = await update(id, { host: NEW_HOST, opcuaPort: 4841 });
+
+      expect(res.status).toBe(200);
+      expect(savedRow('siemens', id)).toMatchObject({ host: NEW_HOST, opcua_port: 4841, ftp_password: '', opcua_password: '' });
     });
   });
 });
