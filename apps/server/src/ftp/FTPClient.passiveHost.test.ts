@@ -1382,7 +1382,8 @@ describe('FTPClient raw LIST that ends early', () => {
         data.write(LISTING);
         control.write('226 Transfer complete\r\n');
       }, { timeoutMs: 5_000 });
-      await until(() => timers.delays.includes(1_000));
+      // The data and the 226 each start a 1 s wait, in any order. After both, the wait ends 1 s after the 226.
+      await until(() => timers.delays.filter(ms => ms === 1_000).length >= 2);
       expect(await hasSettled(tree)).toBe(false);
 
       vi.advanceTimersByTime(999);
@@ -1408,7 +1409,8 @@ describe('FTPClient raw LIST that ends early', () => {
         started.control.write('226 Transfer complete\r\n');
       }, { timeoutMs: 5_000 });
       const replyWaits = () => timers.delays.filter(ms => ms === 1_000).length;
-      await until(() => replyWaits() >= 1);
+      // The data and the 226 each start a 1 s wait, in any order
+      await until(() => replyWaits() >= 2);
       vi.advanceTimersByTime(900);
       const waitsBefore = replyWaits();
       transfer?.data.write(SUB_LISTING);
