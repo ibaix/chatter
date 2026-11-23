@@ -8,6 +8,11 @@ export class StreamsPerLogin {
 
   constructor(private readonly maxPerLogin: number) {}
 
+  /** The number of logins that have an open stream */
+  get size(): number {
+    return this.streams.size;
+  }
+
   /**
    * Adds a stream of `login`. If the login then has too many streams, this calls `close` of its oldest stream.
    * Gives the function that removes the stream when it ends.
