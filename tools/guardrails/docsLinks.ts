@@ -77,6 +77,8 @@ export interface HeadingLink {
   file: string;
   /** The heading anchor, for example "back-up" */
   anchor: string;
+  /** The target as written, when the anchor has a bad %-code. The link goes to no heading. */
+  invalid?: string;
 }
 
 /**
@@ -91,8 +93,13 @@ export function headingLinksIn(markdown: string, file: string): HeadingLink[] {
       const hash = target.indexOf('#');
       if (hash < 0 || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
       const page = target.slice(0, hash).replace(/\?.*$/, '');
-      const anchor = decodeURIComponent(target.slice(hash + 1));
-      links.push({ file: page === '' ? file : linkedPageFile(page, file), anchor });
+      const linked = page === '' ? file : linkedPageFile(page, file);
+      const raw = target.slice(hash + 1);
+      try {
+        links.push({ file: linked, anchor: decodeURIComponent(raw) });
+      } catch {
+        links.push({ file: linked, anchor: raw, invalid: target });
+      }
     }
   }
   return links;

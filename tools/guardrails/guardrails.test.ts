@@ -173,8 +173,8 @@ describe('heading links in the docs', () => {
   it('go to a page and a heading that exist', () => {
     const anchors = new Map(pages.map(page => [page, anchorsOf(read(join('docs', page)))]));
     const dead = links
-      .filter(({ file, anchor }) => !anchors.get(file)?.includes(anchor))
-      .map(({ page, file, anchor }) => `${page} -> ${file}#${anchor}`);
+      .filter(({ file, anchor, invalid }) => invalid !== undefined || !anchors.get(file)?.includes(anchor))
+      .map(({ page, file, anchor, invalid }) => (invalid === undefined ? `${page} -> ${file}#${anchor}` : `${page} -> ${invalid}`));
     expect(dead).toEqual([]);
   });
 });

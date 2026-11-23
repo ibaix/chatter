@@ -157,6 +157,10 @@ describe('headingLinksIn', () => {
     ]);
   });
 
+  it('gives a link with a bad percent code as not valid, with its target as written', () => {
+    expect(headingLinksIn('[a](./x.md#100%)', 'guide/a.md')).toEqual([{ file: 'guide/x.md', anchor: '100%', invalid: './x.md#100%' }]);
+  });
+
   it('reads a link in angle brackets', () => {
     expect(headingLinksIn('[a](<./x.md#angle>)', 'guide/a.md')).toEqual([{ file: 'guide/x.md', anchor: 'angle' }]);
   });
