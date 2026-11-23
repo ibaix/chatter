@@ -12,7 +12,7 @@ These endpoints need no login first.
 | POST | `/api/auth/logout` | Stop this browser's session and remove the cookie |
 | POST | `/api/auth/password` | Change your password (browser login only): `{ "currentPassword": "...", "newPassword": "..." }`. Logs out your other browsers. `401` for a wrong current password |
 | GET | `/api/auth/sessions` | The browsers where you are logged in (browser login only): `{ sessions: [{ device, address, createdAt, lastSeenAt, isThisBrowser }] }` |
-| POST | `/api/auth/sessions/log-out-others` | Log out each of your browsers except this one (browser login only). The reply is the new list of sessions |
+| POST | `/api/auth/sessions/log-out-others` | Log out each of your browsers except this one (browser login only). This also stops the device cookies of your other browsers. When this browser sends a valid device cookie, the reply gives it a new one. The reply is the new list of sessions |
 
 The rules for a username and a password:
 - Username: 1 to 64 characters, with no colon (`:`).
