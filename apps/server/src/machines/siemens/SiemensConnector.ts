@@ -212,7 +212,7 @@ export class SiemensConnector extends BaseMachineConnector {
       type: 'siemens',
       opcuaPort: this.opcuaPort,
       opcuaUser: this.opcuaUser,
-      hasOpcuaPassword: this.opcuaPassword !== '',
+      hasOpcuaPassword: this.hasOpcuaPassword,
       opcuaSecurity: this.opcuaSecurity,
       ftpPort: this.ftpPort,
       ftpUser: this.ftpUser,
@@ -258,6 +258,11 @@ export class SiemensConnector extends BaseMachineConnector {
   }
 
   /** The next poll connects again with the new settings */
+  /** True when an OPC UA password is saved. The status gives only this, so the password never leaves the server. */
+  get hasOpcuaPassword(): boolean {
+    return this.opcuaPassword !== '';
+  }
+
   updateOpcUaSettings(settings: { port?: number; user?: string; password?: string; security?: OpcUaSecurity }): void {
     if (settings.port !== undefined) this.opcuaPort = settings.port;
     if (settings.user !== undefined) this.opcuaUser = settings.user;

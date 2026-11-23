@@ -4,7 +4,7 @@ import type { HaasConnector } from '../machines/haas/HaasConnector.js';
 import { MTConnectConnector } from '../machines/mtconnect/MTConnectConnector.js';
 import { DmgMoriConnector } from '../machines/mtconnect/DmgMoriConnector.js';
 import type { FanucConnector } from '../machines/fanuc/FanucConnector.js';
-import type { SiemensConnector } from '../machines/siemens/SiemensConnector.js';
+import { SiemensConnector } from '../machines/siemens/SiemensConnector.js';
 import { DEFAULT_DATA_PORTS, DEFAULT_HAAS_QUERY_PORT } from './machinePorts.js';
 import type {
   BaseMachineConfig,
@@ -165,6 +165,43 @@ interface CommonUpdate {
 }
 
 type ConnectorWithMacros = BaseMachineConnector & { updateMacros(macros: MacroConfig[]): void };
+
+/** A change that would send a saved password to a new address, with no password in the change */
+export class PasswordNeededError extends Error {}
+
+/** The fields of a change that tell where each saved password goes */
+interface DestinationUpdate {
+  host?: string;
+  ftpPort?: number;
+  ftpPassword?: string;
+  opcuaPort?: number;
+  opcuaPassword?: string;
+}
+
+const isChange = <Value>(newValue: Value | undefined, savedValue: Value) => newValue !== undefined && newValue !== savedValue;
+
+/**
+ * A saved password goes only to the address where the user saved it, so a typing error cannot send it to a different device.
+ * A new IP address, or a new port of the password (FTP port, OPC UA port), moves the password.
+ * Then the change must have the password again. An empty password removes it.
+ * A new username does not move the password: it still goes to the same machine and port.
+ * Throws PasswordNeededError, before anything is saved.
+ */
+export function checkSavedPasswordsStay(connector: BaseMachineConnector, updates: DestinationUpdate): void {
+  const newHost = isChange(updates.host, connector.host);
+  const missing: string[] = [];
+  if (connector.hasFtpPassword && updates.ftpPassword === undefined && (newHost || isChange(updates.ftpPort, connector.ftpPort))) {
+    missing.push('FTP password');
+  }
+  if (connector instanceof SiemensConnector && connector.hasOpcuaPassword && updates.opcuaPassword === undefined
+    && (newHost || isChange(updates.opcuaPort, connector.opcuaPort))) {
+    missing.push('OPC UA password');
+  }
+  if (missing.length === 0) return;
+  throw new PasswordNeededError(`Type the ${missing.join(' and the ')} again. `
+    + 'You changed the IP address or the port, and Chatter does not send a saved password to a new address. '
+    + 'To use no password, click Remove password.');
+}
 
 /** An empty FTP password removes the saved one. A missing one keeps it. */
 function applyCommonUpdate(connector: ConnectorWithMacros, updates: CommonUpdate): void {
