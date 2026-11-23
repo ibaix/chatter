@@ -5,6 +5,7 @@ import { BackupRefusedError, tooLargeMessage, type BackupMachine, type HistoryBa
 import { HistoryUnavailableError } from '../history-backup/victoriaHistory.js';
 import { createLogger } from '../logging/logger.js';
 import type { HardwarePoller } from '../polling/poller.js';
+import { allowLongUpload } from '../webServerOptions.js';
 import { checkedJson } from './checks.js';
 import { rawFileUpload } from './rawFileUpload.js';
 import { notFound } from './responses.js';
@@ -72,7 +73,7 @@ export function historyBackupRoutes(poller: HardwarePoller, backups: HistoryBack
     })
 
     // Step 1 of a restore: receive and check the file. Nothing is written yet. Gives the preview.
-    .post('/machine/:id/history-restore', canManageChatter, requireRawFile, requireLengthFirst, fileSizeLimit, async c => {
+    .post('/machine/:id/history-restore', canManageChatter, allowLongUpload, requireRawFile, requireLengthFirst, fileSizeLimit, async c => {
       const machine = machineOf(poller, c.req.param('id'));
       if (!machine) return notFound(c);
       const body = c.req.raw.body;

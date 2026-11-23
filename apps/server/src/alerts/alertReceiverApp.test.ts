@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { captureLog } from '../logging/testSupport.js';
+import { UNEXPECTED_ERROR_TEXT } from '../routes/responses.js';
 import { AlertStore } from './AlertStore.js';
 import { alertReceiverApp, MAX_ALERTS_PER_REQUEST, MAX_FIRING_AHEAD_MS } from './alertReceiverApp.js';
 
@@ -116,11 +118,30 @@ describe('alertReceiverApp', () => {
     expect(response.status).toBe(400);
   });
 
+  it('accepts a body larger than the normal 64 KB limit of JSON, because vmalert sends many alerts at one time', async () => {
+    const response = await send([{ ...vmalertAlert, annotations: { summary: 'x'.repeat(200_000) } }]);
+
+    expect(response.status).toBe(200);
+    expect(store.read(allAlertsQuery)).toHaveLength(1);
+  });
+
   it('refuses a body that is too large', async () => {
     const response = await send([{ ...vmalertAlert, annotations: { summary: 'x'.repeat(TOO_LARGE_TEXT_LENGTH) } }]);
 
     expect(response.status).toBe(413);
     expect(store.read(allAlertsQuery)).toEqual([]);
+  });
+
+  it('logs an error that the save did not catch, and does not send its text to vmalert', async () => {
+    vi.spyOn(store, 'save').mockImplementation(() => { throw new Error('database is locked'); });
+    const log = captureLog();
+
+    const response = await send(vmalertBody);
+    log.restore();
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: UNEXPECTED_ERROR_TEXT });
+    expect(log.text('error')).toContain('database is locked');
   });
 
   it('has no other routes', async () => {

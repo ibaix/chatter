@@ -1,6 +1,5 @@
 import { NOTIFICATION_MESSAGE_DAYS } from '@local-chatter/shared';
 import { Hono } from 'hono';
-import { bodyLimit } from 'hono/body-limit';
 import { requirePermission } from '../auth/authRoutes.js';
 import { channelTypeInfos } from '../notifications/channels/index.js';
 import type { Notifications } from '../notifications/Notifications.js';
@@ -9,9 +8,6 @@ import { channelIdParam, channelInputSchema, notificationMessagesQuery, notifica
 
 const KEEP_MS = NOTIFICATION_MESSAGE_DAYS * 24 * 60 * 60_000;
 const CHANNEL_NOT_THERE = 'The channel is not there. Maybe someone deleted it.';
-/** A channel form or the settings is a few kilobytes. A larger body is refused before it is read into memory. */
-const MAX_BODY_BYTES = 64 * 1024;
-const smallBody = bodyLimit({ maxSize: MAX_BODY_BYTES, onError: c => c.json({ error: 'The body is too large' }, 413) });
 
 /**
  * Settings > Notifications: the channels, the messages of the last 30 days, "Send test", and the settings.
@@ -25,16 +21,16 @@ export function notificationRoutes(notifications: Notifications, now: () => numb
 
     .get('/notification-channels', canManageChatter, c => c.json(channels.list()))
 
-    .post('/notification-channels', canManageChatter, smallBody, checkedJson(channelInputSchema), c => {
+    .post('/notification-channels', canManageChatter, checkedJson(channelInputSchema), c => {
       const result = channels.add(c.req.valid('json'), now());
       return result.ok ? c.json(result.channel, 201) : c.json({ error: result.error }, 400);
     })
 
     // Before the save, so that "test" is not read as a channel id
-    .post('/notification-channels/test', canManageChatter, smallBody, checkedJson(channelInputSchema), async c =>
+    .post('/notification-channels/test', canManageChatter, checkedJson(channelInputSchema), async c =>
       c.json(await notifications.sendTest(c.req.valid('json'))))
 
-    .put('/notification-channels/:id', canManageChatter, smallBody, checkedParam(channelIdParam), checkedJson(channelInputSchema), c => {
+    .put('/notification-channels/:id', canManageChatter, checkedParam(channelIdParam), checkedJson(channelInputSchema), c => {
       const { id } = c.req.valid('param');
       if (!channels.get(id)) return c.json({ error: CHANNEL_NOT_THERE }, 404);
       const result = notifications.updateChannel(id, c.req.valid('json'));
@@ -47,7 +43,7 @@ export function notificationRoutes(notifications: Notifications, now: () => numb
     })
 
     // The form of a saved channel: an empty secret uses the saved secret. The result goes in the message list.
-    .post('/notification-channels/:id/test', canManageChatter, smallBody, checkedParam(channelIdParam), checkedJson(channelInputSchema), async c => {
+    .post('/notification-channels/:id/test', canManageChatter, checkedParam(channelIdParam), checkedJson(channelInputSchema), async c => {
       const { id } = c.req.valid('param');
       if (!channels.get(id)) return c.json({ error: CHANNEL_NOT_THERE }, 404);
       return c.json(await notifications.sendTest(c.req.valid('json'), id));
@@ -60,7 +56,7 @@ export function notificationRoutes(notifications: Notifications, now: () => numb
 
     .get('/notification-settings', canManageChatter, c => c.json(settings.get()))
 
-    .put('/notification-settings', canManageChatter, smallBody, checkedJson(notificationSettingsSchema), c => {
+    .put('/notification-settings', canManageChatter, checkedJson(notificationSettingsSchema), c => {
       settings.save(c.req.valid('json'));
       return c.json(settings.get());
     });

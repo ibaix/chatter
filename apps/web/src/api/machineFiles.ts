@@ -6,7 +6,8 @@ import { errorOf, jsonOrThrow } from './replies';
 /** Calls to the server for a machine's files and its upload history */
 
 const UPLOAD_HISTORY_LIMIT = 20;
-const FILE_TREE_DEPTH = 3;
+/** The Files view shows the folders, and the folders in each of them: two levels */
+const FILE_TREE_DEPTH = 2;
 
 /** One upload, with the file name and the file content */
 export interface UploadEventDetail extends UploadEvent {

@@ -1,6 +1,9 @@
+import type { Role } from '@local-chatter/shared';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToolSyncError, type SyncProblem } from '../../api/toolSync';
+import { CurrentUserContext } from '../../components/CurrentUser';
 import type { ToolSyncState, ToolTable } from '../../types';
 import { ToolTableTab } from './ToolTableTab';
 
@@ -21,11 +24,16 @@ const SYNCED_TEXT = 'Synced 08:05 AM';
 /** The end of the last good poll in the status */
 const POLLED_AT = '2026-11-21T08:06:00.000Z';
 
-function renderTab(toolSync: ToolSyncState | undefined, toolTable: ToolTable = TOOLS, connected = true) {
+/** The page around the tab, with a user of this role. A rerender keeps it. */
+const asRole = (role: Role) => ({ children }: { children: ReactNode }) =>
+  <CurrentUserContext.Provider value={{ username: 'sam', role }}>{children}</CurrentUserContext.Provider>;
+
+function renderTab(toolSync: ToolSyncState | undefined, toolTable: ToolTable = TOOLS, connected = true, role: Role = 'operator') {
   return render(
     <ToolTableTab
       machineId="m1" connected={connected} lastPollTime={POLLED_AT} toolTable={toolTable} hasPocketInfo spindleTool={undefined} toolSync={toolSync}
     />,
+    { wrapper: asRole(role) },
   );
 }
 
@@ -47,6 +55,22 @@ async function pressSync() {
 /** A state of the server at `iso`: the time of the last read and of the last try */
 const syncedAt = (iso: string, error: string | null = null): ToolSyncState =>
   ({ lastSyncAt: error ? SYNCED_AT : iso, lastAttemptAt: iso, error, running: false });
+
+describe('ToolTableTab Sync for each role', () => {
+  // A Viewer only looks: the server refuses its Sync. The time of the last read stays.
+  it('shows no Sync button to a viewer, but shows when Chatter read the tools', () => {
+    renderTab(NOT_SYNCED, TOOLS, true, 'viewer');
+
+    expect(screen.getByText('Not synced yet')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sync' })).not.toBeInTheDocument();
+  });
+
+  it.each(['operator', 'admin'] as const)('shows the Sync button to an %s', role => {
+    renderTab(NOT_SYNCED, TOOLS, true, role);
+
+    expect(screen.getByRole('button', { name: 'Sync' })).toBeEnabled();
+  });
+});
 
 describe('ToolTableTab sync', () => {
   beforeEach(() => {

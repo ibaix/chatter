@@ -83,7 +83,9 @@ function replyLoggedIn(c: Context, origin: RequestOrigin, token: string) {
 
 export const logInFirst = (c: Context) => c.json({ error: 'Log in first' }, 401);
 const tooManyTries = (c: Context) =>
-  c.json({ error: `Too many wrong passwords. Wait ${LOCK_MINUTES} minutes, then try again.` }, 429);
+  c.json({
+    error: `Too many wrong passwords. Try again in up to ${LOCK_MINUTES} minutes, or ask an Admin to unlock you in Settings > Logins.`,
+  }, 429);
 const wrongLogin = (c: Context) => c.json({ error: 'Wrong username or password' }, 401);
 
 type Checked<Value> = { ok: true; value: Value } | { ok: false; reply: Response };
@@ -97,7 +99,7 @@ interface PasswordTry<Value> {
   check: () => Promise<Value | null>;
 }
 
-/** Check a password from the caller. Each try counts against the caller's address and goes in the login log. */
+/** Check a password from the caller. Each try counts against the caller's address and the username, and goes in the login log. */
 async function withPasswordCheck<Value>(
   c: Context,
   { auth, limiter, loginLog }: LoginGuard,
@@ -106,8 +108,8 @@ async function withPasswordCheck<Value>(
 ): Promise<Checked<Value>> {
   const recordTry = (result: LoginResult) =>
     withoutFailing('[Login log] Could not save a login try', () => loginLog.record({ username, address, result }));
-  if (limiter.isBlocked(address)) {
-    if (limiter.isFirstBlockedTry(address)) recordTry('locked');
+  if (limiter.isBlocked(address, username)) {
+    if (limiter.isFirstBlockedTry(address, username)) recordTry('locked');
     return { ok: false, reply: tooManyTries(c) };
   }
   // Count the try before the slow check, so tries sent at the same time cannot all get past the block
@@ -117,7 +119,7 @@ async function withPasswordCheck<Value>(
     recordTry(auth.hasUser(username) ? 'wrong-password' : 'no-such-user');
     return { ok: false, reply: wrongLogin(c) };
   }
-  limiter.recordSuccess(address);
+  limiter.recordSuccess(address, username);
   recordTry(success);
   return { ok: true, value };
 }
@@ -159,6 +161,16 @@ export function requireLogin(guard: LoginGuard) {
     });
     if (!checked.ok) return checked.reply;
     c.set('user', checked.value);
+    return next();
+  });
+}
+
+/** Stops a request from a browser that is not logged in, before the route reads the body. Sets c.var.user. */
+function requireBrowserLogin(auth: Auth) {
+  return createMiddleware<LoggedInEnv>(async (c, next) => {
+    const session = currentSession(c, auth);
+    if (!session) return logInFirst(c);
+    c.set('user', session.user);
     return next();
   });
 }
@@ -217,10 +229,8 @@ export function authRoutes(guard: LoginGuard) {
     })
 
     // Only a browser that is logged in can do this. A new password logs out every other browser.
-    .post('/auth/password', checkedJson(changePasswordSchema), async c => {
-      const session = currentSession(c, auth);
-      if (!session) return logInFirst(c);
-      const { user } = session;
+    .post('/auth/password', requireBrowserLogin(auth), checkedJson(changePasswordSchema), async c => {
+      const { user } = c.var;
       const passwordChange = c.req.valid('json');
       const origin = originOf(c, proxySettings);
       const checked = await withPasswordCheck(c, guard, origin, {

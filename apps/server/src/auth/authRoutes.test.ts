@@ -1,4 +1,8 @@
 import Database from 'better-sqlite3';
+import type { Server } from 'node:http';
+import { connect, type AddressInfo } from 'node:net';
+import { once } from 'node:events';
+import { serve } from '@hono/node-server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app.js';
 import { HardwarePoller } from '../polling/poller.js';
@@ -126,6 +130,26 @@ describe('auth routes', () => {
 
     const res = await post('/api/auth/login', ADMIN);
     expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({
+      error: 'Too many wrong passwords. Try again in up to 15 minutes, or ask an Admin to unlock you in Settings > Logins.',
+    });
+  });
+
+  it('does not lock a user after 30 good logins', async () => {
+    await setUp();
+    for (let i = 0; i < 30; i++) expect((await post('/api/auth/login', ADMIN)).status).toBe(200);
+
+    expect((await post('/api/auth/login', ADMIN)).status).toBe(200);
+  });
+
+  it('counts the wrong passwords of a program (HTTP Basic) and of the login form together', async () => {
+    await setUp();
+    for (let i = 0; i < 5; i++) await app.request('/api/machines', basic(ADMIN.username, 'wrong-password'));
+    await sendWrongPasswords(4);
+    expect((await post('/api/auth/login', { ...ADMIN, password: 'wrong-password' })).status).toBe(401);
+
+    expect((await post('/api/auth/login', ADMIN)).status).toBe(429);
+    expect((await app.request('/api/machines', basic(ADMIN.username, 'wrong-password'))).status).toBe(429);
   });
 
   it('reads the Basic header in any case, with a colon in the password', async () => {
@@ -174,6 +198,102 @@ describe('auth routes', () => {
     await setUp();
     const res = await post('/api/auth/password', { currentPassword: ADMIN.password, newPassword: 'second-password' });
     expect(res.status).toBe(401);
+  });
+
+  it('asks for a login before it reads the body of a password change', async () => {
+    await setUp();
+    const res = await app.request('/api/auth/password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: 'this is not JSON',
+    });
+
+    expect(res.status).toBe(401);
+  });
+
+  describe('body size', () => {
+    /** Larger than the 64 KB limit of a JSON body */
+    const largePassword = 'x'.repeat(1024 * 1024);
+
+    it('refuses a login body larger than 64 KB, and does not check the password', async () => {
+      await setUp();
+      const res = await post('/api/auth/login', { username: ADMIN.username, password: largePassword });
+
+      expect(res.status).toBe(413);
+      expect(loggedResults()).toEqual([]);
+    });
+
+    it('refuses a valid login with a body larger than 64 KB: no login, no log line and no cookie', async () => {
+      await setUp();
+      const res = await post('/api/auth/login', { ...ADMIN, pad: 'x'.repeat(64 * 1024) });
+
+      expect(res.status).toBe(413);
+      expect(res.headers.get('Set-Cookie')).toBeNull();
+      expect(loggedResults()).toEqual([]);
+    });
+
+    it('logs in with a valid body of about 60 KB', async () => {
+      await setUp();
+      const res = await post('/api/auth/login', { ...ADMIN, pad: 'x'.repeat(60 * 1024) });
+
+      expect(res.status).toBe(200);
+      expect(loggedResults()).toEqual(['admin: logged-in']);
+    });
+
+    it('refuses a login with a large Content-Length before the body comes', async () => {
+      await setUp();
+      const server = serve({ fetch: app.fetch, port: 0 }) as Server;
+      try {
+        await once(server, 'listening');
+        const socket = connect((server.address() as AddressInfo).port, '127.0.0.1');
+        await once(socket, 'connect');
+        socket.write('POST /api/auth/login HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n'
+          + `Content-Length: ${10 * 1024 * 1024}\r\n\r\n{"username":"admin"`);
+        const [firstBytes] = await once(socket, 'data') as [Buffer];
+        socket.destroy();
+
+        expect(firstBytes.toString()).toMatch(/^HTTP\/1\.1 413 /);
+        expect(loggedResults()).toEqual([]);
+      } finally {
+        server.closeAllConnections();
+        server.close();
+      }
+    });
+
+    it('stops a valid login with no length when its body grows larger than 64 KB', async () => {
+      await setUp();
+      const encoder = new TextEncoder();
+      const chunks = [`{"username":"${ADMIN.username}","password":"${ADMIN.password}","pad":"`,
+        ...Array.from({ length: 16 }, () => 'x'.repeat(8 * 1024)), '"}'];
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          const chunk = chunks.shift();
+          if (chunk === undefined) controller.close();
+          else controller.enqueue(encoder.encode(chunk));
+        },
+      });
+      const res = await app.request('/api/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body, duplex: 'half',
+      } as RequestInit);
+
+      expect(res.status).toBe(413);
+      expect(res.headers.get('Set-Cookie')).toBeNull();
+      expect(loggedResults()).toEqual([]);
+    });
+
+    it('stops a body with no length when it grows larger than 64 KB', async () => {
+      const bytes = new TextEncoder().encode(JSON.stringify({ username: ADMIN.username, password: largePassword }));
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      });
+      const res = await app.request('/api/auth/setup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body, duplex: 'half',
+      } as RequestInit);
+
+      expect(res.status).toBe(413);
+      expect(await (await app.request('/api/auth/status')).json()).toMatchObject({ setupNeeded: true });
+    });
   });
 
   it('writes each password try in the login log', async () => {
@@ -238,9 +358,10 @@ describe('auth routes behind a reverse proxy', () => {
   const PROXY = '127.0.0.1';
   /** What the Node server gives each request: here, a connection from the proxy */
   const fromProxy = { incoming: { socket: { remoteAddress: PROXY } } };
+  const BOB = { username: 'bob', password: 'bob-password' };
   let app: ReturnType<typeof createApp>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     const { auth, accounts } = authParts();
     app = createApp({
       poller: new HardwarePoller(emptyDb),
@@ -249,6 +370,8 @@ describe('auth routes behind a reverse proxy', () => {
       history: noHistory(),
       proxySettings: ProxySettings.inMemory(PROXY),
     });
+    await postFor('192.168.1.20', '/api/auth/setup', ADMIN);
+    await accounts.add({ ...BOB, role: 'operator' });
   });
 
   /** A request that the proxy sends on for a user */
@@ -260,16 +383,59 @@ describe('auth routes behind a reverse proxy', () => {
     }, fromProxy);
   }
 
+  const wrongAdminPassword = (user: string) =>
+    postFor(user, '/api/auth/login', { ...ADMIN, password: 'wrong-password' });
+
   it('blocks only the user with 10 wrong passwords, not every user of the proxy', async () => {
-    await postFor('192.168.1.20', '/api/auth/setup', ADMIN);
     for (let i = 0; i < 10; i++) await postFor('192.168.1.66', '/api/auth/login', { ...ADMIN, password: 'wrong-password' });
 
     expect((await postFor('192.168.1.66', '/api/auth/login', ADMIN)).status).toBe(429);
     expect((await postFor('192.168.1.20', '/api/auth/login', ADMIN)).status).toBe(200);
   });
 
+  it('does not reset the tries against admin when another user logs in from the same address', async () => {
+    for (let i = 0; i < 9; i++) await wrongAdminPassword('192.168.1.66');
+    expect((await postFor('192.168.1.66', '/api/auth/login', BOB)).status).toBe(200);
+    await wrongAdminPassword('192.168.1.66');
+
+    expect((await postFor('192.168.1.66', '/api/auth/login', ADMIN)).status).toBe(429);
+    expect((await postFor('192.168.1.66', '/api/auth/login', BOB)).status).toBe(200);
+  });
+
+  it('counts the tries from two IPv6 addresses in one /64 together', async () => {
+    for (let i = 0; i < 5; i++) await wrongAdminPassword('2001:db8:1:2::66');
+    for (let i = 0; i < 5; i++) await wrongAdminPassword('2001:db8:1:2::67');
+
+    expect((await postFor('2001:db8:1:2::68', '/api/auth/login', ADMIN)).status).toBe(429);
+    expect((await postFor('2001:db8:1:3::68', '/api/auth/login', ADMIN)).status).toBe(200);
+  });
+
+  it('blocks a username on all addresses after 30 wrong passwords from many addresses', async () => {
+    for (let i = 0; i < 30; i++) await wrongAdminPassword(`192.168.2.${Math.floor(i / 5)}`);
+
+    expect((await postFor('192.168.1.20', '/api/auth/login', ADMIN)).status).toBe(429);
+    expect((await postFor('192.168.1.20', '/api/auth/login', BOB)).status).toBe(200);
+  });
+
+  it('lets only 10 of many tries sent at the same time from one address check the password', async () => {
+    const replies = await Promise.all(Array.from({ length: 40 }, () => wrongAdminPassword('192.168.1.66')));
+    const statuses = replies.map(reply => reply.status);
+
+    expect(statuses.filter(status => status === 401)).toHaveLength(10);
+    expect(statuses.filter(status => status === 429)).toHaveLength(30);
+  });
+
+  it('lets only 30 of many tries sent at the same time from many addresses check the password', async () => {
+    const replies = await Promise.all(Array.from({ length: 60 }, (_, i) => wrongAdminPassword(`192.168.2.${i % 12}`)));
+    const statuses = replies.map(reply => reply.status);
+
+    expect(statuses.filter(status => status === 401)).toHaveLength(30);
+    expect(statuses.filter(status => status === 429)).toHaveLength(30);
+    expect((await postFor('192.168.1.20', '/api/auth/login', ADMIN)).status).toBe(429);
+  });
+
   it('makes the cookie HTTPS-only when the browser used HTTPS', async () => {
-    const overHttps = await postFor('192.168.1.20', '/api/auth/setup', ADMIN, 'https');
+    const overHttps = await postFor('192.168.1.20', '/api/auth/login', ADMIN, 'https');
     const overHttp = await postFor('192.168.1.20', '/api/auth/login', ADMIN, 'http');
 
     expect(overHttps.headers.get('Set-Cookie')).toContain('Secure');
