@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { createLogger } from '../logging/logger.js';
+import { MachineBusyError } from '../ftp/sessionQueue.js';
 
 const log = createLogger('api');
 
@@ -45,9 +46,17 @@ export function errorReply(error: Error, c: Context) {
 /**
  * The reply for an error of a machine operation, for example a file download over FTP.
  * The user gets the text of the error, because the reply of the machine tells what went wrong (for example "550").
+ * A machine that is busy with other file tasks gives 503.
  */
 export function machineErrorReply(error: Error, c: Context) {
   if (error instanceof HTTPException) return c.json({ error: error.message }, error.status);
+  // Other file tasks use the one FTP session of the machine. This is not a fault, so the log gets no stack.
+  if (error instanceof MachineBusyError) {
+    log.warn('A machine file task did not start, because the machine is busy with other file tasks', {
+      method: c.req.method, path: c.req.path, reason: error.message,
+    });
+    return c.json({ error: error.message }, 503);
+  }
   logUncaught('A machine operation failed', error, c);
   return c.json({ error: errorMessage(error) }, 500);
 }

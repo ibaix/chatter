@@ -5,6 +5,7 @@ import { ftpErrorMessage } from './ftpErrorMessage.js';
 import { FILE_TREE_ENTRY_LIMIT } from '@local-chatter/shared';
 import { createLogger } from '../logging/logger.js';
 import { sizeText } from '../http/sizeText.js';
+import { MachineBusyError, SessionQueue } from './sessionQueue.js';
 import type { FileTree, FTPConfig, FTPFileInfo, FTPTreeNode, FTPUploadFile, FTPUploadResult } from '../types/index.js';
 
 const DEFAULT_FTP_PORT = 21;
@@ -512,10 +513,17 @@ function useMachineHostForTransfers(client: ftp.Client): void {
   };
 }
 
+/** A task that did not start because the machine is busy keeps its own text, with no "FTP error" in front */
+function rethrowIfBusy(err: unknown): void {
+  if (err instanceof MachineBusyError) throw err;
+}
+
 /**
  * Reusable FTP client for CNC machine file operations.
  * Handles file listing, tree browsing, downloads, uploads, and deletes.
  * Compatible with limited FTP servers (like Speedio) via manual PASV mode.
+ * Many CNC FTP servers accept only one session, so the tasks of one client run one at a time (see SessionQueue).
+ * Each machine has one client, so each machine has at most one FTP control connection open.
  */
 export class FTPClient {
   private host: string;
@@ -526,6 +534,8 @@ export class FTPClient {
   private readonly downloadLimits: DownloadLimits;
   /** The tree walks that run now, by depth and path. A request for the same tree waits for the same walk. */
   private readonly treeWalks = new Map<string, Promise<FileTree>>();
+  /** One task at a time: each task opens its control connection only in its turn, and closes it before the next */
+  private readonly sessions = new SessionQueue();
 
   constructor({
     host, port = DEFAULT_FTP_PORT, user = DEFAULT_FTP_USER, password = '', timeoutMs = DEFAULT_FTP_TIMEOUT_MS
@@ -558,6 +568,7 @@ export class FTPClient {
         path: joinRemotePath(path, item.name)
       }));
     } catch (err) {
+      rethrowIfBusy(err);
       throw new Error(ftpErrorMessage(err, this.host, this.port), { cause: err });
     }
   }
@@ -602,6 +613,7 @@ export class FTPClient {
       }
       return { nodes, isCutShort: walk.cutReason !== undefined };
     } catch (err) {
+      rethrowIfBusy(err);
       throw new Error(ftpErrorMessage(err, this.host, this.port), { cause: err });
     }
   }
@@ -636,6 +648,7 @@ export class FTPClient {
         }
       });
     } catch (err) {
+      rethrowIfBusy(err);
       // After an abort, the error of the closed connection tells less than the reason
       const reason: unknown = stop.signal.aborted ? stop.signal.reason : err;
       throw new Error(`FTP download error: ${errorText(reason)}`, { cause: err });
@@ -663,6 +676,7 @@ export class FTPClient {
         await client.uploadFrom(Readable.from(content), relativePath);
       });
     } catch (err) {
+      rethrowIfBusy(err);
       if (err instanceof Error && err.message.includes(ALREADY_EXISTS_MARKER)) {
         throw err;
       }
@@ -684,6 +698,7 @@ export class FTPClient {
         }
       });
     } catch (err) {
+      rethrowIfBusy(err);
       throw new Error(`FTP connection error: ${errorText(err)}`, { cause: err });
     }
 
@@ -696,6 +711,7 @@ export class FTPClient {
       assertSafeFtpArgument(relativePath);
       await this.withConnection({ verbose: true }, client => client.remove(relativePath));
     } catch (err) {
+      rethrowIfBusy(err);
       throw new Error(`FTP delete error: ${errorText(err)}`, { cause: err });
     }
   }
@@ -718,11 +734,24 @@ export class FTPClient {
     await client.downloadTo(destination, remotePath);
   }
 
-  /** Open a connection, run `work` on it, and always close it. `signal` closes it early, and then `work` fails. */
-  private async withConnection<T>(
+  /**
+   * Wait for the turn of this task, then open a connection, run `work` on it, and always close it. The next task gets
+   * its turn only after the close. A new login inside `work` (on the same client) stays in this turn.
+   * `signal` stops the wait for the turn, or closes the connection early, and then `work` fails.
+   */
+  private withConnection<T>(
+    options: { verbose: boolean; signal?: AbortSignal },
+    work: (client: ftp.Client) => Promise<T>
+  ): Promise<T> {
+    return this.sessions.run(() => this.runConnected(options, work), options.signal);
+  }
+
+  private async runConnected<T>(
     { verbose, signal }: { verbose: boolean; signal?: AbortSignal },
     work: (client: ftp.Client) => Promise<T>
   ): Promise<T> {
+    // The signal can abort while the task waits for its turn
+    signal?.throwIfAborted();
     const client = new ftp.Client(this.timeoutMs, { allowSeparateTransferHost: false, maxListingBytes: MAX_FOLDER_LIST_BYTES });
     useMachineHostForTransfers(client);
     client.ftp.verbose = verbose;

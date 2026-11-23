@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { validator } from 'hono/validator';
 import { captureLog, type CapturedLog } from '../logging/testSupport.js';
+import { MachineBusyError } from '../ftp/sessionQueue.js';
 import { errorReply, machineErrorReply, UNEXPECTED_ERROR_TEXT } from './responses.js';
 
 /** A small app whose one route throws `error` */
@@ -80,5 +81,16 @@ describe('machineErrorReply', () => {
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'Bad path' });
     expect(log.lines).toEqual([]);
+  });
+
+  it('gives 503 and the text for a machine that is busy with other file tasks, and logs only a warning', async () => {
+    const busy = new MachineBusyError('The machine is busy with other file tasks. Try again later.');
+
+    const res = await post(appThatThrows(busy, machineErrorReply));
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'The machine is busy with other file tasks. Try again later.' });
+    expect(log.lines.map(line => line.level)).toEqual(['warn']);
+    expect(log.text('warn')).toContain('path=/fail');
   });
 });
