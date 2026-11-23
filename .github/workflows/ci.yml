@@ -83,9 +83,10 @@ jobs:
           npm run -s coverage:changed -- --base "origin/$BASE_REF" >> "$GITHUB_STEP_SUMMARY"
 
       # The lines that the commits of the pull request add and remove: code, tests, docs and comments.
-      # Only a report.
+      # Only a report: a failure of the tool does not stop the job.
       - name: Show the size of the change in the job summary
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
