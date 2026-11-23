@@ -348,8 +348,9 @@ describe('MachineDetailPage', () => {
       expect(fetchUploadFiles).toHaveBeenCalledTimes(1);
     });
 
-    // The server keeps at most 5000 entries in one list. The user must know that files can be missing.
-    const CUT_SHORT_NOTE = 'List cut short. Chatter shows only the first 5000 files and folders.';
+    // The server cuts a list at 5000 entries, at 200 folders, after 2 minutes, or after a folder list that is too long.
+    // The user must know that files can be missing.
+    const CUT_SHORT_NOTE = 'List cut short. The machine has too many files or folders, or it answers too slowly. Chatter shows only part of the list.';
     const PROGRAM = { name: 'O1000', path: '/O1000', type: 'file', size: 10 } as FTPTreeNode;
 
     it('tells the user when the server cut the file list short', async () => {
@@ -487,7 +488,8 @@ describe('MachineDetailPage', () => {
       expect(within(versions).getAllByRole('listitem')).toHaveLength(1);
       expect(within(versions).getByText(/newest/)).toBeInTheDocument();
       expect(screen.queryAllByLabelText('The text of the picked version')).toHaveLength(count);
-      expect(fetchUploadEvent).toHaveBeenCalledTimes(count);
+      // The text loads in an effect, which React can run after the list shows
+      await waitFor(() => expect(fetchUploadEvent).toHaveBeenCalledTimes(count));
     });
 
     it('shows the versions to a viewer as plain items, and says why there is no text', async () => {
