@@ -102,14 +102,16 @@ describe('closed ports', () => {
 
 describe('facts that the docs quote', () => {
   // The docs tell users to run "docker logs chatterbox", and to change "3001:3001" to "127.0.0.1:3001:3001".
-  const { chatterbox } = compose('docker-compose.yml').services;
+  const { services } = compose('docker-compose.yml');
 
   it('keeps the container name chatterbox in docker-compose.yml', () => {
-    expect(chatterbox.container_name).toBe('chatterbox');
+    expect(services).toHaveProperty('chatterbox');
+    expect(services.chatterbox.container_name).toBe('chatterbox');
   });
 
   it('publishes the port of Chatter as "3001:3001" in docker-compose.yml', () => {
-    expect(chatterbox.ports).toContain('3001:3001');
+    expect(services).toHaveProperty('chatterbox');
+    expect(services.chatterbox.ports).toContain('3001:3001');
   });
 });
 
