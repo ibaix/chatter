@@ -87,6 +87,82 @@ describe('downloadAsStream', () => {
     expect(downloadSignal?.aborted).toBe(true);
   });
 
+  // The browser can leave while the route waits for the first bytes. Then nobody can cancel the stream yet.
+  describe('with the signal of the request', () => {
+    /** A connector that sends no bytes, and fails when its signal aborts, as the FTP download does */
+    function connectorThatWaits() {
+      const state: { signal?: AbortSignal } = {};
+      const connector = connectorThat((_output, signal) => {
+        state.signal = signal;
+        return new Promise((_resolve, reject) => {
+          const fail = () => reject(new Error(`FTP download error: ${String(signal?.reason)}`));
+          if (signal?.aborted) fail();
+          else signal?.addEventListener('abort', fail, { once: true });
+        });
+      });
+      return { connector, state };
+    }
+
+    it('stops the download when the request stopped before the start', async () => {
+      const { connector, state } = connectorThatWaits();
+      const request = new AbortController();
+      request.abort('Client connection prematurely closed.');
+
+      await expect(downloadAsStream(connector, '/O0100.NC', request.signal)).rejects.toThrow('prematurely closed');
+      expect(state.signal?.aborted).toBe(true);
+    });
+
+    it('stops the download when the request stops before the first bytes', async () => {
+      const { connector, state } = connectorThatWaits();
+      const request = new AbortController();
+
+      const download = downloadAsStream(connector, '/O0100.NC', request.signal);
+      await nextTick();
+      expect(state.signal?.aborted).toBe(false);
+      request.abort('Client connection prematurely closed.');
+
+      await expect(download).rejects.toThrow('prematurely closed');
+      expect(state.signal?.aborted).toBe(true);
+    });
+
+    it('stops the download when the request stops after the first bytes', async () => {
+      let downloadSignal: AbortSignal | undefined;
+      const connector = connectorThat(async (output, signal) => {
+        downloadSignal = signal;
+        output.write('G00');
+        await new Promise(resolve => signal?.addEventListener('abort', resolve, { once: true }));
+      });
+      const request = new AbortController();
+
+      await downloadAsStream(connector, '/O0100.NC', request.signal);
+      expect(downloadSignal?.aborted).toBe(false);
+      request.abort();
+
+      expect(downloadSignal?.aborted).toBe(true);
+    });
+
+    it('stops to watch the request after the download ends', async () => {
+      const connector = connectorThat(async output => {
+        output.write('G00');
+      });
+      const request = new AbortController();
+      const watchers = { added: 0, removed: 0 };
+      const { addEventListener, removeEventListener } = request.signal;
+      request.signal.addEventListener = (...args: Parameters<typeof addEventListener>) => {
+        watchers.added += 1;
+        addEventListener.apply(request.signal, args);
+      };
+      request.signal.removeEventListener = (...args: Parameters<typeof removeEventListener>) => {
+        watchers.removed += 1;
+        removeEventListener.apply(request.signal, args);
+      };
+
+      expect(await readAll(await downloadAsStream(connector, '/O0100.NC', request.signal))).toBe('G00');
+
+      expect(watchers).toEqual({ added: 1, removed: 1 });
+    });
+  });
+
   // A slow browser must slow the machine download. Else the whole file waits in the memory of a Pi.
   describe('with a reader that is slow', () => {
     const chunk = Buffer.alloc(8 * 1024, 'G');
