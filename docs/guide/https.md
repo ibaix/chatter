@@ -25,11 +25,15 @@ A reverse proxy is a server that takes the HTTPS requests from the browsers, and
      ```
 
    A ufw or firewalld rule does not limit a port that Docker publishes. For `<LAN interface>`, and to keep the rule after a restart, see [Limit who can reach Chatter](../security.md#limit-who-can-reach-chatter).
+5. Log out all other browsers after a move to HTTPS. Each user opens Chatter through the proxy, and clicks **Log out all other browsers** in **Settings > Your account**. Then each user logs in again on their other browsers, through the proxy.
+   Before the move, other people on the network could read a login cookie. This step stops each copy of an old cookie.
 
 Chatter believes the `X-Forwarded-*` headers only from the trusted addresses, because any computer can send them.
 Only one proxy in front of Chatter is supported.
 
 A browser that logged in over plain HTTP before the move keeps that login. The login ends when the browser is not used for 14 days, and 1 year after the login at the latest. A visible Chatter page counts as a use. A hidden tab does not.
+
+A login cookie from plain HTTP has no Secure flag, so the browser can also send it over plain HTTP. When the browser uses the login through the proxy, Chatter gives it the same cookie again, with the Secure flag. Then the browser sends that cookie only over HTTPS. This does not stop a copy of the cookie that a person already read. Only step 5 stops that copy.
 
 ## Security headers from the proxy
 
