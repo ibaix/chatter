@@ -44,3 +44,27 @@ describe('downloadFile', () => {
     expect(downloadFile.mock.calls[0][2]).toBe(signal);
   });
 });
+
+// The signal takes a waiting task out of the queue of the machine, for example when the browser leaves
+describe.each([
+  { name: 'listFiles', call: (machine: BrotherConnector, signal: AbortSignal) => machine.listFiles('/', signal), result: [] },
+  { name: 'uploadFile', call: (machine: BrotherConnector, signal: AbortSignal) => machine.uploadFile('/O1000', 'O1000', true, signal), result: undefined },
+  {
+    name: 'uploadFiles',
+    call: (machine: BrotherConnector, signal: AbortSignal) => machine.uploadFiles([{ remotePath: '/O1000', source: 'O1000' }], true, signal),
+    result: { success: [], failed: [] },
+  },
+  { name: 'deleteFile', call: (machine: BrotherConnector, signal: AbortSignal) => machine.deleteFile('/O1000', signal), result: undefined },
+] as const)('$name', ({ name, call, result }) => {
+  it('gives the signal of the caller to the FTP client', async () => {
+    const machine = connector();
+    const task = vi.fn().mockResolvedValue(result);
+    (machine as unknown as { ftpClient: Record<string, unknown> }).ftpClient = { [name]: task };
+    const signal = new AbortController().signal;
+
+    await call(machine, signal);
+
+    expect(task).toHaveBeenCalledOnce();
+    expect(task.mock.calls[0].at(-1)).toBe(signal);
+  });
+});
