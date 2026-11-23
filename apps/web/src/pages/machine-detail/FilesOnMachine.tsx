@@ -59,7 +59,7 @@ export function FilesOnMachine({ machineId, files, messages, now }: FilesOnMachi
         </div>
         {files.isCutShort && !files.error && (
           <p className="m-0 px-4 pb-3 text-sm text-primary-text">
-            List cut short. The machine has too many files or folders, or it answers too slowly. Chatter shows only part of the list.
+            List cut short. The machine has too many files or folders, answers too slowly, or stopped a folder list. Chatter shows only part of the list.
           </p>
         )}
         {/* Once above the list: the rows have no download and no link to the text */}

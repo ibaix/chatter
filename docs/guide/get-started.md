@@ -67,7 +67,7 @@ Chatter never shows a saved password again. To keep it, leave the password box e
 You can send at most 32 MB of program files at one time. A Raspberry Pi has little memory, and Chatter holds the files in memory while it sends them. To send more, send the files in smaller groups.
 
 You can download a file of at most 64 MB. A download stops after 30 minutes.
-Some old machines do not tell Chatter that a download is complete. Chatter then waits 3 seconds after the last data, and gives you the file. The Chatter log gets a warning. If a program looks cut short, download it again.
+Some old machines do not tell Chatter that a download is complete. Chatter then waits 3 seconds after the last data. If the machine gave the size of the file, Chatter compares the file with that size. If the file has fewer bytes than the size, the download shows an error. Try the download again. If the file has more bytes than the size, Chatter gives you the file, and the Chatter log gets a warning. If the machine gave no size, Chatter gives you the file, and the Chatter log gets a warning. If a program looks cut short, download it again.
 
 ### Delete a machine
 

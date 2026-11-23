@@ -29,7 +29,7 @@ const MAX_FOLDER_LIST_MB = MAX_FOLDER_LIST_BYTES / 1024 / 1024;
 /** The most folders that one tree walk opens. Each folder costs some commands and a LIST on the machine. */
 export const MAX_TREE_FOLDERS = 200;
 /**
- * One tree walk stops after this time, and keeps what it read. The raw LIST waits 1 s for each folder,
+ * One tree walk stops after this time, and keeps what it read. A slow machine can take some time for each folder,
  * so a normal walk of many folders can take some time.
  */
 export const TREE_WALK_TIME_LIMIT_MS = 120_000;
@@ -56,8 +56,17 @@ const DOWNLOAD_TIME_LIMIT_MS = 30 * 60_000;
  * longer than the FTP timeout.
  */
 export const REPLY_AFTER_DATA_WAIT_MS = 3_000;
-/** The raw LIST does not wait for the server to close the data connection, so it waits this long for the listing */
-const RAW_LIST_TRANSFER_WAIT_MS = 1_000;
+/**
+ * The download waits this long for the reply to SIZE. Some limited servers do not answer a command that they do not
+ * know, and the FTP timeout (30 s) is too long to wait before each download.
+ */
+export const SIZE_REPLY_WAIT_MS = 3_000;
+/**
+ * The raw LIST waits this long for its reply (usually 226) after a clean end of the data connection, and for more data
+ * after its reply or after its first byte. Some old servers send no reply, and some do not close the data connection.
+ * A tree walk waits once for each folder, so this time is shorter than the wait of the raw RETR.
+ */
+const REPLY_AFTER_LIST_WAIT_MS = 1_000;
 /**
  * The raw RETR and the raw LIST stop when their data connection does not open in this time, and use the
  * fallback of basic-ftp. On a shop network a connection opens in a few milliseconds. The FTP timeout (30 s)
@@ -105,7 +114,7 @@ interface TreeWalk {
   stopReason?: TreeCutReason;
 }
 
-type TreeCutReason = 'entries' | 'folders' | 'time' | 'longList';
+type TreeCutReason = 'entries' | 'folders' | 'time' | 'longList' | 'cutList' | 'login';
 
 function cutWalk(walk: TreeWalk, reason: TreeCutReason): void {
   walk.cutReason ??= reason;
@@ -125,16 +134,21 @@ function stopReasonOf(walk: TreeWalk): TreeCutReason | undefined {
   return undefined;
 }
 
-/** One folder listing, and whether it was longer than MAX_FOLDER_LIST_BYTES */
+/** One folder listing, whether it was longer than MAX_FOLDER_LIST_BYTES, and whether it ended before it was complete */
 interface FolderListing {
   entries: RawListEntry[];
   isTooLong: boolean;
+  isCut: boolean;
 }
 
-/** The text of a raw LIST, and whether Chatter stopped it at MAX_FOLDER_LIST_BYTES */
+/**
+ * The text of a raw LIST, whether Chatter stopped it at MAX_FOLDER_LIST_BYTES, and whether it ended before it was
+ * complete (an error reply, or a stall after some bytes, that cut a line)
+ */
 interface RawListing {
   text: string;
   isTooLong: boolean;
+  isCut: boolean;
 }
 
 /** A folder list that was too long or too slow. The caller cannot know if a file is in the folder. */
@@ -320,9 +334,9 @@ async function listFolderWithLimits(client: ftp.Client, path: string): Promise<f
   }
 }
 
-/** The complete lines of a listing. When the listing was cut, its last line can be cut in two, so it is left out. */
-function completeLines(text: string, isCut: boolean): string {
-  return isCut ? text.slice(0, text.lastIndexOf('\n') + 1) : text;
+/** The complete lines of a listing. When the listing can be cut, its last line can be cut in two, so it is left out. */
+function completeLines(text: string): string {
+  return text.slice(0, text.lastIndexOf('\n') + 1);
 }
 
 function alreadyExistsMessage(remotePath: string): string {
@@ -388,6 +402,9 @@ async function trySetBinaryMode(client: ftp.Client): Promise<void> {
     // The server does not support TYPE I; continue in its default mode
   }
 }
+
+/** "213 1234": the reply to SIZE. Only a plain number counts. */
+const SIZE_REPLY_PATTERN = /^213 (\d+)\s*$/;
 
 /**
  * The address of the passive data connection. A rogue machine can name any host in its PASV reply,
@@ -551,7 +568,9 @@ export class FTPClient {
 
   /**
    * The file tree, and whether the walk cut it short: at MAX_TREE_ENTRIES entries, at MAX_TREE_FOLDERS folders,
-   * at TREE_WALK_TIME_LIMIT_MS, or after a folder listing that is too long. The depth limit does not count as a cut.
+   * at TREE_WALK_TIME_LIMIT_MS, after a folder listing that is too long ('longList'), after a folder listing that
+   * ended before it was complete ('cutList'), or when a new login during the walk failed ('login').
+   * The depth limit does not count as a cut.
    */
   async readFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FileTree> {
     const key = `${depth}:${path}`;
@@ -608,7 +627,7 @@ export class FTPClient {
         const sink: DownloadSink = { destination: writableStream, bytesWritten: 0 };
         try {
           // When the signal closes the client, the RETR fails, and the raw RETR closes its data connection
-          await this.downloadOverPassiveSocket(client, remotePath, sink);
+          await this.downloadOverPassiveSocket(client, { filePath: remotePath, sink, signal: stop.signal });
         } catch (err) {
           // The user already has part of the file. A second download would add to that part, so the download fails.
           if (stop.signal.aborted || sink.bytesWritten > 0 || err instanceof NoFallbackError) throw err;
@@ -764,11 +783,18 @@ export class FTPClient {
    * connection first, then send RETR. More compatible with limited FTP servers like Speedio.
    * When the download fails after the RETR, or the machine sends no reply to RETR, the client closes: a late 226 or
    * 426 must not go to the next command.
+   * When no reply to RETR comes, the size from SIZE decides: the file is cut short when fewer bytes came. More bytes
+   * than the size are accepted with a warning, because a control can convert a program on the transfer.
+   * A machine that gives no size keeps the old behavior: Chatter accepts the file and logs a warning.
    */
-  private async downloadOverPassiveSocket(client: ftp.Client, filePath: string, sink: DownloadSink): Promise<void> {
+  private async downloadOverPassiveSocket(
+    client: ftp.Client,
+    { filePath, sink, signal }: { filePath: string; sink: DownloadSink; signal: AbortSignal }
+  ): Promise<void> {
     // basic-ftp refuses only CR, LF and NUL in a command, so this check is stricter
     assertSafeFtpArgument(filePath);
     await trySetBinaryMode(client);
+    const expectedSize = await this.sizeOf(client, { filePath, signal });
     const { host, port } = await requestPassiveAddress(client.ftp);
     const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
     let isConfirmed: boolean;
@@ -779,12 +805,47 @@ export class FTPClient {
       client.close();
       throw err;
     }
-    if (!isConfirmed) {
-      log.warn('The machine did not confirm the end of the file (no reply to RETR). Chatter accepts the file, because the data connection ended correctly.', {
-        host: this.host, file: filePath, bytes: sink.bytesWritten
+    if (isConfirmed) return;
+    // A late reply must not go to the next command
+    client.close();
+    const context = { host: this.host, file: filePath, bytes: sink.bytesWritten };
+    if (expectedSize === undefined) {
+      log.warn('The machine did not confirm the end of the file (no reply to RETR), and gave no size. Chatter accepts the file, because the data connection ended correctly.', context);
+    } else if (sink.bytesWritten < expectedSize) {
+      log.warn('The machine did not confirm the end of the file (no reply to RETR), and sent fewer bytes than SIZE gave.', { ...context, size: expectedSize });
+      throw new Error(`The file is not complete. The machine sent ${sink.bytesWritten} of ${expectedSize} bytes. Try again.`);
+    } else if (sink.bytesWritten > expectedSize) {
+      log.warn('The machine did not confirm the end of the file (no reply to RETR), and sent more bytes than SIZE gave. Chatter accepts the file, because the data connection ended correctly.', { ...context, size: expectedSize });
+    }
+  }
+
+  /**
+   * The size of a file in bytes from SIZE, or undefined when the machine does not give a clear size.
+   * basic-ftp sets binary mode (TYPE I) at login, so the size is the byte count of a transfer.
+   * When no reply comes in SIZE_REPLY_WAIT_MS, or the machine closes the connection, the size is unknown. A late reply
+   * must not go to the next command, so the client logs in again on a new connection. A stop of the download
+   * (by the user or by the time limit) stops it here, with no new login.
+   */
+  private async sizeOf(
+    client: ftp.Client,
+    { filePath, signal }: { filePath: string; signal: AbortSignal }
+  ): Promise<number | undefined> {
+    const timer = setTimeout(() => client.close(), Math.min(this.timeoutMs, SIZE_REPLY_WAIT_MS));
+    try {
+      const reply = await client.send(`SIZE ${filePath}`);
+      const match = SIZE_REPLY_PATTERN.exec(reply.message);
+      return match ? Number(match[1]) : undefined;
+    } catch (err) {
+      if (err instanceof ftp.FTPError) return undefined;
+      signal.throwIfAborted();
+      log.warn('The machine gave no reply to SIZE. Chatter connects again, and downloads the file with no size.', {
+        host: this.host, file: filePath, error: errorText(err)
       });
-      // A late reply must not go to the next command
       client.close();
+      await this.login(client);
+      return undefined;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -881,43 +942,105 @@ export class FTPClient {
   private async rawListCurrentDirectory(client: ftp.Client): Promise<RawListing> {
     const { host, port } = await requestPassiveAddress(client.ftp);
     const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
+    return this.receiveListing(client, dataSocket);
+  }
 
+  /**
+   * Send LIST and read the listing, as receiveFile reads a file. The listing is complete when the data connection
+   * ends cleanly and the machine sends its 2xx reply. Then it resolves at once.
+   * - An error reply (for example 426) or a stall after some bytes cuts the listing short. An error with no byte
+   *   rejects, so the fallback can try. After an error reply, the client still reads the data until it ends, for
+   *   REPLY_AFTER_LIST_WAIT_MS at most, because the data can come after the reply.
+   * - Some old servers send no reply. After the first byte, a listing with no reply is complete when its data
+   *   ends cleanly or when no data comes, each for REPLY_AFTER_LIST_WAIT_MS. It keeps all its text, also a last line
+   *   with no line end, and is not cut short (as before the reply check). New data starts the wait again. So a pause
+   *   of that length in the middle of the data also ends the listing, with no error.
+   * - Some servers do not close the data connection. A listing with a 2xx reply is then complete when no data
+   *   comes in REPLY_AFTER_LIST_WAIT_MS. A pause of that length in the middle of the data also ends it. When the
+   *   pause cuts a line, the listing is cut short.
+   * - Before the first byte, the wait for data is the FTP timeout. With no byte, the fallback can try.
+   * A listing whose data broke, or that got an error reply, keeps only its complete lines, and is cut short when it
+   * lost a line. When the reply did not come, the client closes, so a late reply cannot go to the next command. The
+   * walk then logs in again only when it opens another folder.
+   */
+  private receiveListing(client: ftp.Client, dataSocket: net.Socket): Promise<RawListing> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       let byteCount = 0;
       let isTooLong = false;
-      const listing = (): RawListing => ({ text: completeLines(Buffer.concat(chunks).toString(), isTooLong), isTooLong });
-      // After a listing that is too long, the fallback must not read the same listing again
-      const fail = (err: unknown) => (isTooLong ? resolve(listing()) : reject(err));
+      let hasDataEnded = false;
+      let isReplyDone = false;
+      /** The error reply to LIST. The client reads the rest of the data first, as it can come after the reply. */
+      let replyError: Error | undefined;
+      let isSettled = false;
+      let timer: NodeJS.Timeout | undefined;
+
+      const listing = (isCut: boolean): RawListing => {
+        const text = Buffer.concat(chunks).toString();
+        // With no reply, a clean end of the data or a wait with no data ends the listing: some old servers send no
+        // reply, and some do not close the data connection. Before the reply check, such a listing was complete.
+        const isWhole = !isCut && !replyError && !isTooLong && (hasDataEnded || !isReplyDone);
+        if (isWhole) return { text, isTooLong, isCut: false };
+        const lines = completeLines(text);
+        return { text: lines, isTooLong, isCut: isCut || lines.length < text.length };
+      };
+      const settle = (outcome: Error | { isCut: boolean }) => {
+        if (isSettled) return;
+        isSettled = true;
+        clearTimeout(timer);
+        dataSocket.destroy();
+        if (!isReplyDone) client.close();
+        if (outcome instanceof Error) reject(outcome);
+        else resolve(listing(outcome.isCut));
+      };
+      // The bytes that came are kept. With no byte, the fallback can still read the listing.
+      const fail = (err: Error) => settle(byteCount > 0 ? { isCut: true } : err);
+      const startTimer = (waitMs: number, onTimeUp: () => void) => {
+        clearTimeout(timer);
+        if (!isSettled) timer = setTimeout(onTimeUp, waitMs);
+      };
+      const startIdleTimer = () => startTimer(this.timeoutMs, () => fail(new Error('Timeout: the raw LIST data connection is idle')));
+      const finish = () => (replyError ? fail(replyError) : settle({ isCut: false }));
+      const startReplyWait = () => startTimer(Math.min(this.timeoutMs, REPLY_AFTER_LIST_WAIT_MS), finish);
+      const settleWhenComplete = () => {
+        if (hasDataEnded && isReplyDone) finish();
+        else startReplyWait();
+      };
 
       dataSocket.on('data', (chunk: Buffer) => {
-        if (isTooLong) return;
+        if (isSettled) return;
         const room = MAX_FOLDER_LIST_BYTES - byteCount;
         chunks.push(chunk.length > room ? chunk.subarray(0, room) : chunk);
         byteCount += Math.min(chunk.length, room);
         if (chunk.length > room) {
           isTooLong = true;
-          dataSocket.destroy();
-        }
+          settle({ isCut: false });
+        } else startReplyWait();
+      });
+      // 'end' comes only when the machine closes the data connection cleanly, not when the connection breaks
+      dataSocket.on('end', () => {
+        hasDataEnded = true;
+        settleWhenComplete();
       });
       dataSocket.on('error', fail);
-      // Until the reply to LIST comes, an idle data connection is destroyed, so the walk goes on with the fallback.
-      // After the reply, the wait for the listing has its own short limit, and a folder can be empty.
-      dataSocket.setTimeout(this.timeoutMs, () => {
-        dataSocket.destroy();
-        reject(new Error('Timeout: the raw LIST data connection is idle'));
-      });
 
-      client.send('LIST').then(() => {
-        dataSocket.setTimeout(0);
-        setTimeout(() => {
-          dataSocket.end();
-          resolve(listing());
-        }, RAW_LIST_TRANSFER_WAIT_MS);
-      }, (err: unknown) => {
-        dataSocket.end();
-        fail(err);
+      startIdleTimer();
+      client.ftp.handle('LIST', (reply, task) => {
+        if (reply instanceof Error) task.reject(reply);
+        else if (reply.code >= 200 && reply.code < 300) task.resolve(reply);
+        else if (reply.code >= 300) task.reject(new Error(`Unexpected reply to LIST: ${reply.message}`));
+        // A 1xx reply (for example 150) only tells that the transfer starts
+      }).then(() => {
+        isReplyDone = true;
+        settleWhenComplete();
+      }, (err: Error) => {
+        // The machine answered. A closed control connection is closed anyway.
+        isReplyDone = true;
+        replyError = err;
+        settleWhenComplete();
       });
+      // The timers above watch the transfer. The control connection is quiet until the 226, so its own timeout stops.
+      client.ftp.socket.setTimeout(0);
     });
   }
 
@@ -931,6 +1054,10 @@ export class FTPClient {
         return `The file tree on ${this.host} took too long. Chatter stops a walk after ${TREE_WALK_TIME_LIMIT_MS / 1000} s.`;
       case 'longList':
         return `A folder list on ${this.host} is too long. Chatter reads at most ${MAX_FOLDER_LIST_MB} MB of one folder list, and then opens no more folders.`;
+      case 'cutList':
+        return `A folder list on ${this.host} ended before it was complete. Chatter shows the complete lines that it read.`;
+      case 'login':
+        return `The connection to ${this.host} closed during the file tree, and Chatter could not log in again. Chatter shows the part that it read.`;
     }
   }
 
@@ -940,18 +1067,45 @@ export class FTPClient {
   }
 
   /**
-   * List the current folder: bare LIST first, then basic-ftp's list. An empty list when both fail.
-   * A raw listing that is too long keeps its first lines, and the fallback does not run.
+   * List the folder `path`, which is the current folder: bare LIST first, then basic-ftp's list. An empty list when
+   * both fail. A raw listing that is too long keeps its first lines, and the fallback does not run.
    * basic-ftp keeps nothing of a listing that is too long.
+   * A raw LIST that got no reply closed the client. The fallback then logs in again, and opens `path` again, because
+   * a new session starts in the login folder.
    */
-  private async listCurrentDirectory(client: ftp.Client): Promise<FolderListing> {
+  private async listCurrentDirectory(
+    client: ftp.Client,
+    { path, walk }: { path: string; walk: TreeWalk }
+  ): Promise<FolderListing> {
     let raw: RawListing;
     try {
       raw = await this.rawListCurrentDirectory(client);
     } catch {
+      if (client.closed) {
+        if (!(await this.loginAgainForWalk(client, walk))) return emptyListing();
+        await openFolder(client, path);
+      }
       return listWithBasicFtp(client);
     }
-    return { entries: parseRawList(raw.text), isTooLong: raw.isTooLong };
+    return { entries: parseRawList(raw.text), isTooLong: raw.isTooLong, isCut: raw.isCut };
+  }
+
+  /**
+   * Log in again when the client closed, for example after a raw LIST that got no reply. False when the walk must
+   * stop: after its time limit (which closed the client), or when the new login fails. The walk then keeps what it read.
+   * It does not use stopReasonOf, because the folder limit is reached while the last folder is still in the list.
+   */
+  private async loginAgainForWalk(client: ftp.Client, walk: TreeWalk): Promise<boolean> {
+    if (!client.closed) return true;
+    if (walk.stopReason) return false;
+    try {
+      await this.login(client);
+      return true;
+    } catch (err) {
+      stopWalk(walk, 'login');
+      log.debug('The new login of the file tree walk failed', { host: this.host, error: errorText(err) });
+      return false;
+    }
   }
 
   /**
@@ -978,8 +1132,9 @@ export class FTPClient {
           return top.nodes;
         }
         walk.foldersLeft -= 1;
-        const { entries, isTooLong } = await this.listFolder(client, folder.path);
+        const { entries, isTooLong, isCut } = await this.listFolder(client, { path: folder.path, walk });
         if (isTooLong) stopWalk(walk, 'longList');
+        if (isCut) cutWalk(walk, 'cutList');
         const kept = entries.slice(0, walk.entriesLeft);
         walk.entriesLeft -= kept.length;
         if (kept.length < entries.length) cutWalk(walk, 'entries');
@@ -997,16 +1152,30 @@ export class FTPClient {
     return top.nodes;
   }
 
-  /** The entries of one folder. A folder that cannot be opened gives an empty list. */
-  private async listFolder(client: ftp.Client, path: string): Promise<FolderListing> {
+  /**
+   * The entries of one folder. A folder that cannot be opened gives an empty list.
+   * When the client closed, for example after a listing that got no reply, it logs in again first.
+   * When that login fails, or the time limit came, the walk stops and keeps what it read.
+   */
+  private async listFolder(client: ftp.Client, { path, walk }: { path: string; walk: TreeWalk }): Promise<FolderListing> {
     try {
-      await client.cd(path);
-      await client.pwd();
-      return await this.listCurrentDirectory(client);
+      if (!(await this.loginAgainForWalk(client, walk))) return emptyListing();
+      await openFolder(client, path);
+      return await this.listCurrentDirectory(client, { path, walk });
     } catch {
-      return { entries: [], isTooLong: false };
+      return emptyListing();
     }
   }
+}
+
+/** Make `path` the current folder, as the walk always did: CWD, then PWD */
+async function openFolder(client: ftp.Client, path: string): Promise<void> {
+  await client.cd(path);
+  await client.pwd();
+}
+
+function emptyListing(): FolderListing {
+  return { entries: [], isTooLong: false, isCut: false };
 }
 
 function treeNodeOf(entry: RawListEntry, parentPath: string): FTPTreeNode {
@@ -1022,8 +1191,8 @@ function treeNodeOf(entry: RawListEntry, parentPath: string): FTPTreeNode {
 async function listWithBasicFtp(client: ftp.Client): Promise<FolderListing> {
   try {
     const list = await client.list();
-    return { entries: list.map(item => ({ name: item.name, isDir: item.isDirectory, size: item.size })), isTooLong: false };
+    return { entries: list.map(item => ({ name: item.name, isDir: item.isDirectory, size: item.size })), isTooLong: false, isCut: false };
   } catch (err) {
-    return { entries: [], isTooLong: isListingTooLong(err) };
+    return { ...emptyListing(), isTooLong: isListingTooLong(err) };
   }
 }

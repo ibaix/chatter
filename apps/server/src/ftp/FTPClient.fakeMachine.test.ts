@@ -16,7 +16,7 @@ const FAKE_FTP_SERVER = new URL('../../../../tools/fake-machines/ftp.ts', import
 const { startFtpServer } = (await import(FAKE_FTP_SERVER)) as { startFtpServer: StartFtpServer };
 
 const HOST = '127.0.0.1';
-/** The raw LIST waits 1 s for each folder, so a walk of some folders takes some seconds */
+/** A walk of some folders on a slow computer can take some seconds */
 const WALK_TEST_TIME_MS = 30_000;
 /** A long file name makes a long listing with fewer files */
 const LONG_NAME_LENGTH = 200;
