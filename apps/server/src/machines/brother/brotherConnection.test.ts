@@ -608,8 +608,9 @@ describe('Brother reply size limit, with a real TCP connection', () => {
         'The machine sent a reply larger than 1 MB. Chatter stopped reading it and closed the connection.');
 
       expect(brother.connected).toBe(false);
-      // The control stops when Chatter closes the connection. Only the socket buffers hold more than the limit.
-      expect(await sent).toBeLessThan(MAX_BROTHER_REPLY_BYTES + 8 * 1024 * 1024);
+      // The control stops when Chatter closes the connection. Only the socket buffers hold more than the limit. On
+      // Linux, the receive and send buffers can hold about 10 MB together, so the margin is wide.
+      expect(await sent).toBeLessThan(MAX_BROTHER_REPLY_BYTES + 32 * 1024 * 1024);
       expect(log.text('warn').split('\n')).toHaveLength(1);
       expect(log.text('warn')).toContain('b1');
       expect(log.text('warn')).toContain(String(MAX_BROTHER_REPLY_BYTES));
@@ -656,5 +657,36 @@ describe('Brother reply size limit, with a real TCP connection', () => {
     const reply = await brother.sendCommand('PANEL');
 
     expect(reply.D01).toEqual(['0', '0', '0']);
+  });
+
+  /** Connect to a control that sends these parts with a short wait between them, and send one command */
+  async function sendToSlowControl(parts: string[]) {
+    const port = await startControl(async socket => {
+      for (const part of parts) {
+        socket.write(part);
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+    });
+    const brother = connectorFor(port, 60_000);
+    await brother.connect();
+    return brother.sendCommand('PANEL');
+  }
+
+  it('reads a reply whose opening % is the last byte of a part after other data', async () => {
+    const reply = await sendToSlowControl(['\r\n%', 'RLOD    PANEL   00\r\nD01,0,0,0\r\n\r\n10', '%']);
+
+    expect(reply.D01).toEqual(['0', '0', '0']);
+  });
+
+  it('reads a reply of exactly the limit, when the closing % comes in the next part', async () => {
+    const reply = sendToSlowControl(['%' + 'X'.repeat(MAX_BROTHER_REPLY_BYTES - 1), '%']);
+
+    await expect(reply).resolves.toBeDefined();
+  });
+
+  it('rejects a reply of one byte more than the limit', async () => {
+    const reply = sendToSlowControl(['%' + 'X'.repeat(MAX_BROTHER_REPLY_BYTES)]);
+
+    await expect(reply).rejects.toThrow('The machine sent a reply larger than 1 MB.');
   });
 });

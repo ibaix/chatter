@@ -2,7 +2,7 @@
 import type { Writable } from 'stream';
 
 /** One part of an endless reply. It is about the size of one chunk that a socket gives to its reader. */
-export const ENDLESS_PART = 'X'.repeat(16 * 1024);
+const ENDLESS_PART = 'X'.repeat(16 * 1024);
 
 /**
  * Write `part` again and again, as fast as the reader takes it, until the connection closes.
