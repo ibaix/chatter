@@ -1,12 +1,14 @@
 import Database from 'better-sqlite3';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app.js';
 import { HardwarePoller } from '../polling/poller.js';
 import { noHistory } from '../recording/testSupport.js';
 import { SESSION_COOKIE } from './authRoutes.js';
-import { SEEN_INTERVAL_MS } from './sessionStore.js';
+import { SEEN_INTERVAL_MS, SESSION_IDLE_MS } from './sessionStore.js';
+import { KEEP_ALIVE_MS } from '../realtime/machineEvents.js';
 import { authParts, loggedInAuth, TEST_LOGIN } from './testSupport.js';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
 const MAC_CHROME = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/130.0.0.0 Safari/537.36';
 
 interface SessionsReport {
@@ -59,18 +61,71 @@ describe('session routes', () => {
     expect((await app.request('/api/machines', withCookie(chromeCookie))).status).toBe(200);
   });
 
-  it('saves when a browser was last used', async () => {
-    let now = Date.parse('2026-11-09T10:00:00Z');
-    const db = new Database(':memory:');
-    const { auth, accounts } = authParts(db, () => now);
-    const token = await auth.setUp(TEST_LOGIN, { userAgent: MAC_CHROME, address: '127.0.0.1' });
-    const clockedApp = createApp({ poller: new HardwarePoller(db), auth, accounts, history: noHistory() });
-    const cookie = `${SESSION_COOKIE}=${token}`;
+  describe('with a clock', () => {
+    let now: number;
+    let clockedApp: ReturnType<typeof createApp>;
+    let cookie: string;
 
-    now += SEEN_INTERVAL_MS;
-    await clockedApp.request('/api/machines', withCookie(cookie));
+    beforeEach(async () => {
+      now = Date.parse('2026-11-09T10:00:00Z');
+      const db = new Database(':memory:');
+      const { auth, accounts } = authParts(db, () => now);
+      const token = await auth.setUp(TEST_LOGIN, { userAgent: MAC_CHROME, address: '127.0.0.1' });
+      clockedApp = createApp({ poller: new HardwarePoller(db), auth, accounts, history: noHistory() });
+      cookie = `${SESSION_COOKIE}=${token}`;
+    });
 
-    const report = (await (await clockedApp.request('/api/auth/sessions', withCookie(cookie))).json()) as SessionsReport;
-    expect(report.sessions[0].lastSeenAt).toBe(new Date(now).toISOString());
+    const lastSeenAt = async () =>
+      ((await (await clockedApp.request('/api/auth/sessions', withCookie(cookie))).json()) as SessionsReport).sessions[0].lastSeenAt;
+
+    it('saves when a browser was last used', async () => {
+      now += SEEN_INTERVAL_MS;
+      await clockedApp.request('/api/machines', withCookie(cookie));
+
+      expect(await lastSeenAt()).toBe(new Date(now).toISOString());
+    });
+
+    it('ends a login that is not used for 14 days', async () => {
+      now += SESSION_IDLE_MS;
+      expect((await clockedApp.request('/api/machines', withCookie(cookie))).status).toBe(200);
+
+      now += SESSION_IDLE_MS + SEEN_INTERVAL_MS + 1;
+      expect((await clockedApp.request('/api/machines', withCookie(cookie))).status).toBe(401);
+    });
+
+    it('keeps the login of a visible page, which tells that it is in use, for longer than 14 days', async () => {
+      const inUse = () => clockedApp.request('/api/auth/sessions/in-use', withCookie(cookie, 'POST'));
+      for (let day = 0; day < 20; day++) {
+        now += DAY_MS;
+        expect((await inUse()).status).toBe(204);
+      }
+
+      expect(await lastSeenAt()).toBe(new Date(now).toISOString());
+      expect((await clockedApp.request('/api/machines', withCookie(cookie))).status).toBe(200);
+    });
+
+    it('does not count an open live stream as a use of the login', async () => {
+      vi.useFakeTimers();
+      try {
+        const reader = (await clockedApp.request('/api/events', withCookie(cookie))).body!.getReader();
+        await reader.read();
+        const openedAt = await lastSeenAt();
+
+        for (let i = 0; i < 3; i++) {
+          now += SEEN_INTERVAL_MS;
+          await vi.advanceTimersByTimeAsync(KEEP_ALIVE_MS);
+        }
+
+        expect(await lastSeenAt()).toBe(openedAt);
+        await reader.cancel();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it('tells that a page is in use only for a browser that is logged in', async () => {
+    expect((await app.request('/api/auth/sessions/in-use', { method: 'POST' })).status).toBe(401);
+    expect((await app.request('/api/auth/sessions/in-use', withCookie(setupCookie, 'POST'))).status).toBe(204);
   });
 });
