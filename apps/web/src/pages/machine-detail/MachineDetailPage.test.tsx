@@ -488,7 +488,8 @@ describe('MachineDetailPage', () => {
       expect(within(versions).getAllByRole('listitem')).toHaveLength(1);
       expect(within(versions).getByText(/newest/)).toBeInTheDocument();
       expect(screen.queryAllByLabelText('The text of the picked version')).toHaveLength(count);
-      expect(fetchUploadEvent).toHaveBeenCalledTimes(count);
+      // The text loads in an effect, which React can run after the list shows
+      await waitFor(() => expect(fetchUploadEvent).toHaveBeenCalledTimes(count));
     });
 
     it('shows the versions to a viewer as plain items, and says why there is no text', async () => {
