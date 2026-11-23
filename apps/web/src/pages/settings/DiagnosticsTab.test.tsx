@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Dialog } from '@toolpath/ui';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -197,7 +197,10 @@ describe('DiagnosticsTab', () => {
     vi.mocked(setDebug).mockResolvedValue({ debugUntil: '2026-11-21T10:15:00.000Z' });
     await renderTab(facts());
 
-    fireEvent.click(await screen.findByRole('switch'));
+    // The switch is off until the debug state loads, and a click on it then does nothing
+    const debugSwitch = await screen.findByRole('switch');
+    await waitFor(() => expect(debugSwitch).not.toHaveAttribute('aria-disabled', 'true'));
+    fireEvent.click(debugSwitch);
 
     expect(setDebug).toHaveBeenCalledWith(true);
     expect(await screen.findByText(/^On until .*\. Then it turns off by itself\.$/)).toBeInTheDocument();

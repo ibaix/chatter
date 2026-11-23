@@ -32,6 +32,7 @@ import { UserAccounts } from './auth/userAccounts.js';
 import { UserStore } from './auth/userStore.js';
 import { ProxySettings, sqliteProxySettingStore } from './auth/proxySettings.js';
 import { LoginLog } from './auth/loginLog.js';
+import { DEVICE_KEY_FILE, loadDeviceKey } from './auth/deviceCookie.js';
 import { SettingsTable } from './storage/settingsTable.js';
 import { UpdateFolder } from './updates/UpdateFolder.js';
 import { UpdateService } from './updates/UpdateService.js';
@@ -122,7 +123,8 @@ async function start(): Promise<void> {
 
     const users = new UserStore(getDb());
     const sessions = new SessionStore(getDb());
-    const auth = new Auth(users, sessions);
+    // The key file is in the data volume, so the known browsers stay known after an update
+    const auth = new Auth(users, sessions, loadDeviceKey(path.join(dataFolder(), DEVICE_KEY_FILE)));
     const accounts = new UserAccounts(users, sessions);
     const proxySettings = new ProxySettings(sqliteProxySettingStore(settings), TRUST_PROXY);
     if (proxySettings.addresses.length > 0) log.info('Trusted reverse proxies', { addresses: proxySettings.addresses.join(', ') });

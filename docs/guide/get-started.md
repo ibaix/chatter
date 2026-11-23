@@ -123,6 +123,8 @@ Go to **Settings > Users and roles**, and click **Add user**. Give each person a
 
 Give the username and the password to the person. They can change the password on **Settings > Your account**.
 
+After too many wrong passwords, Chatter locks a user for up to 15 minutes. A browser where the user logged in before can still log in. An Admin can unlock the user in **Settings > Logins**. See [Locked out after wrong passwords](../security.md#locked-out-after-wrong-passwords).
+
 ![Settings, Users and roles: three users, and what each role can do](../images/chatter-users-and-roles.png)
 
 Use Chatter only on a shop network that you trust. Do not open it to the internet. See [Security](../security.md).

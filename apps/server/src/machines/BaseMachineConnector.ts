@@ -7,6 +7,7 @@ import type {
   MachineType,
   MachineDataSnapshot,
   MacroConfig,
+  FileTree,
   FTPTreeNode,
   FTPUploadResult,
 } from '../types/index.js';
@@ -206,8 +207,9 @@ export abstract class BaseMachineConnector extends EventEmitter {
     return files.map(f => ({ ...f, children: undefined }));
   }
 
-  async getFileTree(path = '/', depth = 2): Promise<FTPTreeNode[]> {
-    return this.ftpClient.getFileTree(path, depth);
+  /** The file tree, and whether Chatter cut it short because it has too many entries */
+  async readFileTree(path = '/', depth = 2): Promise<FileTree> {
+    return this.ftpClient.readFileTree(path, depth);
   }
 
   async downloadFile(filePath: string, writableStream: Writable): Promise<void> {
