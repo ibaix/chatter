@@ -125,7 +125,7 @@ function LockedUsersPanel({ locked, limits, onUnlock }: LockedUsersPanelProps) {
     `After ${limits.maxWrongPasswordsForUser} wrong passwords for one user from all computers in ${limits.lockMinutes} min, ` +
     'nobody can log in as that user. ' +
     `The lock ends ${limits.lockMinutes} min after the first wrong password. ` +
-    'Browsers that are logged in still work. You can unlock the user now.';
+    'Browsers that are logged in, and browsers where the user logged in before, still work. You can unlock the user now.';
   return (
     <Panel title="Locked users" description={description}>
       {locked.length === 0 ? (
