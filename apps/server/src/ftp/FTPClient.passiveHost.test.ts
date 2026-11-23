@@ -674,8 +674,8 @@ describe('FTPClient folder listing that is too long', () => {
     const tree = await ftpClient.readFileTree('/', 2);
 
     expect(tree).toEqual({ nodes: [], isCutShort: true });
-    // The raw LIST got no data connection, then the "LIST -a" of basic-ftp got the long listing
-    expect(count('LIST')).toBe(2);
+    // The raw LIST got no data connection, so it sent no LIST. Then the "LIST -a" of basic-ftp got the long listing.
+    expect(count('LIST')).toBe(1);
     expect(count('CWD')).toBe(1);
   });
 
