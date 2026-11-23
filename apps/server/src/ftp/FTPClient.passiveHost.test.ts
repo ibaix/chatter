@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import net from 'net';
 import { PassThrough } from 'stream';
 import * as ftp from 'basic-ftp';
-import { FTPClient, MAX_FOLDER_LIST_BYTES } from './FTPClient.js';
+import { FTPClient, MAX_FOLDER_LIST_BYTES, REPLY_AFTER_DATA_WAIT_MS } from './FTPClient.js';
+import { captureLog } from '../logging/testSupport.js';
 
 // A rogue machine can name any host in its PASV reply, so Chatter would open a connection to a host of its choice.
 // The data connection must go only to the host of the control connection, and only the port comes from the reply.
@@ -786,17 +787,60 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
     await until(() => isClosed);
   }
 
-  it('fails when the data connection closes but the machine sends no 226', async () => {
+  // Some old, simple FTP servers never send the 226 after RETR. A clean end of the data connection is then the end
+  // of the file. A late reply could go to the next command, so the client closes the control connection.
+  it('downloads the file, and writes a warning, when the data connection ends but the machine sends no 226', async () => {
+    const log = captureLog();
+    try {
+      let transfer: FileTransfer | undefined;
+      const { text, outcome } = await downloadFrom(started => { transfer = started; });
+      await until(() => transfer !== undefined);
+      let isControlClosed = false;
+      transfer?.control.on('close', () => { isControlClosed = true; });
+      if (transfer) await sendPartAndClose(text, transfer);
+
+      vi.advanceTimersByTime(timeoutMs);
+
+      expect(await outcome).toBe('success');
+      expect(text()).toBe(firstPart);
+      await until(() => isControlClosed);
+      const warnings = log.lines.filter(line => line.level === 'warn');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].text).toContain('did not confirm');
+      expect(warnings[0].text).toContain(`host=${NAT_CONTROL_HOST}`);
+      expect(warnings[0].text).toContain('file=O1000');
+      expect(warnings[0].text).toContain(`bytes=${firstPart.length}`);
+      expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      log.restore();
+    }
+  });
+
+  it('writes no warning when the 226 comes', async () => {
+    const log = captureLog();
+    try {
+      const { outcome } = await downloadFrom(transfer => sendWholeFile(transfer, PROGRAM_TEXT));
+
+      expect(await outcome).toBe('success');
+      expect(log.text('warn')).toBe('');
+    } finally {
+      log.restore();
+    }
+  });
+
+  it('waits only a short time for the 226 after the end of the data, also with a long FTP timeout', async () => {
     let transfer: FileTransfer | undefined;
-    const { text, outcome } = await downloadFrom(started => { transfer = started; });
+    const download = await startDownload({ sendFile: started => { transfer = started; }, timeoutMs: 30_000 });
+    machine = download.machine;
     await until(() => transfer !== undefined);
-    if (transfer) await sendPartAndClose(text, transfer);
+    if (transfer) await sendPartAndClose(download.text, transfer);
 
-    vi.advanceTimersByTime(timeoutMs);
+    vi.advanceTimersByTime(REPLY_AFTER_DATA_WAIT_MS - 1);
+    expect(await hasSettled(download.outcome)).toBe(false);
+    vi.advanceTimersByTime(1);
 
-    expect(await outcome).toBe('FTP download error: The machine did not confirm that the file is complete. Try again.');
-    expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(await download.outcome).toBe('success');
   });
 
   it.each([
