@@ -10,6 +10,7 @@ import type {
   MachineDataSnapshot,
 } from '../../types/index.js';
 import { createLogger } from '../../logging/logger.js';
+import { ReplyTooLargeError, readTextUpTo, warnReplyTooLarge } from '../replyLimit.js';
 
 const log = createLogger('mtconnect');
 
@@ -52,6 +53,12 @@ type XmlElement = Record<string, unknown>;
 
 const XML_OPTIONS = { explicitArray: false };
 const DEFAULT_SCAN_TIMEOUT_MS = 2000;
+
+/**
+ * The largest reply that Chatter reads from an agent. A /current of a large machine (for example a DMG Mori agent
+ * with many components) can be some MB. A Pi can have 512 MB of RAM, so an endless reply must stop.
+ */
+export const MAX_MTCONNECT_REPLY_BYTES = 16 * 1024 * 1024;
 
 const EMERGENCY_STOP_PRESSED = 'TRIGGERED';
 const EMERGENCY_STOP_ALARM_CODE = 'EMERGENCY_STOP';
@@ -170,7 +177,8 @@ function findSpindleLoadId(device: unknown, speedId: string): string | null {
 }
 
 /**
- * GET a URL and read its body. Throws when the reply is not OK, or takes longer than timeoutMs.
+ * GET a URL and read its body. Throws when the reply is not OK, is larger than MAX_MTCONNECT_REPLY_BYTES
+ * (ReplyTooLargeError), or takes longer than timeoutMs.
  * Does not follow a redirect: an agent must not send Chatter to another address,
  * for example to VictoriaMetrics, which has no login.
  */
@@ -189,7 +197,7 @@ async function getText(url: string, timeoutMs: number): Promise<string> {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-    return await response.text();
+    return await readTextUpTo(response, MAX_MTCONNECT_REPLY_BYTES);
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       throw new Error(`Request timeout after ${timeoutMs}ms`, { cause: err });
@@ -524,7 +532,12 @@ export class MTConnectConnector extends BaseMachineConnector {
     return params ? `${url}?${new URLSearchParams(params).toString()}` : url;
   }
 
-  protected httpGet(url: string): Promise<string> {
-    return getText(url, this.timeout);
+  protected async httpGet(url: string): Promise<string> {
+    try {
+      return await getText(url, this.timeout);
+    } catch (err) {
+      if (err instanceof ReplyTooLargeError) warnReplyTooLarge(log, this.id, err);
+      throw err;
+    }
   }
 }

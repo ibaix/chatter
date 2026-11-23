@@ -1,8 +1,10 @@
-import { createServer } from 'node:http';
+import { createServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { MTConnectConnector } from './MTConnectConnector.js';
+import { MAX_MTCONNECT_REPLY_BYTES, MTConnectConnector } from './MTConnectConnector.js';
 import type { MTConnectMachineConfig } from '../../types/index.js';
+import { captureLog } from '../../logging/testSupport.js';
+import { sendForever } from '../testSupport.js';
 
 function newConnector(config: Partial<MTConnectMachineConfig> = {}): MTConnectConnector {
   return new MTConnectConnector({ name: 'Test', host: '192.168.1.100', ...config });
@@ -203,7 +205,7 @@ describe('MTConnect HTTP errors', () => {
 });
 
 /** A web server on 127.0.0.1 that answers each request with `answer`. Gives its port, its request count and a way to stop it. */
-async function localServer(answer: (response: import('node:http').ServerResponse) => void) {
+async function localServer(answer: (response: ServerResponse) => void) {
   let requests = 0;
   const server = createServer((_request, response) => {
     requests++;
@@ -213,7 +215,7 @@ async function localServer(answer: (response: import('node:http').ServerResponse
   return {
     port: (server.address() as AddressInfo).port,
     requests: () => requests,
-    close: () => new Promise(resolve => server.close(resolve)),
+    close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }),
   };
 }
 
@@ -303,6 +305,80 @@ describe('MTConnect redirects', () => {
     } finally {
       await Promise.all([agent.close(), target.close()]);
     }
+  });
+});
+
+describe('MTConnect reply size limit', () => {
+  const TOO_LARGE = 'Connection failed: The machine sent a reply larger than 16 MB. Chatter stopped reading it and closed the connection.';
+  /** Longer than each test, so a test that waits for it fails */
+  const LONG_TIMEOUT_MS = 60_000;
+
+  /** Connect to an agent that answers with `answer`. Gives the status, the warnings in the log, and the bytes that the agent sent. */
+  async function connectTo(answer: (response: ServerResponse) => Promise<number> | void, timeout = LONG_TIMEOUT_MS) {
+    let sent: Promise<number> | undefined;
+    const agent = await localServer(response => { sent = answer(response) || undefined; });
+    const log = captureLog();
+    const connector = newConnector({ id: 'dmg1', host: '127.0.0.1', mtConnectPort: agent.port, timeout });
+    try {
+      await connector.connect();
+      return { status: connector.getStatus(), warnings: log.text('warn'), sentBytes: await sent };
+    } finally {
+      log.restore();
+      await agent.close();
+    }
+  }
+
+  it('the limit is 16 MB, with a wide margin over a large /current of a DMG Mori agent', () => {
+    expect(MAX_MTCONNECT_REPLY_BYTES).toBe(16 * 1024 * 1024);
+  });
+
+  it('stops reading an endless body at the limit, shows the machine offline with the reason, and writes one warning', async () => {
+    const result = await connectTo(response => {
+      response.writeHead(200, { 'Content-Type': 'text/xml' });
+      return sendForever(response);
+    });
+
+    expect(result.status.connected).toBe(false);
+    expect(result.status.errors).toEqual([TOO_LARGE]);
+    expect(result.warnings.split('\n')).toHaveLength(1);
+    expect(result.warnings).toContain('dmg1');
+    expect(result.warnings).toContain(String(MAX_MTCONNECT_REPLY_BYTES));
+    // The agent stops when Chatter closes the connection. Only the socket buffers hold more than the limit.
+    expect(result.sentBytes).toBeLessThan(MAX_MTCONNECT_REPLY_BYTES + 8 * 1024 * 1024);
+  });
+
+  it('stops at once when the Content-Length is larger than the limit, and does not wait for the body', async () => {
+    const result = await connectTo(response => {
+      response.writeHead(200, { 'Content-Length': String(MAX_MTCONNECT_REPLY_BYTES + 1) });
+      response.write('<MTConnectDevices>');
+    });
+
+    expect(result.status.connected).toBe(false);
+    expect(result.status.errors).toEqual([TOO_LARGE]);
+  });
+
+  it('still reads a normal body', async () => {
+    const result = await connectTo(response => { response.end(PROBE); });
+
+    expect(result.status.errors).toEqual([]);
+    expect(result.status.connected).toBe(true);
+  });
+
+  it('still reads a body of the limit size', async () => {
+    const body = PROBE + ' '.repeat(MAX_MTCONNECT_REPLY_BYTES - PROBE.length);
+
+    const result = await connectTo(response => { response.end(body); });
+
+    expect(result.status.connected).toBe(true);
+  });
+
+  it('gives the timeout error when the body stops before its end', async () => {
+    const result = await connectTo(response => {
+      response.writeHead(200, { 'Content-Type': 'text/xml' });
+      response.write('<MTConnectDevices>');
+    }, 200);
+
+    expect(result.status.errors).toEqual(['Connection failed: Request timeout after 200ms']);
   });
 });
 
