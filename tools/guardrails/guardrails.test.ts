@@ -145,6 +145,7 @@ interface WorkflowStep {
 }
 interface WorkflowJob {
   if?: string;
+  uses?: string;
   needs?: string | string[];
   environment?: string | { name: string };
   permissions?: unknown;
@@ -275,18 +276,31 @@ describe('pinned actions', () => {
   // A tag such as v4 can move to other code. A full commit cannot. A changed action could change the files that
   // the release signs. The comment gives the version, so Dependabot can update the commit and the comment.
   // A local action or workflow (./) is in this repo, so it needs no commit.
-  const usesLine = /^\s*(?:-\s+)?uses:\s*(\S+)(.*)$/;
   const pinned = /^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/;
-  const versionComment = /^\s+# v\d+(\.\d+)*$/;
+  const isLocal = (action: string) => action.startsWith('./');
+  // The actions and the called workflows that the parsed file runs, in each job and in each step
+  const usesOf = (file: string) =>
+    Object.values(workflow(file).jobs).flatMap(job => [job.uses, ...(job.steps ?? []).map(step => step.uses)].filter(uses => uses !== undefined));
 
-  it.each(workflowFiles)('pins each action in %s by a full commit, with the version in a comment', file => {
-    const notPinned = workflowText(file)
+  it.each(workflowFiles)('pins each action in %s by a full commit', file => {
+    expect(usesOf(file).filter(action => !isLocal(action) && !pinned.test(action))).toEqual([]);
+  });
+
+  // The parser drops the comments, so this test reads the lines. A uses line can have quotes around the action.
+  const usesLine = /^\s*(?:-\s+)?uses:\s*(\S+)(.*)$/;
+  const versionComment = /^\s+# v\d+(\.\d+)*$/;
+  const usesLines = (file: string) =>
+    workflowText(file)
       .split('\n')
       .map(line => usesLine.exec(line))
       .filter(match => match !== null)
-      .filter(([, action, rest]) => !action.startsWith('./') && !(pinned.test(action) && versionComment.test(rest)))
-      .map(([line]) => line.trim());
-    expect(notPinned).toEqual([]);
+      .map(([line, action, rest]) => ({ line: line.trim(), action: action.replace(/^(['"])(.*)\1$/, '$2'), rest }));
+
+  it.each(workflowFiles)('gives the version in a comment after each pinned action in %s', file => {
+    const lines = usesLines(file);
+    // The same uses as the parser finds, so that no uses is missed by the line scan
+    expect(lines.map(({ action }) => action)).toEqual(usesOf(file));
+    expect(lines.filter(({ action, rest }) => !isLocal(action) && !versionComment.test(rest)).map(({ line }) => line)).toEqual([]);
   });
 });
 
