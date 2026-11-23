@@ -40,6 +40,16 @@ const FOLDER_LIST_TOO_SLOW_MESSAGE = 'The folder list on the machine took too lo
 /** The raw RETR stops when the machine stops in the middle of a file */
 const DOWNLOAD_STALLED_MESSAGE = 'The machine stopped sending the file. Try again.';
 /**
+ * The most bytes of one download. CNC programs are much smaller (a control holds some MB at most), but a program on a
+ * data server can be large. A rogue FTP server cannot send a file with no end.
+ */
+export const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+/**
+ * One download stops after this time. A machine that sends one byte just before each timeout cannot keep the
+ * download open for ever. A slow control sends about 50 KB each second, so 64 MB takes about 22 minutes.
+ */
+export const DOWNLOAD_TIME_LIMIT_MS = 30 * 60_000;
+/**
  * After a clean end of the data connection, the raw RETR waits this long for the reply to RETR (usually 226).
  * Some old, simple FTP servers never send this reply. Then the file is complete without it. The wait is never
  * longer than the FTP timeout.
@@ -130,10 +140,12 @@ interface RawListing {
 class FolderListLimitError extends Error {}
 
 /**
- * The machine refused the raw RETR with an error reply, for example "550 No such file". This is a clear answer about
- * the file, so a second RETR through the fallback would get the same answer.
+ * A raw RETR error after which the fallback cannot help, because a second RETR would end the same way:
+ * - the machine refused the RETR with an error reply, for example "550 No such file". This is a clear answer about
+ *   the file.
+ * - the file is larger than the byte limit.
  */
-class RetrRefusedError extends Error {}
+class NoFallbackError extends Error {}
 
 /**
  * "425 Cannot open data connection": the machine could not use the data connection of the raw RETR. This is not an
@@ -154,6 +166,14 @@ interface DownloadSink {
   destination: Writable;
   bytesWritten: number;
 }
+
+/** The limits of one download. Tests set small limits. */
+export interface DownloadLimits {
+  maxBytes: number;
+  timeLimitMs: number;
+}
+
+const DEFAULT_DOWNLOAD_LIMITS: DownloadLimits = { maxBytes: MAX_DOWNLOAD_BYTES, timeLimitMs: DOWNLOAD_TIME_LIMIT_MS };
 
 interface PassiveAddress {
   host: string;
@@ -308,6 +328,54 @@ function alreadyExistsMessage(remotePath: string): string {
   return `File "${remotePath}" ${ALREADY_EXISTS_MARKER}. Enable overwrite to replace it.`;
 }
 
+/** Run `stop` when the signal aborts, also when it aborted before this call */
+function onAbort(signal: AbortSignal | undefined, stop: () => void): void {
+  if (signal?.aborted) stop();
+  else signal?.addEventListener('abort', stop, { once: true });
+}
+
+const BYTES_IN_MB = 1024 * 1024;
+const MS_IN_MINUTE = 60_000;
+const MS_IN_SECOND = 1_000;
+
+/** "64 MB", or the number of bytes when the size is not a whole number of MB */
+function sizeText(bytes: number): string {
+  const megabytes = bytes / BYTES_IN_MB;
+  return Number.isInteger(megabytes) ? `${megabytes} MB` : `${bytes} bytes`;
+}
+
+/** "30 minutes", or the number of seconds when the time is not a whole number of minutes */
+function durationText(ms: number): string {
+  const minutes = ms / MS_IN_MINUTE;
+  if (Number.isInteger(minutes)) return minutes === 1 ? '1 minute' : `${minutes} minutes`;
+  const seconds = ms / MS_IN_SECOND;
+  return seconds === 1 ? '1 second' : `${seconds} seconds`;
+}
+
+function downloadTooLargeError(maxBytes: number): Error {
+  return new NoFallbackError(`The file on the machine is too large. Chatter downloads at most ${sizeText(maxBytes)}.`);
+}
+
+function downloadTooSlowError(timeLimitMs: number): Error {
+  return new Error(`The download took too long. Chatter stops a download after ${durationText(timeLimitMs)}.`);
+}
+
+/**
+ * A stream that gives each chunk to `destination`, and fails when more than `maxBytes` come. It waits for the
+ * 'drain' of `destination`, so a slow destination slows the transfer. It does not end `destination`.
+ */
+function limitBytes(destination: Writable, maxBytes: number): Writable {
+  let byteCount = 0;
+  return new Writable({
+    write(chunk: Buffer, _encoding, done) {
+      byteCount += chunk.length;
+      if (byteCount > maxBytes) done(downloadTooLargeError(maxBytes));
+      else if (destination.write(chunk)) done();
+      else destination.once('drain', () => done());
+    },
+  });
+}
+
 async function toBuffer(source: Buffer | string | NodeJS.ReadableStream): Promise<Buffer> {
   if (Buffer.isBuffer(source)) return source;
   if (typeof source === 'string') return Buffer.from(source);
@@ -444,17 +512,19 @@ export class FTPClient {
   private user: string;
   private password: string;
   private readonly timeoutMs: number;
+  private readonly downloadLimits: DownloadLimits;
   /** The tree walks that run now, by depth and path. A request for the same tree waits for the same walk. */
   private readonly treeWalks = new Map<string, Promise<FileTree>>();
 
   constructor({
     host, port = DEFAULT_FTP_PORT, user = DEFAULT_FTP_USER, password = '', timeoutMs = DEFAULT_FTP_TIMEOUT_MS
-  }: FTPConfig) {
+  }: FTPConfig, downloadLimits: Partial<DownloadLimits> = {}) {
     this.host = host;
     this.port = port;
     this.user = user;
     this.password = password;
     this.timeoutMs = timeoutMs;
+    this.downloadLimits = { ...DEFAULT_DOWNLOAD_LIMITS, ...downloadLimits };
   }
 
   /** Change connection settings (for example after a machine config change) */
@@ -523,22 +593,36 @@ export class FTPClient {
     }
   }
 
+  /**
+   * Download one file to `writableStream`. The download stops at the time limit and at the byte limit
+   * (DOWNLOAD_TIME_LIMIT_MS and MAX_DOWNLOAD_BYTES), and then closes its connections to the machine.
+   */
   async downloadFile(filePath: string, writableStream: Writable): Promise<void> {
     const remotePath = toRelativeRemotePath(filePath);
+    const { maxBytes, timeLimitMs } = this.downloadLimits;
+    const timeLimit = new AbortController();
+    const timer = setTimeout(() => timeLimit.abort(downloadTooSlowError(timeLimitMs)), timeLimitMs);
+    const { signal } = timeLimit;
     try {
       assertSafeFtpArgument(remotePath);
-      await this.withConnection({ verbose: true }, async client => {
+      await this.withConnection({ verbose: true, signal }, async client => {
         const sink: DownloadSink = { destination: writableStream, bytesWritten: 0 };
         try {
+          // When the signal closes the client, the RETR fails, and the raw RETR closes its data connection
           await this.downloadOverPassiveSocket(client, remotePath, sink);
         } catch (err) {
           // The user already has part of the file. A second download would add to that part, so the download fails.
-          if (sink.bytesWritten > 0 || err instanceof RetrRefusedError) throw err;
-          await this.downloadWithBasicFtp(client, { remotePath, destination: writableStream, rawError: err });
+          if (signal.aborted || sink.bytesWritten > 0 || err instanceof NoFallbackError) throw err;
+          const destination = limitBytes(writableStream, maxBytes);
+          await this.downloadWithBasicFtp(client, { remotePath, destination, rawError: err });
         }
       });
     } catch (err) {
-      throw new Error(`FTP download error: ${errorText(err)}`, { cause: err });
+      // After the time limit, the error of the closed connection tells less than the reason
+      const reason: unknown = signal.aborted ? signal.reason : err;
+      throw new Error(`FTP download error: ${errorText(reason)}`, { cause: err });
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -615,18 +699,21 @@ export class FTPClient {
     await client.downloadTo(destination, remotePath);
   }
 
-  /** Open a connection, run `work` on it, and always close it */
+  /** Open a connection, run `work` on it, and always close it. `signal` closes it early, and then `work` fails. */
   private async withConnection<T>(
-    { verbose }: { verbose: boolean },
+    { verbose, signal }: { verbose: boolean; signal?: AbortSignal },
     work: (client: ftp.Client) => Promise<T>
   ): Promise<T> {
     const client = new ftp.Client(this.timeoutMs, { allowSeparateTransferHost: false, maxListingBytes: MAX_FOLDER_LIST_BYTES });
     useMachineHostForTransfers(client);
     client.ftp.verbose = verbose;
+    const close = () => client.close();
+    onAbort(signal, close);
     try {
       await this.login(client);
       return await work(client);
     } finally {
+      signal?.removeEventListener('abort', close);
       client.close();
     }
   }
@@ -739,6 +826,10 @@ export class FTPClient {
 
       dataSocket.on('data', (chunk: Buffer) => {
         if (isSettled) return;
+        if (sink.bytesWritten + chunk.length > this.downloadLimits.maxBytes) {
+          settle(downloadTooLargeError(this.downloadLimits.maxBytes));
+          return;
+        }
         startIdleTimer();
         sink.bytesWritten += chunk.length;
         sink.destination.write(chunk);
@@ -755,7 +846,7 @@ export class FTPClient {
       startIdleTimer();
       client.ftp.handle(`RETR ${filePath}`, (reply, task) => {
         if (reply instanceof ftp.FTPError && reply.code !== CANNOT_OPEN_DATA_CONNECTION) {
-          task.reject(new RetrRefusedError(reply.message, { cause: reply }));
+          task.reject(new NoFallbackError(reply.message, { cause: reply }));
         } else if (reply instanceof Error) task.reject(reply);
         else if (reply.code >= 200 && reply.code < 300) task.resolve(reply);
         else if (reply.code >= 300) task.reject(new Error(`Unexpected reply to RETR: ${reply.message}`));
