@@ -63,8 +63,8 @@ export const REPLY_AFTER_DATA_WAIT_MS = 3_000;
 export const SIZE_REPLY_WAIT_MS = 3_000;
 /**
  * The raw LIST waits this long for its reply (usually 226) after a clean end of the data connection, and for more data
- * after its reply. Some old servers send no reply, and some do not close the data connection. A tree walk waits once
- * for each folder, so this time is shorter than the wait of the raw RETR.
+ * after its reply or after its first byte. Some old servers send no reply, and some do not close the data connection.
+ * A tree walk waits once for each folder, so this time is shorter than the wait of the raw RETR.
  */
 const REPLY_AFTER_LIST_WAIT_MS = 1_000;
 /**
@@ -951,14 +951,17 @@ export class FTPClient {
    * - An error reply (for example 426) or a stall after some bytes cuts the listing short. An error with no byte
    *   rejects, so the fallback can try. After an error reply, the client still reads the data until it ends, for
    *   REPLY_AFTER_LIST_WAIT_MS at most, because the data can come after the reply.
-   * - Some old servers send no reply. A listing whose data ended cleanly is then complete after
-   *   REPLY_AFTER_LIST_WAIT_MS, with all its text, also a last line with no line end (as before the reply check).
+   * - Some old servers send no reply. After the first byte, a listing with no reply is complete when its data
+   *   ends cleanly or when no data comes, each for REPLY_AFTER_LIST_WAIT_MS. It keeps all its text, also a last line
+   *   with no line end, and is not cut short (as before the reply check). New data starts the wait again. So a pause
+   *   of that length in the middle of the data also ends the listing, with no error.
    * - Some servers do not close the data connection. A listing with a 2xx reply is then complete when no data
    *   comes in REPLY_AFTER_LIST_WAIT_MS. A pause of that length in the middle of the data also ends it. When the
    *   pause cuts a line, the listing is cut short.
-   * A listing whose data did not end cleanly, or that got an error reply, keeps only its complete lines, and is cut
-   * short when it lost a line. When the reply did not come, the client closes, so a late reply cannot go to the next
-   * command. The walk then logs in again only when it opens another folder.
+   * - Before the first byte, the wait for data is the FTP timeout. With no byte, the fallback can try.
+   * A listing whose data broke, or that got an error reply, keeps only its complete lines, and is cut short when it
+   * lost a line. When the reply did not come, the client closes, so a late reply cannot go to the next command. The
+   * walk then logs in again only when it opens another folder.
    */
   private receiveListing(client: ftp.Client, dataSocket: net.Socket): Promise<RawListing> {
     return new Promise((resolve, reject) => {
@@ -974,8 +977,10 @@ export class FTPClient {
 
       const listing = (isCut: boolean): RawListing => {
         const text = Buffer.concat(chunks).toString();
-        // A clean end of the data ends the listing, also with no reply: some old servers send none
-        if (hasDataEnded && !isCut && !replyError) return { text, isTooLong, isCut: false };
+        // With no reply, a clean end of the data or a wait with no data ends the listing: some old servers send no
+        // reply, and some do not close the data connection. Before the reply check, such a listing was complete.
+        const isWhole = !isCut && !replyError && !isTooLong && (hasDataEnded || !isReplyDone);
+        if (isWhole) return { text, isTooLong, isCut: false };
         const lines = completeLines(text);
         return { text: lines, isTooLong, isCut: isCut || lines.length < text.length };
       };
@@ -1010,8 +1015,7 @@ export class FTPClient {
         if (chunk.length > room) {
           isTooLong = true;
           settle({ isCut: false });
-        } else if (isReplyDone) startReplyWait();
-        else startIdleTimer();
+        } else startReplyWait();
       });
       // 'end' comes only when the machine closes the data connection cleanly, not when the connection breaks
       dataSocket.on('end', () => {
