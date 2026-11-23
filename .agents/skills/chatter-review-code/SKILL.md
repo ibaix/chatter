@@ -45,7 +45,7 @@ Write down each problem with its file, line and how sure you are. Do not sort th
 - **Pi memory (512 MB).** An upload, a download or a file read must stream to disk, as `apps/server/src/updates/streamToFile.ts` does. Look for `arrayBuffer()`, `readFile`, `Buffer.concat` or `await response.text()` on a file or a body that can be large. Look also for a list or a cache that grows with no limit.
 - **Update helper.** A change in `apps/server/src/updates/` or `tools/pi-image/` must keep the boundary: Chatter only writes a request file, and the helper trusts nothing from Chatter. Read [docs/security.md](../../../docs/security.md#updates-on-the-pi-card).
 - **User data.** The `chatter` folder name and the volume names stay (a guardrail test checks this).
-- **Closed ports.** VictoriaMetrics, vmalert and port 3002 stay unpublished (a guardrail test checks this).
+- **Closed ports.** VictoriaMetrics, vmalert and port 3002 stay unpublished. VictoriaMetrics and vmalert stay only on the internal network `history`, with `internal: true` (a guardrail test checks both).
 - **Doc links.** `guide/update#back-up` and `guide/manage` stay (a guardrail test checks this).
 - **Server logging.** Use `createLogger('component')`, not `console` (ESLint checks this). A log line must not hold a password, a token or a secret setting.
 - **Web colors.** Text uses `text-primary-text`. Fills and borders use `primary` (ESLint checks this).

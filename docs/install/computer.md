@@ -12,7 +12,7 @@ For a Raspberry Pi, see [Install on a Raspberry Pi](./raspberry-pi.md).
 | **FANUC machines** | The `amd64` package. A Mac with Apple silicon runs it with emulation. See [FANUC machines](../guide/fanuc.md). |
 
 ::: warning Docker Engine 28 or later
-On Linux, an older Docker Engine lets other computers reach the history database. The history database has no login. To see the version, run `docker version`. See [Security](../security.md#keep-victoriametrics-and-vmalert-closed).
+On Linux, an older Docker Engine lets other computers reach the alert port 3002 of Chatter. This port has no login, so a person can send false alerts. To see the version, run `docker version`. See [Security](../security.md#keep-victoriametrics-and-vmalert-closed).
 :::
 
 ## Install

@@ -30,7 +30,7 @@ services:
       # Where ChatterBox saves and reads the machine history (numbers such as spindle speed).
       VICTORIA_METRICS_URL: "http://victoriametrics:8428"
       # vmalert sends its alerts to port 3002. That port has no login, so it is not in "ports:" above.
-      # Only the containers on the compose network can reach it.
+      # Only the containers on the networks "default" and "history" can reach it.
       ALERT_HOST: "0.0.0.0"
       # ChatterBox writes the alert rules of each machine (the Alert rules tab) to this folder, and vmalert reads them.
       ALERT_RULES_DIR: "/app/alert-rules"
@@ -42,11 +42,17 @@ services:
       - chatterbox-data:/app/data
       # The vmalert file made from the alert rules. The rules themselves are saved in chatterbox-data.
       - chatter-alert-rules:/app/alert-rules
+    networks:
+      # For the browsers and the machines: port 3001 and the shop network
+      - default
+      # For VictoriaMetrics and vmalert
+      - history
     restart: unless-stopped
     logging: *logging
 
   # The machine history database (a time series database: it keeps numbers with a time).
-  # It has no login, so its port is not published. Only ChatterBox talks to it, on the compose network.
+  # It has no login, so its port is not published. It is only on the internal network "history",
+  # so only ChatterBox and vmalert can reach it.
   victoriametrics:
     image: victoriametrics/victoria-metrics:v1.155.0
     container_name: chatter-victoriametrics
@@ -64,11 +70,14 @@ services:
     volumes:
       # The machine history. Kept when the image is updated. Back it up with chatterbox-data.
       - victoriametrics-data:/storage
+    networks:
+      - history
     restart: unless-stopped
     logging: *logging
 
   # Runs the rules every 15 seconds: it saves averages (vmalert/rules.yml) and sends the alerts
   # of the Alert rules tab to ChatterBox. It has no login, so its port is not published.
+  # It is only on the internal network "history", with ChatterBox and VictoriaMetrics.
   vmalert:
     image: victoriametrics/vmalert:v1.155.0
     container_name: chatter-vmalert
@@ -97,8 +106,17 @@ services:
       # ChatterBox mounts chatter-alert-rules first, so Docker fills the new volume from the ChatterBox image
       # (an empty rules file, owned by the user that ChatterBox runs as)
       - chatterbox
+    networks:
+      - history
     restart: unless-stopped
     logging: *logging
+
+networks:
+  # Docker Compose makes "default" by itself. ChatterBox uses it for port 3001 and to reach the machines.
+  # "history" is internal: no other computer on the network can reach the containers on it,
+  # and these containers cannot connect to the shop network or to the internet.
+  history:
+    internal: true
 
 volumes:
   chatterbox-data:

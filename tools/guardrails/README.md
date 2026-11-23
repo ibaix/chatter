@@ -7,6 +7,7 @@ Tests that keep the guardrails in [AGENTS.md](../../AGENTS.md#guardrails):
 - `docker-compose.yml` and `docker-compose.dev.yml` keep the deduplication of VictoriaMetrics, so a second history restore does not double the samples.
 - `docker-compose.yml` keeps the facts that the docs quote: the container name `chatterbox` (for `docker logs chatterbox`) and the port entry `"3001:3001"` of Chatter (the HTTPS page tells users to change it). To change one, change the docs in the same change.
 - No compose file opens VictoriaMetrics, vmalert or the alert port 3002 to the network.
+- VictoriaMetrics and vmalert stay only on the internal network `history` of `docker-compose.yml`, which keeps `internal: true`. Only `chatterbox` is also on `default`. A compose file that Docker Compose merges with `docker-compose.yml` adds no network.
 - The update helper on the Pi (`STEPS` in `update-chatter.sh`) and Chatter (`UPDATE_STEPS` in `packages/shared`) have the same steps, in the same order.
 - Each docs link in the app goes to a page and a heading that exist. The links of released apps (`guide/update#back-up` and `guide/manage`) always stay.
 - Each link in the docs to a heading (`./page.md#heading` or `#heading`) goes to a heading that exists, with the anchor that VitePress makes (or a `{#id}`). `npm run docs:build` does not check these links. The check reads inline links and reference definitions (`[label]: ./page.md#heading`) in the `.md` files. It does not read these links:
