@@ -1145,6 +1145,21 @@ describe('FTPClient download limits', () => {
     await until(() => isDataClosed);
   });
 
+  // After the time limit, the fallback must not log in again: it would download with no time limit
+  it('runs no fallback when the time limit comes before the first byte', async () => {
+    const download = await startDownload({
+      sendFile: transfer => {
+        if (transfer.retrNumber > 1) sendWholeFile(transfer, PROGRAM_TEXT);
+      },
+      timeoutMs: 5_000, limits: { timeLimitMs: 300 }
+    });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('FTP download error: The download took too long. Chatter stops a download after 0.3 seconds.');
+    expect(machine.commands.filter(command => command === 'RETR')).toHaveLength(1);
+    expect(machine.controlConnections).toBe(1);
+  });
+
   it('stops a raw RETR at the byte limit, and gives the user no byte over the limit', async () => {
     let transfer: FileTransfer | undefined;
     const download = await startDownload({
