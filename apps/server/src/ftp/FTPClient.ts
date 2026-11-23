@@ -52,6 +52,18 @@ const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
  */
 const DOWNLOAD_TIME_LIMIT_MS = 30 * 60_000;
 /**
+ * One upload (one file, or one batch) stops after this time. An upload keeps the turn of the machine, so a control
+ * that never confirms an upload cannot block the other file tasks of the machine for ever. One upload request has at
+ * most 32 MB. At 50 KB each second, that takes about 11 minutes.
+ */
+const UPLOAD_TIME_LIMIT_MS = 30 * 60_000;
+/**
+ * The most walks of different trees that wait for one machine. A walk of another tree that comes then fails at once.
+ * Each role can ask for a tree, and each walk can take minutes. This limit is less than MAX_WAITING_TASKS, so tree
+ * walks cannot fill the queue, and the sends and downloads of an Operator can still wait for their turn.
+ */
+const MAX_WAITING_TREE_WALKS = 2;
+/**
  * After a clean end of the data connection, the raw RETR waits this long for the reply to RETR (usually 226).
  * Some old, simple FTP servers never send this reply. Then the file is complete without it. The wait is never
  * longer than the FTP timeout.
@@ -183,13 +195,60 @@ interface DownloadSink {
   bytesWritten: number;
 }
 
-/** The limits of one download. Tests set small limits. */
+/** The limits of one download (`maxBytes`, `timeLimitMs`) and of one upload. Tests set small limits. */
 export interface DownloadLimits {
   maxBytes: number;
   timeLimitMs: number;
+  uploadTimeLimitMs: number;
 }
 
-const DEFAULT_DOWNLOAD_LIMITS: DownloadLimits = { maxBytes: MAX_DOWNLOAD_BYTES, timeLimitMs: DOWNLOAD_TIME_LIMIT_MS };
+const DEFAULT_DOWNLOAD_LIMITS: DownloadLimits = {
+  maxBytes: MAX_DOWNLOAD_BYTES, timeLimitMs: DOWNLOAD_TIME_LIMIT_MS, uploadTimeLimitMs: UPLOAD_TIME_LIMIT_MS,
+};
+
+/** A tree walk that one or more callers wait for */
+interface SharedTreeWalk {
+  tree: Promise<FileTree>;
+  /** Stops the walk when each caller left */
+  stop: AbortController;
+  callers: number;
+  /** True until the walk gets its turn on the machine */
+  isWaiting: boolean;
+}
+
+/**
+ * One stop for a task: the signal of the caller, and a time limit. The time limit starts with startTimeLimit, when the
+ * task gets its turn, so the wait for the turn does not count. Call `end` when the task ends.
+ */
+class TaskStop {
+  private readonly controller = new AbortController();
+  private timer: NodeJS.Timeout | undefined;
+  private readonly callerSignal: AbortSignal | undefined;
+  private readonly stopOnSignal = () => this.controller.abort(this.callerSignal?.reason);
+
+  constructor(callerSignal: AbortSignal | undefined) {
+    this.callerSignal = callerSignal;
+    onAbort(callerSignal, this.stopOnSignal);
+  }
+
+  get signal(): AbortSignal {
+    return this.controller.signal;
+  }
+
+  startTimeLimit(timeLimitMs: number, tooSlowError: () => Error): void {
+    this.timer = setTimeout(() => this.controller.abort(tooSlowError()), timeLimitMs);
+  }
+
+  /** The reason of the stop when the task stopped, else `err`. After a stop, the error of the closed connection tells less. */
+  reasonOr(err: unknown): unknown {
+    return this.controller.signal.aborted ? this.controller.signal.reason : err;
+  }
+
+  end(): void {
+    clearTimeout(this.timer);
+    this.callerSignal?.removeEventListener('abort', this.stopOnSignal);
+  }
+}
 
 interface PassiveAddress {
   host: string;
@@ -369,6 +428,10 @@ function downloadTooSlowError(timeLimitMs: number): Error {
   return new Error(`The download took too long. Chatter stops a download after ${durationText(timeLimitMs)}.`);
 }
 
+function uploadTooSlowError(timeLimitMs: number): Error {
+  return new Error(`The upload took too long. Chatter stops an upload after ${durationText(timeLimitMs)}.`);
+}
+
 /**
  * A stream that gives each chunk to `destination`, and fails when more than `maxBytes` come. It waits for the
  * 'drain' of `destination`, so a slow destination slows the transfer. It does not end `destination`.
@@ -532,8 +595,8 @@ export class FTPClient {
   private password: string;
   private readonly timeoutMs: number;
   private readonly downloadLimits: DownloadLimits;
-  /** The tree walks that run now, by depth and path. A request for the same tree waits for the same walk. */
-  private readonly treeWalks = new Map<string, Promise<FileTree>>();
+  /** The tree walks that wait or run now, by depth and path. A request for the same tree waits for the same walk. */
+  private readonly treeWalks = new Map<string, SharedTreeWalk>();
   /** One task at a time: each task opens its control connection only in its turn, and closes it before the next */
   private readonly sessions = new SessionQueue();
 
@@ -556,10 +619,11 @@ export class FTPClient {
     if (password !== undefined) this.password = password;
   }
 
-  async listFiles(path = ROOT_PATH): Promise<FTPFileInfo[]> {
+  /** `signal` stops the list, also while it waits for its turn, for example when the browser leaves */
+  async listFiles(path = ROOT_PATH, signal?: AbortSignal): Promise<FTPFileInfo[]> {
     try {
       assertSafeFtpArgument(path);
-      const list = await this.withConnection({ verbose: false }, client => listFolderWithLimits(client, path));
+      const list = await this.withConnection({ verbose: false, signal }, client => listFolderWithLimits(client, path));
       return list.map(item => ({
         name: item.name,
         type: item.isDirectory ? 'directory' : 'file',
@@ -582,31 +646,79 @@ export class FTPClient {
    * at TREE_WALK_TIME_LIMIT_MS, after a folder listing that is too long ('longList'), after a folder listing that
    * ended before it was complete ('cutList'), or when a new login during the walk failed ('login').
    * The depth limit does not count as a cut.
+   *
+   * Requests for the same tree share one walk. `signal` takes this caller out, for example when the browser leaves.
+   * The walk stops when each caller left. While a walk of one tree waits for its turn, a walk of another tree fails at
+   * once with a MachineBusyError, so walks cannot fill the queue of the machine.
    */
-  async readFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FileTree> {
-    const key = `${depth}:${path}`;
-    const running = this.treeWalks.get(key);
-    if (running) return running;
-    const tree = this.walkFileTree(path, depth);
-    this.treeWalks.set(key, tree);
-    try {
-      return await tree;
-    } finally {
-      this.treeWalks.delete(key);
-    }
+  async readFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH, signal?: AbortSignal): Promise<FileTree> {
+    signal?.throwIfAborted();
+    // The walk stops at MAX_TREE_DEPTH, so a deeper request is the same walk
+    const walkDepth = Math.min(depth, MAX_TREE_DEPTH);
+    const key = `${walkDepth}:${path}`;
+    const walk = this.treeWalks.get(key) ?? this.startTreeWalk(key, path, walkDepth);
+    return this.joinTreeWalk(key, walk, signal);
   }
 
-  private async walkFileTree(path: string, depth: number): Promise<FileTree> {
+  private startTreeWalk(key: string, path: string, depth: number): SharedTreeWalk {
+    const willWait = this.sessions.hasRunningTask;
+    const waitingWalks = [...this.treeWalks.values()].filter(other => other.isWaiting).length;
+    if (willWait && waitingWalks >= MAX_WAITING_TREE_WALKS) throw SessionQueue.busyError();
+    const stop = new AbortController();
+    const walk: SharedTreeWalk = {
+      stop,
+      callers: 0,
+      isWaiting: willWait,
+      tree: this.walkFileTree(path, depth, { signal: stop.signal, onTurn: () => { walk.isWaiting = false; } })
+        .finally(() => this.forgetTreeWalk(key, walk)),
+    };
+    this.treeWalks.set(key, walk);
+    return walk;
+  }
+
+  /** A new request for the tree of `key` starts a new walk. A late end of an old walk does not remove a newer walk. */
+  private forgetTreeWalk(key: string, walk: SharedTreeWalk): void {
+    if (this.treeWalks.get(key) === walk) this.treeWalks.delete(key);
+  }
+
+  /** Wait for the shared walk. `signal` takes this caller out. When each caller left, the walk stops. */
+  private joinTreeWalk(key: string, walk: SharedTreeWalk, signal: AbortSignal | undefined): Promise<FileTree> {
+    walk.callers += 1;
+    return new Promise((resolve, reject) => {
+      const leave = () => {
+        walk.callers -= 1;
+        if (walk.callers === 0) {
+          this.forgetTreeWalk(key, walk);
+          walk.stop.abort(signal?.reason);
+        }
+        reject(signal?.reason as Error);
+      };
+      signal?.addEventListener('abort', leave, { once: true });
+      walk.tree.then(tree => {
+        signal?.removeEventListener('abort', leave);
+        resolve(tree);
+      }, (err: unknown) => {
+        signal?.removeEventListener('abort', leave);
+        reject(err as Error);
+      });
+    });
+  }
+
+  private async walkFileTree(
+    path: string,
+    depth: number,
+    { signal, onTurn }: { signal: AbortSignal; onTurn: () => void }
+  ): Promise<FileTree> {
     const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, foldersLeft: MAX_TREE_FOLDERS };
     try {
       assertSafeFtpArgument(path);
       if (depth <= 0) {
         return { nodes: [], isCutShort: false };
       }
-      const nodes = await this.withConnection({ verbose: false }, client => closeClientAfter(
+      const nodes = await this.withConnection({ verbose: false, signal, onTurn }, client => closeClientAfter(
         client,
         { timeLimitMs: TREE_WALK_TIME_LIMIT_MS, onTimeUp: () => stopWalk(walk, 'time') },
-        () => this.buildTree(client, { path, depth: Math.min(depth, MAX_TREE_DEPTH), walk })
+        () => this.buildTree(client, { path, depth, walk })
       ));
       if (walk.cutReason) {
         log.warn(this.treeCutMessage(walk.cutReason), { path });
@@ -621,21 +733,18 @@ export class FTPClient {
   /**
    * Download one file to `writableStream`. The download stops at the time limit and at the byte limit
    * (DOWNLOAD_TIME_LIMIT_MS and MAX_DOWNLOAD_BYTES), and then closes its connections to the machine.
-   * `signal` stops the download in the same way, for example when the user cancels it.
+   * The time limit starts when the download gets its turn. `signal` stops the download in the same way, for example
+   * when the user cancels it. While the download waits for its turn, `signal` takes it out of the queue.
    */
   async downloadFile(filePath: string, writableStream: Writable, signal?: AbortSignal): Promise<void> {
     const remotePath = toRelativeRemotePath(filePath);
     const { maxBytes, timeLimitMs } = this.downloadLimits;
     // One stop for the time limit and for the signal of the caller: it closes the client and the raw data socket
-    const stop = new AbortController();
-    const timer = setTimeout(() => stop.abort(downloadTooSlowError(timeLimitMs)), timeLimitMs);
-    const stopOnSignal = () => stop.abort(signal?.reason);
-    onAbort(signal, stopOnSignal);
+    const stop = new TaskStop(signal);
+    const onTurn = () => stop.startTimeLimit(timeLimitMs, () => downloadTooSlowError(timeLimitMs));
     try {
       assertSafeFtpArgument(remotePath);
-      // A signal that aborted before the start stops the download before Chatter connects to the machine
-      stop.signal.throwIfAborted();
-      await this.withConnection({ verbose: true, signal: stop.signal }, async client => {
+      await this.withConnection({ verbose: true, signal: stop.signal, onTurn }, async client => {
         const sink: DownloadSink = { destination: writableStream, bytesWritten: 0 };
         try {
           // When the signal closes the client, the RETR fails, and the raw RETR closes its data connection
@@ -649,26 +758,29 @@ export class FTPClient {
       });
     } catch (err) {
       rethrowIfBusy(err);
-      // After an abort, the error of the closed connection tells less than the reason
-      const reason: unknown = stop.signal.aborted ? stop.signal.reason : err;
-      throw new Error(`FTP download error: ${errorText(reason)}`, { cause: err });
+      throw new Error(`FTP download error: ${errorText(stop.reasonOr(err))}`, { cause: err });
     } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', stopOnSignal);
+      stop.end();
     }
   }
 
+  /**
+   * Upload one file. The upload stops at UPLOAD_TIME_LIMIT_MS, which starts when the upload gets its turn.
+   * `signal` stops the upload, and takes a waiting upload out of the queue, for example when the browser leaves.
+   */
   async uploadFile(
     remotePath: string,
     source: Buffer | string | NodeJS.ReadableStream,
-    allowOverwrite = false
+    allowOverwrite = false,
+    signal?: AbortSignal
   ): Promise<void> {
     const relativePath = toRelativeRemotePath(remotePath);
     const content = await toBuffer(source);
+    const stop = new TaskStop(signal);
 
     try {
       assertSafeFtpArgument(relativePath);
-      await this.withConnection({ verbose: true }, async client => {
+      await this.withUploadConnection(stop, async client => {
         if (!allowOverwrite && await this.fileExists(client, relativePath)) {
           throw new Error(alreadyExistsMessage(relativePath));
         }
@@ -677,39 +789,48 @@ export class FTPClient {
       });
     } catch (err) {
       rethrowIfBusy(err);
-      if (err instanceof Error && err.message.includes(ALREADY_EXISTS_MARKER)) {
+      if (!stop.signal.aborted && err instanceof Error && err.message.includes(ALREADY_EXISTS_MARKER)) {
         throw err;
       }
-      throw new Error(`FTP upload error: ${errorText(err)}`, { cause: err });
+      throw new Error(`FTP upload error: ${errorText(stop.reasonOr(err))}`, { cause: err });
+    } finally {
+      stop.end();
     }
   }
 
-  /** Upload several files over one connection. Each file passes or fails on its own. */
-  async uploadFiles(files: FTPUploadFile[], allowOverwrite = false): Promise<FTPUploadResult> {
+  /**
+   * Upload several files over one connection. Each file passes or fails on its own. The time limit and `signal` are
+   * for the whole batch, as for uploadFile. After a stop, each file that is not on the machine fails with the reason.
+   */
+  async uploadFiles(files: FTPUploadFile[], allowOverwrite = false, signal?: AbortSignal): Promise<FTPUploadResult> {
     const results: FTPUploadResult = { success: [], failed: [] };
+    const stop = new TaskStop(signal);
 
     try {
-      await this.withConnection({ verbose: true }, async client => {
+      await this.withUploadConnection(stop, async client => {
         await trySetBinaryMode(client);
         for (const file of files) {
-          const outcome = await this.uploadBatchFile(client, { file, allowOverwrite });
+          const outcome = await this.uploadBatchFile(client, { file, allowOverwrite, stop });
           if ('error' in outcome) results.failed.push(outcome);
           else results.success.push(outcome);
         }
       });
     } catch (err) {
       rethrowIfBusy(err);
-      throw new Error(`FTP connection error: ${errorText(err)}`, { cause: err });
+      throw new Error(`FTP connection error: ${errorText(stop.reasonOr(err))}`, { cause: err });
+    } finally {
+      stop.end();
     }
 
     return results;
   }
 
-  async deleteFile(remotePath: string): Promise<void> {
+  /** `signal` takes a waiting delete out of the queue, for example when the browser leaves */
+  async deleteFile(remotePath: string, signal?: AbortSignal): Promise<void> {
     const relativePath = toRelativeRemotePath(remotePath);
     try {
       assertSafeFtpArgument(relativePath);
-      await this.withConnection({ verbose: true }, client => client.remove(relativePath));
+      await this.withConnection({ verbose: true, signal }, client => client.remove(relativePath));
     } catch (err) {
       rethrowIfBusy(err);
       throw new Error(`FTP delete error: ${errorText(err)}`, { cause: err });
@@ -738,20 +859,30 @@ export class FTPClient {
    * Wait for the turn of this task, then open a connection, run `work` on it, and always close it. The next task gets
    * its turn only after the close. A new login inside `work` (on the same client) stays in this turn.
    * `signal` stops the wait for the turn, or closes the connection early, and then `work` fails.
+   * `onTurn` runs when the task gets its turn, before the connection opens. The queue removes the abort listener of
+   * `signal` and starts the task in one step, so the signal cannot abort between the two.
    */
   private withConnection<T>(
-    options: { verbose: boolean; signal?: AbortSignal },
+    options: { verbose: boolean; signal?: AbortSignal; onTurn?: () => void },
     work: (client: ftp.Client) => Promise<T>
   ): Promise<T> {
-    return this.sessions.run(() => this.runConnected(options, work), options.signal);
+    return this.sessions.run(() => {
+      options.onTurn?.();
+      return this.runConnected(options, work);
+    }, options.signal);
+  }
+
+  /** withConnection for an upload: `stop` has the signal of the caller, and gets the upload time limit at the turn */
+  private withUploadConnection<T>(stop: TaskStop, work: (client: ftp.Client) => Promise<T>): Promise<T> {
+    const { uploadTimeLimitMs } = this.downloadLimits;
+    const onTurn = () => stop.startTimeLimit(uploadTimeLimitMs, () => uploadTooSlowError(uploadTimeLimitMs));
+    return this.withConnection({ verbose: true, signal: stop.signal, onTurn }, work);
   }
 
   private async runConnected<T>(
     { verbose, signal }: { verbose: boolean; signal?: AbortSignal },
     work: (client: ftp.Client) => Promise<T>
   ): Promise<T> {
-    // The signal can abort while the task waits for its turn
-    signal?.throwIfAborted();
     const client = new ftp.Client(this.timeoutMs, { allowSeparateTransferHost: false, maxListingBytes: MAX_FOLDER_LIST_BYTES });
     useMachineHostForTransfers(client);
     client.ftp.verbose = verbose;
@@ -776,13 +907,17 @@ export class FTPClient {
     });
   }
 
-  /** Upload one file of an uploadFiles batch. A failure is returned, not thrown, so the batch goes on. */
+  /**
+   * Upload one file of an uploadFiles batch. A failure is returned, not thrown, so the batch goes on.
+   * After a stop of the batch, the file fails with the reason of the stop.
+   */
   private async uploadBatchFile(
     client: ftp.Client,
-    { file, allowOverwrite }: { file: FTPUploadFile; allowOverwrite: boolean }
+    { file, allowOverwrite, stop }: { file: FTPUploadFile; allowOverwrite: boolean; stop: TaskStop }
   ): Promise<BatchFileOutcome> {
     const remotePath = toRelativeRemotePath(file.remotePath);
     try {
+      stop.signal.throwIfAborted();
       assertSafeFtpArgument(remotePath);
       if (!allowOverwrite && await this.fileExists(client, remotePath)) {
         return { remotePath, error: alreadyExistsMessage(remotePath) };
@@ -790,7 +925,7 @@ export class FTPClient {
       await client.uploadFrom(Readable.from(await toBuffer(file.source)), remotePath);
       return { remotePath };
     } catch (err) {
-      return { remotePath, error: errorText(err) };
+      return { remotePath, error: errorText(stop.reasonOr(err)) };
     }
   }
 

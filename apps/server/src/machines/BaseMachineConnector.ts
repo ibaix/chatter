@@ -207,9 +207,12 @@ export abstract class BaseMachineConnector extends EventEmitter {
     return files.map(f => ({ ...f, children: undefined }));
   }
 
-  /** The file tree, and whether Chatter cut it short because it has too many entries */
-  async readFileTree(path = '/', depth = 2): Promise<FileTree> {
-    return this.ftpClient.readFileTree(path, depth);
+  /**
+   * The file tree, and whether Chatter cut it short because it has too many entries.
+   * `signal` takes this request out of the walk, for example when the browser leaves.
+   */
+  async readFileTree(path = '/', depth = 2, signal?: AbortSignal): Promise<FileTree> {
+    return this.ftpClient.readFileTree(path, depth, signal);
   }
 
   /** `signal` stops the download on the machine, for example when the user cancels it */
@@ -217,23 +220,26 @@ export abstract class BaseMachineConnector extends EventEmitter {
     return this.ftpClient.downloadFile(filePath, writableStream, signal);
   }
 
+  /** `signal` stops the upload, also while it waits for its turn, for example when the browser leaves */
   async uploadFile(
     remotePath: string,
     source: Buffer | string | NodeJS.ReadableStream,
-    allowOverwrite = false
+    allowOverwrite = false,
+    signal?: AbortSignal
   ): Promise<void> {
-    return this.ftpClient.uploadFile(remotePath, source, allowOverwrite);
+    return this.ftpClient.uploadFile(remotePath, source, allowOverwrite, signal);
   }
 
   async uploadFiles(
     files: Array<{ remotePath: string; source: Buffer | string }>,
-    allowOverwrite = false
+    allowOverwrite = false,
+    signal?: AbortSignal
   ): Promise<FTPUploadResult> {
-    return this.ftpClient.uploadFiles(files, allowOverwrite);
+    return this.ftpClient.uploadFiles(files, allowOverwrite, signal);
   }
 
-  async deleteFile(remotePath: string): Promise<void> {
-    return this.ftpClient.deleteFile(remotePath);
+  async deleteFile(remotePath: string, signal?: AbortSignal): Promise<void> {
+    return this.ftpClient.deleteFile(remotePath, signal);
   }
 
   /** True when a password is saved. The status gives only this, so the password never leaves the server. */
