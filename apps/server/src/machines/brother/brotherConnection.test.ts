@@ -678,6 +678,20 @@ describe('Brother reply size limit, with a real TCP connection', () => {
     expect(reply.D01).toEqual(['0', '0', '0']);
   });
 
+  it('does not read the byte 0xA5 as a %, so a high byte cannot end a reply early', async () => {
+    const port = await startControl(socket => {
+      socket.write(Buffer.concat([
+        Buffer.from('%RLOD    PANEL   00\r\nD01,'), Buffer.from([0xa5]), Buffer.from(',0,0\r\n\r\n10%'),
+      ]));
+    });
+    const brother = connectorFor(port, 60_000);
+    await brother.connect();
+
+    const reply = await brother.sendCommand('PANEL');
+
+    expect(reply.D01).toEqual(['¥', '0', '0']);
+  });
+
   it('reads a reply of exactly the limit, when the closing % comes in the next part', async () => {
     const reply = sendToSlowControl(['%' + 'X'.repeat(MAX_BROTHER_REPLY_BYTES - 1), '%']);
 

@@ -367,6 +367,24 @@ describe('Haas live values when the control stops giving them', () => {
     }
   });
 
+  it('does not read the byte 0x8A as an end of line, so a high byte cannot end a query reply early', async () => {
+    const server = net.createServer(socket => {
+      socket.on('data', chunk => {
+        const query = chunk.toString('ascii').trim();
+        socket.write(query === '?Q104'
+          ? Buffer.concat([Buffer.from('>MODE, M'), Buffer.from([0x8a]), Buffer.from('EM\r\n')])
+          : `>?, ${query}\r\n`);
+      });
+    });
+    const connector = queryPortConnector(await listen(server).then(() => server));
+    try {
+      expect((await connector.poll()).data.mode).toBe('M\u008aEM');
+    } finally {
+      connector.disconnect();
+      await close(server);
+    }
+  });
+
   it('forgets the old run status when the query port is down', async () => {
     const server = await startFakeQueryPort({ '?Q500': 'STATUS, BUSY' });
     const sockets: net.Socket[] = [];

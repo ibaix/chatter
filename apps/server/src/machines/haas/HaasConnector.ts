@@ -347,7 +347,7 @@ export class HaasConnector extends BaseMachineConnector {
     let start = 0;
     let end: number;
     while ((end = data.indexOf(DATA_DELIMITER, start)) !== -1) {
-      this.parseDataStreamLine(data.toString('ascii', start, end));
+      this.parseDataStreamLine(data.toString('latin1', start, end));
       start = end + DATA_DELIMITER.length;
     }
     // A copy, so the rest does not keep the joined lines in memory
@@ -441,7 +441,8 @@ export class HaasConnector extends BaseMachineConnector {
 
       const onData = (chunk: Buffer) => {
         const searchFrom = reply.length;
-        reply += chunk.toString('ascii');
+        // latin1 gives one character for each byte. 'ascii' clears the high bit, so 0xA5 would read as % and 0x8A as \n.
+        reply += chunk.toString('latin1');
         if (reply.includes('\n', searchFrom)) {
           finish(reply);
         } else if (reply.length > MAX_HAAS_QUERY_REPLY_BYTES) {

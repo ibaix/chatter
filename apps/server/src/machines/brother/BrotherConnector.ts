@@ -282,7 +282,8 @@ export class BrotherConnector extends BaseMachineConnector {
       // Each chunk is searched once, so a long reply in many chunks does not take more and more time
       const onData = (chunk: Buffer) => {
         const searchFrom = reply.length;
-        reply += chunk.toString('ascii');
+        // latin1 gives one character for each byte. 'ascii' clears the high bit, so 0xA5 would read as % and 0x8A as \n.
+        reply += chunk.toString('latin1');
         if (start === -1) start = reply.indexOf('%', searchFrom);
         const end = start === -1 ? -1 : reply.indexOf('%', Math.max(start + 1, searchFrom));
         if (end !== -1) {
