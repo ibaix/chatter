@@ -82,7 +82,8 @@ function clientOf(c: Context, origin: RequestOrigin): SessionClient {
   return { userAgent: c.req.header('User-Agent') ?? '', address: origin.address };
 }
 
-function setSessionCookie(c: Context, origin: RequestOrigin, token: string): void {
+/** Set the login cookie. A new login keeps it SESSION_LIFETIME_SECONDS. A cookie that is set again keeps it only the time left. */
+function setSessionCookie(c: Context, origin: RequestOrigin, token: string, maxAge = SESSION_LIFETIME_SECONDS): void {
   setCookie(c, SESSION_COOKIE, token, {
     // Page scripts cannot read it, and other sites cannot send it with a form
     httpOnly: true,
@@ -90,7 +91,7 @@ function setSessionCookie(c: Context, origin: RequestOrigin, token: string): voi
     // The browser sends it only over HTTPS, when the browser used HTTPS to log in
     secure: origin.isHttps,
     path: SESSION_COOKIE_PATH,
-    maxAge: SESSION_LIFETIME_SECONDS,
+    maxAge,
   });
 }
 
@@ -218,7 +219,7 @@ export function markSessionSeen(
     saved = auth.markSeen(session, origin.address);
   });
   const token = getCookie(c, SESSION_COOKIE);
-  if (saved && origin.isHttps && token !== undefined) setSessionCookie(c, origin, token);
+  if (saved && origin.isHttps && token !== undefined) setSessionCookie(c, origin, token, auth.secondsLeftOf(session));
 }
 
 /**

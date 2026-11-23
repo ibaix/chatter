@@ -115,6 +115,11 @@ export class SessionStore {
     return true;
   }
 
+  /** The seconds before the session ends at SESSION_LIFETIME_SECONDS after the login, rounded up */
+  secondsLeft(session: Session): number {
+    return Math.ceil((session.createdAt.getTime() + SESSION_LIFETIME_MS - this.now()) / 1000);
+  }
+
   delete(id: string): void {
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
   }

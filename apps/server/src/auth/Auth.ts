@@ -118,6 +118,11 @@ export class Auth {
     return this.sessions.markSeen(session, address);
   }
 
+  /** The seconds before the session ends at its 1-year limit, for the Max-Age of its cookie */
+  secondsLeftOf(session: Session): number {
+    return this.sessions.secondsLeft(session);
+  }
+
   logOut(session: Session): void {
     this.sessions.delete(session.id);
   }
