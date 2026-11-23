@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import net from 'net';
-import { PassThrough } from 'stream';
+import { PassThrough, Writable } from 'stream';
 import * as ftp from 'basic-ftp';
-import { FTPClient, MAX_FOLDER_LIST_BYTES, REPLY_AFTER_DATA_WAIT_MS } from './FTPClient.js';
+import { FTPClient, MAX_FOLDER_LIST_BYTES, REPLY_AFTER_DATA_WAIT_MS, type DownloadLimits } from './FTPClient.js';
 import { captureLog } from '../logging/testSupport.js';
 
 // A rogue machine can name any host in its PASV reply, so Chatter would open a connection to a host of its choice.
@@ -684,11 +684,12 @@ async function until(condition: () => boolean): Promise<void> {
 }
 
 /** Start a download of O1000 from a new fake machine. `outcome` is 'success' or the error message. */
-async function startDownload({ timeoutMs, ...options }: FakeMachineOptions & { timeoutMs: number }) {
+async function startDownload({ timeoutMs, limits, destination = new PassThrough(), ...options }: FakeMachineOptions & {
+  timeoutMs: number; limits?: Partial<DownloadLimits>; destination?: Writable;
+}) {
   const machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, ...options });
-  const ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs });
-  const destination = new PassThrough();
-  const text = collectText(destination);
+  const ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs }, limits);
+  const text = destination instanceof PassThrough ? collectText(destination) : () => '';
   const download = ftpClient.downloadFile('O1000', destination);
   // Keep the result, so a rejection before the test reads it is not unhandled
   const outcome = download.then(() => 'success', (err: Error) => err.message);
@@ -1077,6 +1078,161 @@ describe('FTPClient raw RETR that the machine refuses', () => {
 
     expect(await download.outcome).toBe('FTP download error: 550 No such file');
     expect(retrCount()).toBe(2);
+  });
+});
+
+// A machine (or a rogue device) can send one byte just before each timeout, or a file with no end. One download
+// must stop after a time limit and a byte limit, on the raw RETR and on the fallback, and close its connections.
+describe('FTPClient download limits', () => {
+  let machine: FakeMachine | undefined;
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    await machine?.close();
+    machine = undefined;
+  });
+
+  /** The first RETR gets 425, so the fallback runs. The second RETR does what `sendFile` does. */
+  function fallbackThat(sendFile: (transfer: FileTransfer) => void) {
+    return (transfer: FileTransfer) => {
+      if (transfer.retrNumber > 1) {
+        sendFile(transfer);
+        return;
+      }
+      transfer.control.write('425 Cannot open data connection\r\n');
+      transfer.data.end();
+    };
+  }
+
+  it('stops a raw RETR that sends one byte just before each timeout, at the time limit', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const timeoutMs = 200;
+    let transfer: FileTransfer | undefined;
+    const download = await startDownload({ sendFile: started => { transfer = started; }, timeoutMs, limits: { timeLimitMs: 1_000 } });
+    machine = download.machine;
+    await until(() => transfer !== undefined);
+    let isDataClosed = false;
+    transfer?.data.on('close', () => { isDataClosed = true; });
+
+    for (let sent = 1; sent <= 6; sent += 1) {
+      transfer?.data.write('X');
+      await until(() => download.text().length === sent);
+      vi.advanceTimersByTime(timeoutMs - 10);
+    }
+
+    expect(await download.outcome).toBe('FTP download error: The download took too long. Chatter stops a download after 1 second.');
+    await until(() => isDataClosed);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('stops a fallback download that does not end, at the time limit', async () => {
+    let transfer: FileTransfer | undefined;
+    const download = await startDownload({
+      sendFile: fallbackThat(started => {
+        transfer = started;
+        started.data.write('X');
+      }),
+      timeoutMs: 5_000, limits: { timeLimitMs: 300 }
+    });
+    machine = download.machine;
+    const started = Date.now();
+
+    expect(await download.outcome).toBe('FTP download error: The download took too long. Chatter stops a download after 0.3 seconds.');
+    expect(Date.now() - started).toBeLessThan(3_000);
+    let isDataClosed = transfer?.data.destroyed === true;
+    transfer?.data.on('close', () => { isDataClosed = true; });
+    await until(() => isDataClosed);
+  });
+
+  it('stops a raw RETR at the byte limit, and gives the user no byte over the limit', async () => {
+    let transfer: FileTransfer | undefined;
+    const download = await startDownload({
+      sendFile: started => {
+        transfer = started;
+        started.data.write(PROGRAM_TEXT);
+      },
+      timeoutMs: 5_000, limits: { maxBytes: 10 }
+    });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('FTP download error: The file on the machine is too large. Chatter downloads at most 10 bytes.');
+    expect(download.text().length).toBeLessThanOrEqual(10);
+    let isDataClosed = transfer?.data.destroyed === true;
+    transfer?.data.on('close', () => { isDataClosed = true; });
+    await until(() => isDataClosed);
+    expect(machine.commands.filter(command => command === 'RETR')).toHaveLength(1);
+  });
+
+  it('stops a fallback download at the byte limit', async () => {
+    const download = await startDownload({
+      sendFile: fallbackThat(transfer => sendWholeFile(transfer, PROGRAM_TEXT)), timeoutMs: 5_000, limits: { maxBytes: 10 }
+    });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('FTP download error: The file on the machine is too large. Chatter downloads at most 10 bytes.');
+    expect(download.text().length).toBeLessThanOrEqual(10);
+  });
+
+  it('downloads a file of exactly the byte limit', async () => {
+    const download = await startDownload({ timeoutMs: 5_000, limits: { maxBytes: PROGRAM_TEXT.length } });
+    machine = download.machine;
+
+    expect(await download.outcome).toBe('success');
+    expect(download.text()).toBe(PROGRAM_TEXT);
+  });
+});
+
+/** A destination that takes each chunk only when the test lets it, as a slow browser does */
+function slowDestination() {
+  const waiting: Array<() => void> = [];
+  const chunks: Buffer[] = [];
+  const destination = new Writable({
+    highWaterMark: 16 * 1024,
+    write(chunk: Buffer, _encoding, done) {
+      chunks.push(chunk);
+      waiting.push(done);
+    },
+  });
+  return {
+    destination,
+    /** The bytes that wait in memory, and the bytes that the destination took */
+    heldBytes: () => destination.writableLength,
+    text: () => Buffer.concat(chunks).toString(),
+    /** Take all chunks from now on */
+    release() {
+      destination._write = (chunk: Buffer, _encoding, done) => {
+        chunks.push(chunk);
+        done();
+      };
+      waiting.splice(0).forEach(done => done());
+    },
+  };
+}
+
+// The download goes to the HTTP reply. When the browser reads slowly, the raw RETR must stop to read from the machine,
+// so the file does not wait in the memory of a Pi.
+describe('FTPClient raw RETR to a slow destination', () => {
+  let machine: FakeMachine | undefined;
+
+  afterEach(async () => {
+    await machine?.close();
+    machine = undefined;
+  });
+
+  it('stops to read from the machine while the destination is full, and does not time out', async () => {
+    const bigText = 'G01 X1 Y1\n'.repeat(1_600_000);
+    const slow = slowDestination();
+    const download = await startDownload({ programText: bigText, timeoutMs: 100, destination: slow.destination });
+    machine = download.machine;
+
+    await new Promise(resolve => setTimeout(resolve, 400));
+
+    expect(slow.heldBytes()).toBeLessThan(4 * 1024 * 1024);
+    expect(await hasSettled(download.outcome)).toBe(false);
+    slow.release();
+    expect(await download.outcome).toBe('success');
+    expect(slow.text()).toBe(bigText);
   });
 });
 

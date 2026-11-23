@@ -1,3 +1,4 @@
+import { once } from 'node:events';
 import type { Writable } from 'node:stream';
 import { describe, it, expect } from 'vitest';
 import { attachmentHeader, downloadAsStream } from './fileDownload.js';
@@ -68,6 +69,48 @@ describe('downloadAsStream', () => {
     await nextTick();
 
     expect(writesAfterCancel).toBe(1);
+  });
+
+  // A slow browser must slow the machine download. Else the whole file waits in the memory of a Pi.
+  describe('with a reader that is slow', () => {
+    const chunk = Buffer.alloc(8 * 1024, 'G');
+    const chunkCount = 128;
+
+    /** A connector that writes 1 MB and waits for 'drain' when the output is full, as the FTP download does */
+    function bigFileConnector() {
+      const state = { writtenBytes: 0, done: Promise.resolve() };
+      const connector = connectorThat(output => {
+        state.done = (async () => {
+          for (let index = 0; index < chunkCount; index += 1) {
+            state.writtenBytes += chunk.length;
+            if (!output.write(chunk)) await once(output, 'drain');
+          }
+        })();
+        return state.done;
+      });
+      return { connector, state };
+    }
+
+    it('takes no more data while nobody reads the stream', async () => {
+      const { connector, state } = bigFileConnector();
+
+      const stream = await downloadAsStream(connector, '/BIG.NC');
+      for (let turn = 0; turn < 20; turn += 1) await nextTick();
+
+      expect(state.writtenBytes).toBeLessThan(256 * 1024);
+      expect((await readAll(stream)).length).toBe(chunk.length * chunkCount);
+    });
+
+    it('lets the download run to its end when the reader stops', async () => {
+      const { connector, state } = bigFileConnector();
+
+      const stream = await downloadAsStream(connector, '/BIG.NC');
+      await nextTick();
+      await stream.cancel();
+      await state.done;
+
+      expect(state.writtenBytes).toBe(chunk.length * chunkCount);
+    });
   });
 });
 
