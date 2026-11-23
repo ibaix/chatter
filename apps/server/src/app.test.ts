@@ -12,6 +12,7 @@ import { captureLog } from './logging/testSupport.js';
 import { UNEXPECTED_ERROR_TEXT } from './routes/responses.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
+import type { FTPClient } from './ftp/FTPClient.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
 import { FILE_LIST_CUT_SHORT_HEADER, PROGRAM_UPLOAD_LIMIT_BYTES, SUPPORTED_MACHINE_TYPES, type FTPTreeNode } from '@local-chatter/shared';
 
@@ -886,6 +887,20 @@ describe('API Routes', () => {
       expect(res.status).toBe(200);
       expect(res.headers.get(FILE_LIST_CUT_SHORT_HEADER)).toBe('true');
       expect(await res.json()).toEqual([PROGRAM]);
+    });
+
+    // The connector must pass the flag of the FTP client on to the route
+    it('sends the cut-short header when the FTP client cut the list short', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const { ftpClient } = poller.getConnector(machine.id) as unknown as { ftpClient: FTPClient };
+      const readFileTree = vi.spyOn(ftpClient, 'readFileTree').mockResolvedValue({ nodes: [PROGRAM], isCutShort: true });
+
+      const res = await send(`/api/machine/${machine.id}/files?depth=2`, { method: 'GET' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get(FILE_LIST_CUT_SHORT_HEADER)).toBe('true');
+      expect(await res.json()).toEqual([PROGRAM]);
+      expect(readFileTree).toHaveBeenCalledWith('.', 2);
     });
 
     it('sends no cut-short header for a full list', async () => {
