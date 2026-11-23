@@ -24,6 +24,7 @@
     "dup:new": "jscpd apps packages tools --baseline-from-ref origin/main --fail-on-new-clones",
     "dead": "knip --no-exit-code",
     "quality": "bash tools/quality/signals.sh",
+    "check:web-dist": "tsx tools/guardrails/builtWebApp.ts apps/web/dist",
     "test": "npm run test:run -w @local-chatter/shared && npm run test:run -w apps/web && npm run test:run -w apps/server && npm run test:tools",
     "test:tools": "vitest run --root tools/fake-machines && vitest run --root tools/fake-notify && vitest run --root tools/quality && vitest run --root tools/guardrails",
     "test:client": "npm run test:run -w apps/web",
@@ -40,12 +41,13 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@vitest/coverage-v8": "^5.1.1",
-    "concurrently": "^8.2.2",
+    "concurrently": "^10.0.7",
     "eslint": "^10.15.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.14.0",
     "jscpd": "^5.4.3",
     "knip": "^6.47.0",
+    "parse5": "^7.3.0",
     "typescript-eslint": "^8.73.0",
     "yaml": "^2.9.1"
   }

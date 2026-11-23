@@ -66,6 +66,9 @@ Chatter never shows a saved password again. To keep it, leave the password box e
 
 You can send at most 32 MB of program files at one time. A Raspberry Pi has little memory, and Chatter holds the files in memory while it sends them. To send more, send the files in smaller groups.
 
+You can download a file of at most 64 MB. A download stops after 30 minutes.
+Some old machines do not tell Chatter that a download is complete. Chatter then waits 3 seconds after the last data, and gives you the file. The Chatter log gets a warning. If a program looks cut short, download it again.
+
 ### Delete a machine
 
 An **Admin** can delete a machine from Chatter. Chatter then stops reading the machine and deletes its spindle speed history. You cannot undo this.
@@ -122,6 +125,8 @@ Go to **Settings > Users and roles**, and click **Add user**. Give each person a
 | **Admin** | All that an Operator can do. Add, change, and delete machines. Manage the users and the settings. Update Chatter. |
 
 Give the username and the password to the person. They can change the password on **Settings > Your account**.
+
+After too many wrong passwords, Chatter locks a user for up to 15 minutes. A browser where the user logged in before can still log in. An Admin can unlock the user in **Settings > Logins**. See [Locked out after wrong passwords](../security.md#locked-out-after-wrong-passwords).
 
 ![Settings, Users and roles: three users, and what each role can do](../images/chatter-users-and-roles.png)
 

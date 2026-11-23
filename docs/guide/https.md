@@ -23,6 +23,14 @@ A reverse proxy is a server that takes the HTTPS requests from the browsers, and
 Chatter believes the `X-Forwarded-*` headers only from the trusted addresses, because any computer can send them.
 Only one proxy in front of Chatter is supported.
 
+## Security headers from the proxy
+
+Chatter sends its own security headers on each reply. It does not send HSTS (`Strict-Transport-Security`), because HSTS on a LAN address can stop the access to Chatter.
+When all users open Chatter through the proxy, you can set the proxy to add HSTS.
+
+Do not set the proxy to add a second `Content-Security-Policy` or `X-Frame-Options` header.
+Chatter already sends them. If the proxy adds a second Content-Security-Policy, the browser obeys the two policies together, and the page can stop working.
+
 ## Set the trusted addresses in a file
 
 You can also set the trusted addresses with the `TRUST_PROXY` environment variable, for example in `docker-compose.yml` (see the example in the file). Then run `docker compose up -d`.
