@@ -5,6 +5,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { networksOf, type ComposeServiceNetworks } from './composeNetworks';
 import { portsOpened, type ComposePort } from './composePorts';
 import { anchorsOf, docsLinksIn, docsPageFile, headingLinksIn } from './docsLinks';
 
@@ -16,11 +17,13 @@ const trackedFiles = () =>
 interface ComposeService {
   command?: string[];
   container_name?: string;
+  networks?: ComposeServiceNetworks;
   ports?: ComposePort[];
   volumes?: string[];
 }
 interface ComposeFile {
   name?: string;
+  networks?: Record<string, { internal?: boolean } | null>;
   services: Record<string, ComposeService>;
   volumes?: Record<string, unknown>;
 }
@@ -97,6 +100,42 @@ describe('closed ports', () => {
         .map(port => `${service}: ${JSON.stringify(port)}`),
     );
     expect(opened).toEqual([]);
+  });
+});
+
+describe('history network', () => {
+  // VictoriaMetrics and vmalert have no login. On an internal network, no computer on the shop network can reach
+  // them, also with a Docker Engine older than 28, and they cannot connect out. Only Chatter is on both networks.
+  const main = compose('docker-compose.yml');
+  const networksOfService = (service: string) => networksOf(main.services[service]?.networks);
+  const isInternal = (network: string) => main.networks?.[network]?.internal === true;
+
+  it('makes the network "history" internal in docker-compose.yml', () => {
+    expect(main.networks?.history).toEqual({ internal: true });
+  });
+
+  it.each(['victoriametrics', 'vmalert'])('puts %s on "history" and on no network that is not internal', service => {
+    expect(networksOfService(service)).toContain('history');
+    expect(networksOfService(service).filter(network => !isInternal(network))).toEqual([]);
+  });
+
+  it('puts chatterbox on "default", for the browsers and the machines, and on "history"', () => {
+    expect(networksOfService('chatterbox')).toEqual(expect.arrayContaining(['default', 'history']));
+  });
+
+  it('keeps the service names, which the Pi card, the update helper and the docs use', () => {
+    expect(Object.keys(main.services).sort()).toEqual(['chatterbox', 'victoriametrics', 'vmalert']);
+  });
+
+  it('keeps the volume names, so an update finds the data', () => {
+    expect(Object.keys(main.volumes ?? {}).sort()).toEqual(['chatter-alert-rules', 'chatterbox-data', 'victoriametrics-data']);
+  });
+
+  it('gives no network in the Pi card override, so the networks of docker-compose.yml apply', () => {
+    // Docker Compose adds a "networks:" of the override to the networks of docker-compose.yml.
+    const override = compose('tools/pi-image/in-pi/docker-compose.override.yml');
+    expect(Object.values(override.services).map(service => service.networks)).toEqual([undefined]);
+    expect(override.networks).toBeUndefined();
   });
 });
 
