@@ -106,6 +106,11 @@ export interface WebServerStart {
   maxConnections?: number;
   /** Only a test changes these Node options, for example to give a shorter header time limit */
   serverOptions?: ServerOptions;
+  /**
+   * Only a test gives 127.0.0.1, so that it connects to this server and not to another program on the same port.
+   * Without a hostname, the server listens on all addresses, so the shop network can open Chatter.
+   */
+  hostname?: string;
 }
 
 /**
@@ -113,10 +118,10 @@ export interface WebServerStart {
  * serve() makes a plain HTTP/1 server, because no HTTP/2 option is given.
  */
 export function startWebServer(app: WebApp, port: number, {
-  onListening, requestTimeLimitMs = REQUEST_TIME_LIMIT_MS, maxConnections = MAX_CONNECTIONS, serverOptions,
+  onListening, requestTimeLimitMs = REQUEST_TIME_LIMIT_MS, maxConnections = MAX_CONNECTIONS, serverOptions, hostname,
 }: WebServerStart = {}): Server {
   const options = { ...WEB_SERVER_OPTIONS, ...serverOptions };
-  const server = serve({ fetch: app.fetch, port, serverOptions: options }, () => onListening?.()) as Server;
+  const server = serve({ fetch: app.fetch, port, hostname, serverOptions: options }, () => onListening?.()) as Server;
   server.maxConnections = maxConnections;
   limitRequestTime(server, requestTimeLimitMs);
   return server;

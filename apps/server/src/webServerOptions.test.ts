@@ -33,6 +33,28 @@ describe('WEB_SERVER_OPTIONS', () => {
   });
 });
 
+describe('the address of startWebServer', () => {
+  let server: Server;
+
+  afterEach(() => {
+    server.close();
+  });
+
+  async function addressOf(settings: Parameters<typeof startWebServer>[2]): Promise<string> {
+    server = startWebServer(new Hono().get('/', c => c.text('hello')), 0, settings);
+    await once(server, 'listening');
+    return (server.address() as AddressInfo).address;
+  }
+
+  it('listens on all addresses when no hostname is given, as Chatter does on the shop network', async () => {
+    expect(['::', '0.0.0.0']).toContain(await addressOf({}));
+  });
+
+  it('listens only on the given hostname', async () => {
+    expect(await addressOf({ hostname: '127.0.0.1' })).toBe('127.0.0.1');
+  });
+});
+
 describe('the connection limits of startWebServer', () => {
   let server: Server;
 
