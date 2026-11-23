@@ -205,7 +205,11 @@ export class HaasConnector extends BaseMachineConnector {
 
   private dataSocket: net.Socket | null = null;
   private querySocket: net.Socket | null = null;
-  private dataBuffer: Buffer = Buffer.alloc(0);
+  /** The chunks of the data stream line that waits for its delimiter, and their size */
+  private dataRest: Buffer[] = [];
+  private dataRestLength = 0;
+  /** The last bytes of the rest, so a delimiter that is split over two chunks is found */
+  private dataRestTail: Buffer = Buffer.alloc(0);
   private data: HaasMachineData = {};
   private prevData: HaasMachineData = {};
   private commands: HaasCommand[] = [];
@@ -319,21 +323,41 @@ export class HaasConnector extends BaseMachineConnector {
    * A rest longer than MAX_HAAS_LINE_BYTES closes the data stream. The next poll connects it again.
    */
   private handleDataStreamData(socket: net.Socket, chunk: Buffer): void {
-    this.dataBuffer = Buffer.concat([this.dataBuffer, chunk]);
+    // Search only the new chunk and the last bytes before it. Join the chunks only when a line is complete.
+    // So a long line in many small chunks does not take more and more time.
+    const searched = Buffer.concat([this.dataRestTail, chunk]);
+    this.dataRestTail = Buffer.from(searched.subarray(-(DATA_DELIMITER.length - 1)));
+    this.dataRest.push(chunk);
+    this.dataRestLength += chunk.length;
+    if (searched.includes(DATA_DELIMITER)) this.parseCompleteLines();
 
-    let delimiterIndex: number;
-    while ((delimiterIndex = this.dataBuffer.indexOf(DATA_DELIMITER)) !== -1) {
-      const line = this.dataBuffer.slice(0, delimiterIndex).toString('ascii');
-      this.dataBuffer = this.dataBuffer.slice(delimiterIndex + DATA_DELIMITER.length);
-      this.parseDataStreamLine(line);
-    }
-
-    if (this.dataBuffer.length > MAX_HAAS_LINE_BYTES) {
+    if (this.dataRestLength > MAX_HAAS_LINE_BYTES) {
       const error = warnReplyTooLarge(log, this.id, new ReplyTooLargeError(MAX_HAAS_LINE_BYTES));
       this.dataStreamError = `Data stream: ${error.message}`;
-      this.dataBuffer = Buffer.alloc(0);
+      this.clearDataRest();
       socket.destroy();
     }
+  }
+
+  /** Parse each complete line of the rest, and keep only the part after the last delimiter */
+  private parseCompleteLines(): void {
+    const data = Buffer.concat(this.dataRest);
+    let start = 0;
+    let end: number;
+    while ((end = data.indexOf(DATA_DELIMITER, start)) !== -1) {
+      this.parseDataStreamLine(data.toString('ascii', start, end));
+      start = end + DATA_DELIMITER.length;
+    }
+    // A copy, so the rest does not keep the joined lines in memory
+    const rest = Buffer.from(data.subarray(start));
+    this.dataRest = rest.length > 0 ? [rest] : [];
+    this.dataRestLength = rest.length;
+  }
+
+  private clearDataRest(): void {
+    this.dataRest = [];
+    this.dataRestLength = 0;
+    this.dataRestTail = Buffer.alloc(0);
   }
 
   /**
@@ -378,7 +402,7 @@ export class HaasConnector extends BaseMachineConnector {
     this.dataStreamConnected = false;
     this.queryConnected = false;
     this.connected = false;
-    this.dataBuffer = Buffer.alloc(0);
+    this.clearDataRest();
   }
 
   private updateAlarmText(): void {

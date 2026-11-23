@@ -400,6 +400,23 @@ describe('Haas data stream', () => {
 
     expect(status.data).toMatchObject({ alarm: false, alarmText: undefined });
   });
+
+  it('finds a delimiter that is split over three chunks, and reads the line after it', async () => {
+    server = net.createServer(socket => {
+      socket.once('data', async () => {
+        for (const part of ['ActiveTool|5\n', '\x03', `\x02ProgramName|O1${DELIMITER}`]) {
+          socket.write(part);
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+      });
+    });
+    const dataPort = await listen(server);
+    connector = new HaasConnector({ name: 'VF2', host: '127.0.0.1', dataPort, queryPort: CLOSED_PORT });
+
+    const status = await pollUntil(data => data.program !== undefined);
+
+    expect(status.data).toMatchObject({ toolNumber: 5, program: 'O1' });
+  });
 });
 
 describe('Haas openSocket socket options', () => {
