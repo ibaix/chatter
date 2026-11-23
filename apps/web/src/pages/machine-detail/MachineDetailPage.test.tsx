@@ -382,6 +382,21 @@ describe('MachineDetailPage', () => {
       expect(fetchFileTree).toHaveBeenCalledTimes(2);
     });
 
+    // An old note must not stay next to an error: the user would think that the list is there
+    it('shows the error and removes the cut-short note when the next list fails', async () => {
+      vi.mocked(fetchFileTree)
+        .mockResolvedValueOnce({ nodes: [PROGRAM], isCutShort: true })
+        .mockRejectedValueOnce(new Error('The machine did not answer'));
+      renderPage();
+      await openFilesTab();
+      await screen.findByText(CUT_SHORT_NOTE);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Load the files again' }));
+
+      expect(await screen.findByText('Could not load the files: The machine did not answer')).toBeInTheDocument();
+      expect(screen.queryByText(CUT_SHORT_NOTE)).not.toBeInTheDocument();
+    });
+
     it('loads the files at once when the address opens the Files tab', async () => {
       renderPage({ address: '/machine/m1?tab=files' });
 

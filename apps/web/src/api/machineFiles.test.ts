@@ -28,6 +28,12 @@ describe('fetchFileTree', () => {
     expect(await fetchFileTree('m1', '/')).toEqual({ nodes: [PROGRAM], isCutShort: true });
   });
 
+  it('tells that the list is complete when the header is not "true"', async () => {
+    replyWith(200, [PROGRAM], { [FILE_LIST_CUT_SHORT_HEADER]: 'false' });
+
+    expect(await fetchFileTree('m1', '/')).toEqual({ nodes: [PROGRAM], isCutShort: false });
+  });
+
   it('gives the error of the server', async () => {
     replyWith(502, { error: 'The machine did not answer' });
 
