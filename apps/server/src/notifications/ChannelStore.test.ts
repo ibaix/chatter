@@ -287,6 +287,15 @@ describe('ChannelStore', () => {
       expect(store.forSending(id)?.values.token).toBe('tk_saved');
     });
 
+    it('refuses to send the ntfy token of a custom server to ntfy.sh, when the form empties the server or leaves it out', () => {
+      const ntfy: ChannelInput = { ...webhookInput, type: 'ntfy', values: { topic: 'shop-alerts', url: 'https://ntfy.shop.lan', token: 'tk_saved' } };
+      const id = addedId(ntfy);
+
+      expect(store.update(id, { ...ntfy, values: { topic: 'shop-alerts', url: '', token: '' } })).toMatchObject({ ok: false, secretNeeded: true });
+      expect(store.update(id, { ...ntfy, values: { topic: 'shop-alerts', token: '' } })).toMatchObject({ ok: false, secretNeeded: true });
+      expect(store.forSending(id)?.values).toMatchObject({ url: 'https://ntfy.shop.lan', token: 'tk_saved' });
+    });
+
     it('keeps the Twilio token when the account changes, because the token goes only to the Twilio API', () => {
       const id = addedId(twilioInput);
       const otherAccount = `AC${'fedcba9876543210'.repeat(2)}`;
