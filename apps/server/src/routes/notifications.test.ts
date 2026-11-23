@@ -21,6 +21,7 @@ describe('notification routes', () => {
   let accounts: UserAccounts;
   let adminCookie: string;
   let sentBodies: string[];
+  let sentUrls: string[];
   let notifications: Notifications;
 
   beforeEach(async () => {
@@ -28,9 +29,11 @@ describe('notification routes', () => {
     accounts = parts.accounts;
     adminCookie = parts.cookie;
     sentBodies = [];
+    sentUrls = [];
     const db = new Database(':memory:');
     new AlertStore(db, Date.now());
-    const fetch = async (_url: string | URL | Request, init?: RequestInit) => {
+    const fetch = async (url: string | URL | Request, init?: RequestInit) => {
+      sentUrls.push(String(url));
       sentBodies.push(String(init?.body));
       return new Response(null, { status: 200 });
     };
@@ -216,6 +219,128 @@ describe('notification routes', () => {
     const result = await (await asAdmin('POST', `/notification-channels/${id}/test`, { ...slack, values: { ...slack.values, secret: '' } })).text();
 
     expect(result).not.toContain('hook-secret');
+  });
+
+  // F-10: a saved secret must not go to an address that the admin typed wrong (decision D3)
+  describe('a saved secret and a new address', () => {
+    interface Case {
+      input: ChannelInput;
+      urlKey: string;
+      newUrl: string;
+      secretKey: string;
+      secret: string;
+      error: string;
+    }
+
+    const NEW_SECRET = 'new-secret';
+    const routing = { minSeverity: 'warning', machineIds: null, enabled: true } as const;
+    const cases: Record<string, Case> = {
+      webhook: {
+        input: { ...slack, values: { url: 'https://hooks.slack.com/services/T0/B0/x', secret: 'hook-secret' } },
+        urlKey: 'url', newUrl: 'https://hooks.example.net/in', secretKey: 'secret', secret: 'hook-secret',
+        error: 'Type the Secret again. You changed the Web address. Chatter does not send a saved secret to a new address. '
+          + 'To use no secret, select Delete the saved secret.',
+      },
+      ntfy: {
+        input: {
+          type: 'ntfy', name: 'Phones', ...routing,
+          values: { topic: 'shop-alerts', url: 'https://ntfy.shop.lan', token: 'tk_saved' },
+        },
+        urlKey: 'url', newUrl: 'https://ntfy.other.lan', secretKey: 'token', secret: 'tk_saved',
+        error: 'Type the Access token again. You changed the Server. Chatter does not send a saved secret to a new address. '
+          + 'To use no secret, select Delete the saved secret.',
+      },
+      apprise: {
+        input: {
+          type: 'apprise', name: 'Apprise', ...routing,
+          values: { url: 'http://apprise.lan:8000/notify/chatter', username: 'chatter', password: 'apprise-saved' },
+        },
+        urlKey: 'url', newUrl: 'http://apprise.other.lan:8000/notify/chatter', secretKey: 'password', secret: 'apprise-saved',
+        error: 'Type the Password again. You changed the Apprise address. Chatter does not send a saved secret to a new address. '
+          + 'To use no secret, select Delete the saved secret.',
+      },
+    };
+
+    describe.each(Object.entries(cases))('a %s channel', (_type, { input, urlKey, newUrl, secretKey, secret, error }) => {
+      const withValues = (values: Record<string, string>): ChannelInput => ({ ...input, values: { ...input.values, ...values } });
+      const movedForm = withValues({ [urlKey]: newUrl, [secretKey]: '' });
+      let id: string;
+
+      beforeEach(async () => {
+        ({ id } = await addedChannel(input));
+        sentUrls = [];
+      });
+
+      const savedValues = () => notifications.channels.forSending(id)?.values;
+
+      it('refuses to save a new address with no secret, and saves nothing', async () => {
+        const res = await asAdmin('PUT', `/notification-channels/${id}`, { ...movedForm, name: 'Renamed' });
+
+        expect(res.status).toBe(400);
+        expect(await errorOf(res)).toBe(error);
+        expect(notifications.channels.get(id)?.name).toBe(input.name);
+        expect(savedValues()).toMatchObject({ [urlKey]: input.values[urlKey], [secretKey]: secret });
+      });
+
+      it('refuses to test a new address with no secret, and sends nothing', async () => {
+        const res = await asAdmin('POST', `/notification-channels/${id}/test`, movedForm);
+
+        expect(res.status).toBe(400);
+        expect(await errorOf(res)).toBe(error);
+        expect(sentUrls).toEqual([]);
+        expect(await (await asAdmin('GET', `/notification-messages?channel=${id}`)).json()).toEqual([]);
+      });
+
+      it('saves and tests a new address with the new secret that comes with it', async () => {
+        const form = withValues({ [urlKey]: newUrl, [secretKey]: NEW_SECRET });
+
+        const saved = await asAdmin('PUT', `/notification-channels/${id}`, form);
+        const tested = await asAdmin('POST', `/notification-channels/${id}/test`, form);
+
+        expect(saved.status).toBe(200);
+        expect(savedValues()).toMatchObject({ [urlKey]: newUrl, [secretKey]: NEW_SECRET });
+        expect(await tested.json()).toMatchObject({ ok: true });
+        expect(sentUrls).toHaveLength(1);
+        expect(sentUrls[0].startsWith(newUrl)).toBe(true);
+      });
+
+      it('saves a new address when the admin deletes the saved secret', async () => {
+        const res = await asAdmin('PUT', `/notification-channels/${id}`, { ...movedForm, clearSecrets: [secretKey] });
+
+        expect(res.status).toBe(200);
+        expect(savedValues()).toMatchObject({ [urlKey]: newUrl });
+        expect(savedValues()).not.toHaveProperty(secretKey);
+      });
+
+      it('keeps the saved secret when the address does not change, also with spaces around it', async () => {
+        const form = withValues({ [urlKey]: ` ${input.values[urlKey] as string} `, [secretKey]: '' });
+
+        const saved = await asAdmin('PUT', `/notification-channels/${id}`, { ...form, name: 'Renamed' });
+        const tested = await asAdmin('POST', `/notification-channels/${id}/test`, form);
+
+        expect(saved.status).toBe(200);
+        expect(savedValues()).toMatchObject({ [secretKey]: secret });
+        expect(await tested.json()).toMatchObject({ ok: true });
+      });
+    });
+
+    it('changes the address of a channel with no saved secret', async () => {
+      const { id } = await addedChannel({ ...slack, values: { url: slack.values.url, secret: '' } });
+
+      const res = await asAdmin('PUT', `/notification-channels/${id}`, { ...slack, values: { url: 'https://hooks.example.net/in', secret: '' } });
+
+      expect(res.status).toBe(200);
+      expect(notifications.channels.forSending(id)?.values).toEqual({ url: 'https://hooks.example.net/in' });
+    });
+
+    it('still gives a wrong form of a test as a result, not as an error of the request', async () => {
+      const { id } = await addedChannel();
+
+      const res = await asAdmin('POST', `/notification-channels/${id}/test`, { ...slack, values: { url: 'ftp://example.com' } });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: false, error: expect.stringMatching(/http/) });
+    });
   });
 
   describe('settings', () => {
