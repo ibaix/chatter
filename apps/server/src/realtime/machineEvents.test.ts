@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { setTimeout as wait } from 'node:timers/promises';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { captureLog } from '../logging/testSupport.js';
 import type { MachineChangeFeed } from './MachineChangeFeed.js';
-import { machineEventRoutes } from './machineEvents.js';
+import { KEEP_ALIVE_MS, machineEventRoutes } from './machineEvents.js';
 
 describe('machineEventRoutes', () => {
   it('logs an error of the live events, sends no error text, and closes the stream so the browser connects again', async () => {
@@ -27,24 +27,57 @@ describe('machineEventRoutes', () => {
     expect(log.text('error')).toContain('path=/events');
   });
 
-  it('tells at each keep-alive that the login is in use, so an open dashboard stays logged in', async () => {
-    vi.useFakeTimers();
-    try {
-      const feed = { currentMachines: () => [], subscribe: () => () => {} } as unknown as MachineChangeFeed;
-      const inUse = vi.fn();
-      const app = new Hono().route('/', machineEventRoutes(feed, () => 'admin', inUse));
-      const reader = (await app.request('/events')).body!.getReader();
-      await reader.read();
-      expect(inUse).not.toHaveBeenCalled();
+  describe('at each keep-alive', () => {
+    const feed = { currentMachines: () => [], subscribe: () => () => {} } as unknown as MachineChangeFeed;
 
-      await vi.advanceTimersByTimeAsync(25_000);
-      expect(inUse).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(25_000);
-      expect(inUse).toHaveBeenCalledTimes(2);
-      await reader.cancel();
-    } finally {
-      vi.useRealTimers();
+    /** Read the stream until the server ends it, and give all its text */
+    async function restOf(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+      let text = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return text;
+        text += new TextDecoder().decode(value);
+      }
     }
+
+    it('checks the login of the stream, and stops the checks when the browser closes the stream', async () => {
+      vi.useFakeTimers();
+      try {
+        const isLoggedIn = vi.fn(() => true);
+        const app = new Hono().route('/', machineEventRoutes(feed, () => 'admin', isLoggedIn));
+        const reader = (await app.request('/events')).body!.getReader();
+        await reader.read();
+        expect(isLoggedIn).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(KEEP_ALIVE_MS);
+        expect(isLoggedIn).toHaveBeenCalledTimes(1);
+        expect((isLoggedIn.mock.calls[0] as unknown as [Context])[0].req.path).toBe('/events');
+        expect(new TextDecoder().decode((await reader.read()).value)).toContain(': keep-alive');
+
+        await reader.cancel();
+        await vi.advanceTimersByTimeAsync(2 * KEEP_ALIVE_MS);
+        expect(isLoggedIn).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ends the stream when its login ended, so the browser connects again and gets the login page', async () => {
+      vi.useFakeTimers();
+      try {
+        let loggedIn = true;
+        const app = new Hono().route('/', machineEventRoutes(feed, () => 'admin', () => loggedIn));
+        const reader = (await app.request('/events')).body!.getReader();
+        await reader.read();
+
+        loggedIn = false;
+        await vi.advanceTimersByTimeAsync(KEEP_ALIVE_MS);
+
+        expect(await restOf(reader)).not.toContain(': keep-alive');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('when the first send fails', () => {

@@ -202,18 +202,29 @@ function withoutFailing(message: string, save: () => void): void {
   }
 }
 
-/**
- * Save that the browser of the request was used now, so its session does not stop for no use.
- * A program login (HTTP Basic) has no session, so nothing is saved for it.
- */
+/** Save that the browser of the request was used now, so its session does not stop for no use */
 export function markSessionSeen(
   c: Context,
   { auth, proxySettings }: Pick<LoginGuard, 'auth' | 'proxySettings'>,
-  session: UserSession | null = currentSession(c, auth),
+  session: UserSession,
 ): void {
-  if (!session) return;
   const { address } = originOf(c, proxySettings);
   withoutFailing('[Sessions] Could not save when a browser was used', () => auth.markSeen(session, address));
+}
+
+/**
+ * True while the login of a request after requireLogin is still valid. A long request, such as the live events, checks it again.
+ * A browser login ends with its session. A program (HTTP Basic) sends the password with each request, so its login stays.
+ * When the check cannot read the database, the login stays: the next request checks it again.
+ */
+export function isStillLoggedIn(c: Context, auth: Auth): boolean {
+  if (basicLogin(c.req.header('Authorization'))) return true;
+  try {
+    return currentSession(c, auth) !== null;
+  } catch (error) {
+    log.error('[Sessions] Could not check the login of a long request', { error });
+    return true;
+  }
 }
 
 /** Stops each request that has no valid login. Sets c.var.user for the routes after it. */

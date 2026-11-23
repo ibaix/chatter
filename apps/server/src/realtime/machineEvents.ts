@@ -10,7 +10,7 @@ import { streamSSEWithLog } from '../routes/streamReplies.js';
  * Some proxies close a connection that is quiet for too long.
  * A comment line keeps it open. The browser ignores it.
  */
-const KEEP_ALIVE_MS = 25_000;
+export const KEEP_ALIVE_MS = 25_000;
 const KEEP_ALIVE_COMMENT = ': keep-alive\n\n';
 
 /**
@@ -42,13 +42,14 @@ function sendChanges(stream: SSEStreamingApi, changes: MachineChanges): void {
  * GET /events: live machine status as server-sent events (SSE).
  * First the full machine list, then only the machines that change.
  * `loginOf` gives the login of the request. When a login opens more than MAX_STREAMS_PER_LOGIN streams, its oldest stream closes.
- * `markInUse` runs at each keep-alive. A dashboard can show only this stream for many days and send no other request,
- * so the keep-alive tells that its login is still in use.
+ * At each keep-alive, `isLoggedIn` checks that the login of the stream did not end (log out, no use, a removed user).
+ * When it ended, the stream ends. The browser then connects again, gets 401, and shows the login page.
+ * The stream itself does not count as a use of the login: an open tab that nobody looks at must not keep a login.
  */
 export function machineEventRoutes(
   feed: MachineChangeFeed,
   loginOf: (c: Context<LoggedInEnv>) => string,
-  markInUse: (c: Context<LoggedInEnv>) => void = () => {},
+  isLoggedIn: (c: Context<LoggedInEnv>) => boolean = () => true,
 ) {
   const openStreams = new StreamsPerLogin(MAX_STREAMS_PER_LOGIN);
   return new Hono<LoggedInEnv>().get('/events', c => streamSSEWithLog(c, 'The live machine events', async stream => {
@@ -76,8 +77,7 @@ export function machineEventRoutes(
       await listSent;
       while (!stopped) {
         await Promise.race([stream.sleep(KEEP_ALIVE_MS), whenStopped]);
-        if (stopped) break;
-        markInUse(c);
+        if (stopped || !isLoggedIn(c)) break;
         await stream.write(KEEP_ALIVE_COMMENT);
       }
     } finally {
