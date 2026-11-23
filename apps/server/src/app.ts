@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { Hono } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import type { HardwarePoller } from './polling/poller.js';
 import type { HistorySource } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
@@ -145,10 +146,21 @@ export function createApp({
   // The security headers also go on the web app routes that index.ts adds after these
   return new Hono()
     .use(securityHeaders())
+    .use(`${API_PREFIX}/*`, noStore)
     .onError(errorReply)
     .notFound(c => c.json({ error: 'Not found' }, 404))
     .route(API_PREFIX, api);
 }
+
+/**
+ * No cache keeps an API reply. A reply can set the login cookie again (markSessionSeen in authRoutes.ts),
+ * so a shared cache in a proxy must not give that reply to other browsers. The data of the API also changes all the time.
+ * This replaces the no-cache of the live event streams, because they can also set the cookie again.
+ */
+const noStore = createMiddleware(async (c, next) => {
+  await next();
+  c.res.headers.set('Cache-Control', 'no-store');
+});
 
 /** Settings > Diagnostics and the health of the machines: the log, the restarts, the connection test */
 function diagnosticRoutes(
