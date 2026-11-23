@@ -64,7 +64,7 @@ describe('the connection limits of startWebServer', () => {
   });
 
   async function start(settings: Parameters<typeof startWebServer>[2]): Promise<number> {
-    server = startWebServer(new Hono().get('/', c => c.text('hello')), 0, settings);
+    server = startWebServer(new Hono().get('/', c => c.text('hello')), 0, { hostname: '127.0.0.1', ...settings });
     await once(server, 'listening');
     return (server.address() as AddressInfo).port;
   }
@@ -139,7 +139,7 @@ describe('startWebServer', () => {
           controller.close();
         },
       })));
-    server = startWebServer(app, 0, { requestTimeLimitMs: LIMIT_MS });
+    server = startWebServer(app, 0, { requestTimeLimitMs: LIMIT_MS, hostname: '127.0.0.1' });
     await once(server, 'listening');
     port = (server.address() as AddressInfo).port;
   });
@@ -250,7 +250,7 @@ describe('startWebServer with the default request time limit', () => {
   it('gives a request 2 minutes to send its whole body', async () => {
     // Only the timers of the time limit are fake. The sockets stay real.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    server = startWebServer(new Hono().post('/short', async c => c.text(await c.req.text())), 0);
+    server = startWebServer(new Hono().post('/short', async c => c.text(await c.req.text())), 0, { hostname: '127.0.0.1' });
     await once(server, 'listening');
     const socket = connect((server.address() as AddressInfo).port, '127.0.0.1');
     await once(socket, 'connect');

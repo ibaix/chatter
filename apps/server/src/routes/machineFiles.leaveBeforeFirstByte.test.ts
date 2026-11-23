@@ -48,7 +48,7 @@ describe('a program download that the browser leaves before the first byte', () 
     log = captureLog();
     // The machine opens the data connection for RETR, and then sends nothing
     machine = await startEndlessMachine({ holdData: true });
-    server = startWebServer(appFor(machine), 0);
+    server = startWebServer(appFor(machine), 0, { hostname: '127.0.0.1' });
     await once(server, 'listening');
 
     browser = connect((server.address() as AddressInfo).port, '127.0.0.1');
