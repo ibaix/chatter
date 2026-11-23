@@ -1,0 +1,3 @@
+# GitHub folds the diff of a generated file, and leaves it out of the language count.
+# npm run loc (tools/loc) also leaves these files out of the size of a change.
+package-lock.json linguist-generated=true
