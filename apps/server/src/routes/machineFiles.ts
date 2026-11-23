@@ -6,8 +6,12 @@ import { recordUpload } from '../storage/database.js';
 import { attachmentHeader, downloadAsStream } from './fileDownload.js';
 import { requirePermission } from '../auth/authRoutes.js';
 import { checkedForm, checkedQuery } from './checks.js';
-import { notFound } from './responses.js';
+import { allowLongUpload } from '../webServerOptions.js';
+import { machineErrorReply, notFound } from './responses.js';
+import { createLogger } from '../logging/logger.js';
 import { batchUploadForm, filePathQuery, fileTreeQuery, readTargetNames, uploadForm } from './schemas.js';
+
+const log = createLogger('machine-files');
 
 const ROOT_FOLDER = '.';
 const DEFAULT_TREE_DEPTH = '2';
@@ -73,19 +77,34 @@ function describeUpload(plan: UploadPlan, remotePath: string) {
   };
 }
 
+/**
+ * Save a sent file in the upload history.
+ * The file is on the machine already, so an error here does not make the send fail.
+ * The error goes to the log, and the user does not get the database text.
+ */
+async function recordSentFile(machineId: string, file: ReceivedFile, nameOnMachine: string, remotePath: string) {
+  try {
+    await recordUpload(machineId, file.name, nameOnMachine, remotePath, file.content.toString('utf-8'));
+  } catch (error) {
+    log.error('The file is on the machine, but Chatter could not save it in the upload history', { machineId, path: remotePath, error });
+  }
+}
+
 async function recordSentFiles(machineId: string, plan: UploadPlan, sentPaths: string[]) {
   for (const remotePath of sentPaths) {
     const file = plan.fileAt[remotePath];
-    if (file) {
-      await recordUpload(machineId, file.name, plan.targetNameAt[remotePath], remotePath, file.content.toString('utf-8'));
-    }
+    if (file) await recordSentFile(machineId, file, plan.targetNameAt[remotePath], remotePath);
   }
 }
 
 /** Read, send, and delete the program files on a machine (over FTP) */
 export function machineFileRoutes(poller: HardwarePoller) {
+  const canReadFiles = requirePermission('read-files');
   const canSendFiles = requirePermission('send-files');
   return new Hono()
+    // The machine refused or failed, so its reply text goes to the user
+    .onError(machineErrorReply)
+    // Names, sizes and dates only. Each role can see them.
     .get('/machine/:id/files', checkedQuery(fileTreeQuery), async c => {
       const { path = ROOT_FOLDER, depth = DEFAULT_TREE_DEPTH } = c.req.valid('query');
       const connector = poller.getConnector(c.req.param('id'));
@@ -96,7 +115,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
       return c.json(nodes);
     })
 
-    .get('/machine/:id/files/download', checkedQuery(filePathQuery), async c => {
+    .get('/machine/:id/files/download', canReadFiles, checkedQuery(filePathQuery), async c => {
       const { path } = c.req.valid('query');
       const connector = poller.getConnector(c.req.param('id'));
       if (!connector) return notFound(c);
@@ -108,7 +127,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
       });
     })
 
-    .post('/machine/:id/files/upload', canSendFiles, programSizeLimit, checkedForm(uploadForm), async c => {
+    .post('/machine/:id/files/upload', canSendFiles, allowLongUpload, programSizeLimit, checkedForm(uploadForm), async c => {
       const machineId = c.req.param('id');
       const { file, path: remotePath, overwrite, targetName } = c.req.valid('form');
       const connector = poller.getConnector(machineId);
@@ -124,7 +143,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
         }
         throw error;
       }
-      await recordUpload(machineId, received.name, nameOnMachine, remotePath, received.content.toString('utf-8'));
+      await recordSentFile(machineId, received, nameOnMachine, remotePath);
       return c.json({
         message: 'File uploaded successfully',
         filename: received.name,
@@ -134,7 +153,7 @@ export function machineFileRoutes(poller: HardwarePoller) {
     })
 
     // Send several files. Each file passes or fails on its own.
-    .post('/machine/:id/files/upload-batch', canSendFiles, programSizeLimit, checkedForm(batchUploadForm), async c => {
+    .post('/machine/:id/files/upload-batch', canSendFiles, allowLongUpload, programSizeLimit, checkedForm(batchUploadForm), async c => {
       const machineId = c.req.param('id');
       const { files, basePath, overwrite, targetNames } = c.req.valid('form');
       const connector = poller.getConnector(machineId);

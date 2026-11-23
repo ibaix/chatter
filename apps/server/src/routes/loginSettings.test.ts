@@ -1,17 +1,21 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Auth } from '../auth/Auth.js';
 import type { UserAccounts } from '../auth/userAccounts.js';
 import { LoginLog } from '../auth/loginLog.js';
 import { loggedInAuth, TEST_LOGIN } from '../auth/testSupport.js';
-import { testApp, type TestApp } from './testSupport.js';
+import { captureLog, type CapturedLog } from '../logging/testSupport.js';
+import { errorOf, testApp, type TestApp } from './testSupport.js';
 
 const ATTACKER = '192.168.1.66';
+/** The computer of the admin */
+const ADMIN_COMPUTER = '192.168.1.20';
 /** A connection from this address, as the Node server gives it */
 const from = (address: string) => ({ incoming: { socket: { remoteAddress: address } } });
 
 interface LoginsReport {
-  limits: { maxWrongPasswords: number; lockMinutes: number };
+  limits: { maxWrongPasswords: number; maxWrongPasswordsForUser: number; lockMinutes: number };
   locked: { address: string; username: string; until: string }[];
+  lockedUsers: { username: string; until: string }[];
   tries: { at: string; username: string; address: string; result: string }[];
 }
 
@@ -42,7 +46,7 @@ describe('login settings routes', () => {
       method: body ? 'POST' : 'GET',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
       body: body && JSON.stringify(body),
-    });
+    }, from(ADMIN_COMPUTER));
   }
 
   async function lockOut(address: string) {
@@ -63,7 +67,8 @@ describe('login settings routes', () => {
       { at: expect.any(String), username: 'sam', address: ATTACKER, result: 'no-such-user' },
     ]);
     expect(report.locked).toEqual([]);
-    expect(report.limits).toEqual({ maxWrongPasswords: 10, lockMinutes: 15 });
+    expect(report.lockedUsers).toEqual([]);
+    expect(report.limits).toEqual({ maxWrongPasswords: 10, maxWrongPasswordsForUser: 30, lockMinutes: 15 });
   });
 
   it('lists a locked computer, and unlocks it', async () => {
@@ -75,11 +80,76 @@ describe('login settings routes', () => {
 
     expect(res.status).toBe(200);
     expect(((await res.json()) as LoginsReport).locked).toEqual([]);
-    expect((await logIn(TEST_LOGIN.username, TEST_LOGIN.password)).status).toBe(200);
+    expect((await logIn('sam', 'wrong-password')).status).toBe(401);
+  });
+
+  it('unlocks only the IPv4 address that the admin gives', async () => {
+    await lockOut(ATTACKER);
+    await lockOut('192.168.1.67');
+
+    await asAdmin('/api/settings/logins/unlock', { address: ATTACKER });
+
+    expect((await logIn('sam', 'wrong-password')).status).toBe(401);
+    expect((await logIn('sam', 'wrong-password', '192.168.1.67')).status).toBe(429);
+  });
+
+  it('lists a user that is locked on all addresses, and unlocks it', async () => {
+    for (let i = 0; i < 30; i++) await logIn('sam', 'wrong-password', `192.168.2.${Math.floor(i / 5)}`);
+    const before = (await (await asAdmin('/api/settings/logins')).json()) as LoginsReport;
+    expect(before.lockedUsers).toEqual([{ username: 'sam', until: expect.any(String) }]);
+
+    const res = await asAdmin('/api/settings/logins/unlock', { username: 'Sam' });
+
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as LoginsReport).lockedUsers).toEqual([]);
+    expect((await logIn('sam', 'wrong-password', '192.168.3.1')).status).toBe(401);
+  });
+
+  describe('log', () => {
+    let log: CapturedLog;
+
+    beforeEach(() => {
+      log = captureLog();
+    });
+
+    afterEach(() => {
+      log.restore();
+    });
+
+    it('writes who unlocked a computer, from which address', async () => {
+      await asAdmin('/api/settings/logins/unlock', { address: ATTACKER });
+
+      const text = log.text('info');
+      expect(text).toContain('Login lock removed');
+      expect(text).toContain(`by=${TEST_LOGIN.username}`);
+      expect(text).toContain(`from=${ADMIN_COMPUTER}`);
+      expect(text).toContain(`address=${ATTACKER}`);
+    });
+
+    it('writes who unlocked a user, from which address', async () => {
+      await asAdmin('/api/settings/logins/unlock', { username: 'Sam' });
+
+      const text = log.text('info');
+      expect(text).toContain('Login lock removed');
+      expect(text).toContain(`by=${TEST_LOGIN.username}`);
+      expect(text).toContain(`from=${ADMIN_COMPUTER}`);
+      expect(text).toContain('username=Sam');
+    });
+
+    it('writes nothing for an unlock that the check refuses', async () => {
+      await asAdmin('/api/settings/logins/unlock', {});
+      expect(log.text()).not.toContain('Login lock removed');
+    });
   });
 
   it('refuses an unlock with no address', async () => {
     const res = await asAdmin('/api/settings/logins/unlock', { address: ' ' });
     expect(res.status).toBe(400);
+  });
+
+  it('refuses an unlock with no address and no username', async () => {
+    const res = await asAdmin('/api/settings/logins/unlock', {});
+    expect(res.status).toBe(400);
+    expect(await errorOf(res)).toBe('Give an address or a username to unlock');
   });
 });

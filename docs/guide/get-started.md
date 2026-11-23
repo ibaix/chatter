@@ -47,7 +47,7 @@ A Pi on the network cannot see which other program is connected to the machine. 
 The tool table of a Brother is a large read, so Chatter does not read it in each poll. Chatter reads it:
 
 - When the machine runs no program, and the last read is more than 10 minutes old. Chatter never reads it automatically while a program runs. If the control sends no run state, Chatter reads it only when the spindle is stopped.
-- When you click **Sync** in the **Tool table** tab of the machine. This also works while a program runs. Chatter accepts one **Sync** in 30 seconds for each machine. This limit is for all users together, not for each user.
+- When you click **Sync** in the **Tool table** tab of the machine. An Operator and an Admin have this button. A Viewer does not. This also works while a program runs. Chatter accepts one **Sync** in 30 seconds for each machine. This limit is for all users together, not for each user.
 
 The tab shows the time of the last read, for example **Synced 10:42 AM**, or **Not synced yet** before the first read. The format of the time follows the language settings of your browser. Until the next read, the tab shows the last values. If a read fails, the tab shows why.
 
@@ -117,11 +117,13 @@ Go to **Settings > Users and roles**, and click **Add user**. Give each person a
 
 | Role | Can do |
 |------|--------|
-| **Viewer** | See the machines and their history. Download files. |
-| **Operator** | All that a Viewer can do. Send files to the machines, and delete files on them. |
+| **Viewer** | See the machines and their history. See the names of the files. A Viewer cannot download or read a program, and cannot click **Sync** in the tool table. |
+| **Operator** | All that a Viewer can do. Download and read files. Send files to the machines, and delete files on them. Click **Sync** to read the tool table now. |
 | **Admin** | All that an Operator can do. Add, change, and delete machines. Manage the users and the settings. Update Chatter. |
 
 Give the username and the password to the person. They can change the password on **Settings > Your account**.
+
+After too many wrong passwords, Chatter locks a user for up to 15 minutes. An Admin can unlock the user in **Settings > Logins**. See [Locked out after wrong passwords](../security.md#locked-out-after-wrong-passwords).
 
 ![Settings, Users and roles: three users, and what each role can do](../images/chatter-users-and-roles.png)
 

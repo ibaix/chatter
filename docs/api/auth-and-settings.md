@@ -29,8 +29,8 @@ The rules for a username and a password:
 | DELETE | `/api/settings/users/:id` | Remove a user, and log out each of their browsers |
 | GET | `/api/settings/proxy` | The trusted reverse proxies, the computers that sent proxy headers, and how this request came |
 | PUT | `/api/settings/proxy` | Trust these proxies (at most 20): `{ "addresses": ["172.18.0.1"] }`. `400` for a bad address, `409` when `TRUST_PROXY` is set |
-| GET | `/api/settings/logins` | The last 50 password tries, and the computers that must wait after 10 wrong passwords |
-| POST | `/api/settings/logins/unlock` | Let a computer try again now: `{ "address": "192.168.1.44" }` |
+| GET | `/api/settings/logins` | The last 50 password tries (`tries`), the computers that must wait for a user after 10 wrong passwords (`locked`), and the users that are locked on all computers after 30 wrong passwords (`lockedUsers`) |
+| POST | `/api/settings/logins/unlock` | Let a computer try each user again now: `{ "address": "192.168.1.44" }`. For an IPv6 computer, give the /64 that the list shows. To let each computer try a user again now: `{ "username": "sam" }` |
 
 Each user endpoint replies with the new list of users. A user that does not exist gets `404`.
 You cannot change your own role, set your own password, or remove yourself here (`400`). To change your own password, use `/api/auth/password`.

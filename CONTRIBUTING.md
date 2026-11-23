@@ -24,6 +24,8 @@ Thank you for your help. Bug reports, fixes, and docs changes are welcome.
 
 Keep one kind of change in each commit, for example a fix, a feature, or a docs change.
 
+Do not add AI attribution to a commit or a pull request. Do not add a `Co-Authored-By` line for an AI tool, and do not add a "Generated with" line.
+
 ## Do not add FANUC files
 
 The FANUC FOCAS2 library belongs to FANUC. Never add its files (for example `Fwlib*.dll` or `libfwlib32*.so`) to the repo or to the Docker image. Each user uploads the library in **Settings > FANUC library**.
