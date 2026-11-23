@@ -1122,7 +1122,12 @@ export class FTPClient {
    * - Some servers do not close the data connection. A listing with a 2xx reply is then complete when no data
    *   comes in REPLY_AFTER_LIST_WAIT_MS. A pause of that length in the middle of the data also ends it. When the
    *   pause cuts a line, the listing is cut short.
-   * - Before the first byte, the wait for data is the FTP timeout. With no byte, the fallback can try.
+   * - Some old servers send 150 in an empty folder, and then no data and no reply, and do not close the data
+   *   connection. So the 150 also starts (or starts again) the wait of REPLY_AFTER_LIST_WAIT_MS. With no data and no reply in that
+   *   time, the folder is empty, and the listing is not cut short (as before the reply check). Data that comes starts
+   *   the wait again. A 2xx reply still ends the listing at once, and an error reply with no byte still lets the
+   *   fallback try.
+   * - Before the first byte and before the 150, the wait for data is the FTP timeout. With no byte, the fallback can try.
    * A listing whose data broke, or that got an error reply, keeps only its complete lines, and is cut short when it
    * lost a line. When the reply did not come, the client closes, so a late reply cannot go to the next command. The
    * walk then logs in again only when it opens another folder.
@@ -1193,7 +1198,9 @@ export class FTPClient {
         if (reply instanceof Error) task.reject(reply);
         else if (reply.code >= 200 && reply.code < 300) task.resolve(reply);
         else if (reply.code >= 300) task.reject(new Error(`Unexpected reply to LIST: ${reply.message}`));
-        // A 1xx reply (for example 150) only tells that the transfer starts
+        // A 1xx reply (for example 150) tells that the transfer starts. An empty folder can send no data after it.
+        // When data came first, the wait starts again, as for new data.
+        else startReplyWait();
       }).then(() => {
         isReplyDone = true;
         settleWhenComplete();
