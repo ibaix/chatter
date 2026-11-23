@@ -240,7 +240,7 @@ describe('auth routes', () => {
 
     it('refuses a login with a large Content-Length before the body comes', async () => {
       await setUp();
-      const server = serve({ fetch: app.fetch, port: 0 }) as Server;
+      const server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' }) as Server;
       try {
         await once(server, 'listening');
         const socket = connect((server.address() as AddressInfo).port, '127.0.0.1');

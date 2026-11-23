@@ -45,7 +45,7 @@ describe('streamed replies on a real web server', () => {
   });
 
   async function start(app: Hono): Promise<number> {
-    server = startWebServer(app, 0);
+    server = startWebServer(app, 0, { hostname: '127.0.0.1' });
     await once(server, 'listening');
     return (server.address() as AddressInfo).port;
   }

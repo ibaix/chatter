@@ -51,7 +51,7 @@ describe('a program download that the browser cancels', () => {
   it('closes the data and control connections to the machine, and logs no error', async () => {
     log = captureLog();
     machine = await startEndlessMachine();
-    server = startWebServer(appFor(machine), 0);
+    server = startWebServer(appFor(machine), 0, { hostname: '127.0.0.1' });
     await once(server, 'listening');
 
     browser = connect((server.address() as AddressInfo).port, '127.0.0.1');
