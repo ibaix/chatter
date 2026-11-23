@@ -823,6 +823,19 @@ export class FTPClient {
       const settleWhenComplete = () => {
         if (hasDataEnded && isReplyDone) settle({ isConfirmed: true });
       };
+      /**
+       * The destination is full, so the reader is slow, not the machine. Stop to read from the machine, so the file
+       * does not wait in memory, and stop the idle timer until the destination takes more. The time limit still runs.
+       */
+      const waitForDrain = () => {
+        dataSocket.pause();
+        clearTimeout(timer);
+        sink.destination.once('drain', () => {
+          if (isSettled) return;
+          dataSocket.resume();
+          startIdleTimer();
+        });
+      };
 
       dataSocket.on('data', (chunk: Buffer) => {
         if (isSettled) return;
@@ -832,7 +845,7 @@ export class FTPClient {
         }
         startIdleTimer();
         sink.bytesWritten += chunk.length;
-        sink.destination.write(chunk);
+        if (!sink.destination.write(chunk)) waitForDrain();
       });
       // 'end' comes only when the machine closes the data connection cleanly, not when the connection breaks
       dataSocket.on('end', () => {
