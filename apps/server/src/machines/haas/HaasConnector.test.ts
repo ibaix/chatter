@@ -10,7 +10,7 @@ import {
   parseQueryResponse,
   parseRunStatus,
 } from './HaasConnector.js';
-import type { HaasMachineConfig } from '../../types/index.js';
+import type { HaasMachineConfig, HaasMachineStatus } from '../../types/index.js';
 import { captureLog, type CapturedLog } from '../../logging/testSupport.js';
 import { sendForever } from '../testSupport.js';
 
@@ -214,15 +214,18 @@ function close(server: net.Server): Promise<void> {
  * ("27 - NGC - Machine Data Collection").
  */
 function startFakeQueryPort(replies: Record<string, string>): Promise<net.Server> {
-  const server = net.createServer(socket => {
-    socket.on('data', chunk => {
-      for (const query of chunk.toString('ascii').split('\n').filter(Boolean)) {
-        const reply = replies[query.trim()] ?? `?, ${query.trim()}`;
-        socket.write(`>${reply}\r\n`);
-      }
-    });
-  });
+  const server = net.createServer(socket => answerQueries(socket, replies));
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+/** Answer each Q command on this socket with its reply, or with "?" for an unknown command */
+function answerQueries(socket: net.Socket, replies: Record<string, string>): void {
+  socket.on('data', chunk => {
+    for (const query of chunk.toString('ascii').split('\n').filter(Boolean)) {
+      const reply = replies[query.trim()] ?? `?, ${query.trim()}`;
+      socket.write(`>${reply}\r\n`);
+    }
+  });
 }
 
 /** A connector that reads only the query port of this fake server */
@@ -440,27 +443,72 @@ describe('Haas openSocket when the socket closes before it connects', () => {
 });
 
 describe('Haas reply size limits', () => {
+  const DELIMITER = '\n\x03\x02';
+  const LINE_TOO_LARGE =
+    'Data stream: The machine sent a reply larger than 1 MB. Chatter stopped reading it and closed the connection.';
+  const QUERY_TOO_LARGE =
+    'Query error: The machine sent a reply larger than 64 KB. Chatter stopped reading it and closed the connection.';
+  /**
+   * After Chatter closes the connection, the socket buffers still hold some bytes of the endless reply. On Linux the
+   * receive and send buffers can hold about 10 MB together, so the margin is wide.
+   */
+  const SOCKET_BUFFER_MARGIN = 32 * 1024 * 1024;
   let server: net.Server;
   let connector: HaasConnector;
   let log: CapturedLog;
-  /** For each connection, the bytes that the fake sent until the connection closed */
+  /** For each endless reply, the bytes that the fake sent until the connection closed */
   let sentBytes: Promise<number>[];
   /** The side of the machine of each connection */
   let sockets: net.Socket[];
 
   /**
-   * A fake port that, after the first request, sends an endless reply with no end of line.
-   * Only on the first connection: a later connection gets no reply, so a test sees one endless reply.
+   * A fake port. On the first connection, after the first request, it sends an endless reply with no end.
+   * Each later connection gets `answer`, as from a normal machine.
    */
-  async function startEndlessPort(): Promise<number> {
+  async function startPort(answer: (socket: net.Socket) => void = () => {}): Promise<number> {
     sentBytes = [];
     sockets = [];
     server = net.createServer(socket => {
       sockets.push(socket);
       if (sockets.length === 1) socket.once('data', () => sentBytes.push(sendForever(socket)));
+      else answer(socket);
     });
     return listen(server);
   }
+
+  /**
+   * A fake port that, after the first request, sends these parts with a short wait between them.
+   * It answers each later query with "?", so the other queries of a poll do not wait for their time limit.
+   */
+  async function startSlowPort(parts: string[]): Promise<number> {
+    sentBytes = [];
+    sockets = [];
+    server = net.createServer(socket => {
+      sockets.push(socket);
+      socket.once('data', async () => {
+        for (const part of parts) {
+          socket.write(part);
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        answerQueries(socket, {});
+      });
+    });
+    return listen(server);
+  }
+
+  /** Poll until `isDone`. Gives the last status and the errors of all the polls. */
+  async function pollUntil(isDone: (status: HaasMachineStatus) => boolean) {
+    const errors: string[] = [];
+    const status = await vi.waitFor(async () => {
+      const next = await connector.poll();
+      errors.push(...next.errors);
+      if (!isDone(next)) throw new Error('Not done yet');
+      return next;
+    }, { timeout: 5000 });
+    return { status, errors };
+  }
+
+  const dataStreamErrors = (errors: string[]) => errors.filter(error => error.startsWith('Data stream:'));
 
   beforeEach(() => {
     log = captureLog();
@@ -473,41 +521,81 @@ describe('Haas reply size limits', () => {
     await close(server);
   });
 
-  it('closes the data stream when a line has no end, keeps no more than the limit, and tells why at the next poll', async () => {
-    const dataPort = await startEndlessPort();
+  it('closes the data stream at a line with no end, tells why once, and reads the next connection normally', async () => {
+    const dataPort = await startPort(socket => socket.once('data', () => socket.write(`ActiveTool|5${DELIMITER}`)));
     connector = new HaasConnector({ id: 'vf2', name: 'VF2', host: '127.0.0.1', dataPort, queryPort: CLOSED_PORT });
-    type Reader = { dataBuffer: Buffer; handleDataStreamData: (...args: unknown[]) => void };
-    const handle = (HaasConnector.prototype as unknown as Reader).handleDataStreamData;
-    const bufferSizes: number[] = [];
-    vi.spyOn(connector as unknown as Reader, 'handleDataStreamData').mockImplementation(function (this: Reader, ...args) {
-      bufferSizes.push(this.dataBuffer.length);
-      handle.apply(this, args);
-    });
 
-    await connector.poll();
-    await vi.waitFor(() => expect(sentBytes).toHaveLength(1));
-    await sentBytes[0];
-    const status = await connector.poll();
+    // The error can show in the first or in a later poll. That depends on when the endless reply reaches the limit.
+    const { errors } = await pollUntil(status => status.data.toolNumber === 5);
 
-    expect(status.errors).toContain(
-      'Data stream: The machine sent a reply larger than 1 MB. Chatter stopped reading it and closed the connection.');
-    // Before each new chunk, the connector keeps no more than the limit
-    expect(Math.max(...bufferSizes)).toBeLessThanOrEqual(MAX_HAAS_LINE_BYTES);
+    expect(await sentBytes[0]).toBeLessThan(MAX_HAAS_LINE_BYTES + SOCKET_BUFFER_MARGIN);
+    expect(sockets).toHaveLength(2);
+    expect(dataStreamErrors(errors)).toEqual([LINE_TOO_LARGE]);
+    expect(dataStreamErrors((await connector.poll()).errors)).toEqual([]);
     expect(log.text('warn').split('\n')).toHaveLength(1);
     expect(log.text('warn')).toContain('vf2');
     expect(log.text('warn')).toContain(String(MAX_HAAS_LINE_BYTES));
   });
 
-  it('fails a query whose reply has no end of line at the limit, and closes the query port', async () => {
-    const queryPort = await startEndlessPort();
+  it('fails a query whose reply has no end of line at the limit, and connects the query port again at the next poll', async () => {
+    const queryPort = await startPort(socket => answerQueries(socket, { '?Q104': 'MODE, MEM' }));
     connector = new HaasConnector({ id: 'vf2', name: 'VF2', host: '127.0.0.1', dataPort: CLOSED_PORT, queryPort });
+
+    const first = await connector.poll();
+
+    expect(first.errors).toContain(QUERY_TOO_LARGE);
+    expect(first.data.mode).toBeUndefined();
+    expect(await sentBytes[0]).toBeLessThan(MAX_HAAS_QUERY_REPLY_BYTES + SOCKET_BUFFER_MARGIN);
+
+    const { errors } = await pollUntil(status => status.data.mode === 'MEM');
+
+    expect(sockets).toHaveLength(2);
+    expect(errors).not.toContain(QUERY_TOO_LARGE);
+    expect(log.text('warn').split('\n')).toHaveLength(1);
+    expect(log.text('warn')).toContain(String(MAX_HAAS_QUERY_REPLY_BYTES));
+  });
+
+  it('reads a data stream line of exactly the limit, when the delimiter comes in the next chunk', async () => {
+    const line = 'ActiveTool|7|';
+    const dataPort = await startSlowPort([line + 'X'.repeat(MAX_HAAS_LINE_BYTES - line.length), DELIMITER]);
+    connector = new HaasConnector({ name: 'VF2', host: '127.0.0.1', dataPort, queryPort: CLOSED_PORT });
+
+    const { errors } = await pollUntil(status => status.data.toolNumber === 7);
+
+    expect(dataStreamErrors(errors)).toEqual([]);
+    expect(sockets).toHaveLength(1);
+  });
+
+  it('closes the data stream at a line of one byte more than the limit', async () => {
+    const line = 'ActiveTool|7|';
+    const dataPort = await startSlowPort([line + 'X'.repeat(MAX_HAAS_LINE_BYTES + 1 - line.length)]);
+    connector = new HaasConnector({ name: 'VF2', host: '127.0.0.1', dataPort, queryPort: CLOSED_PORT });
+
+    const { status, errors } = await pollUntil(next => dataStreamErrors(next.errors).length > 0);
+
+    expect(dataStreamErrors(errors)).toEqual([LINE_TOO_LARGE]);
+    expect(status.data.toolNumber).toBeUndefined();
+  });
+
+  it('reads a query reply of exactly the limit, when the end of line comes in the next chunk', async () => {
+    const reply = '>MODE, MEM';
+    const queryPort = await startSlowPort([reply + ' '.repeat(MAX_HAAS_QUERY_REPLY_BYTES - reply.length), '\n']);
+    connector = new HaasConnector({ name: 'VF2', host: '127.0.0.1', dataPort: CLOSED_PORT, queryPort });
 
     const status = await connector.poll();
 
-    expect(status.errors).toContain(
-      'Query error: The machine sent a reply larger than 64 KB. Chatter stopped reading it and closed the connection.');
+    expect(status.errors).not.toContain(QUERY_TOO_LARGE);
+    expect(status.data.mode).toBe('MEM');
+  });
+
+  it('fails a query reply of one byte more than the limit', async () => {
+    const reply = '>MODE, MEM';
+    const queryPort = await startSlowPort([reply + ' '.repeat(MAX_HAAS_QUERY_REPLY_BYTES + 1 - reply.length)]);
+    connector = new HaasConnector({ name: 'VF2', host: '127.0.0.1', dataPort: CLOSED_PORT, queryPort });
+
+    const status = await connector.poll();
+
+    expect(status.errors).toContain(QUERY_TOO_LARGE);
     expect(status.data.mode).toBeUndefined();
-    await expect(sentBytes[0]).resolves.toBeGreaterThan(MAX_HAAS_QUERY_REPLY_BYTES);
-    expect(log.text('warn')).toContain(String(MAX_HAAS_QUERY_REPLY_BYTES));
   });
 });
