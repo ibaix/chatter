@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Auth, UserSession } from './Auth.js';
-import { currentSession, knownDevice, logInFirst, markSessionSeen, setDeviceCookie, type LoginGuard } from './authRoutes.js';
+import { checkedSession, currentSession, knownDevice, logInFirst, markSessionSeen, setDeviceCookie, type LoginGuard } from './authRoutes.js';
 import { deviceName } from './deviceName.js';
 import { originOf } from './requestOrigin.js';
 
@@ -26,9 +26,9 @@ export function sessionRoutes(guard: Pick<LoginGuard, 'auth' | 'proxySettings'>)
   return new Hono()
     // A visible Chatter page sends this from time to time, so its login stays in use. A hidden page does not send it.
     .post('/auth/sessions/in-use', c => {
-      const current = currentSession(c, auth);
-      if (!current) return logInFirst(c);
-      markSessionSeen(c, guard, current);
+      const checked = checkedSession(c, auth);
+      if (!checked) return logInFirst(c);
+      markSessionSeen(c, guard, checked);
       return c.body(null, 204);
     })
 

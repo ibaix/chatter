@@ -62,10 +62,22 @@ export interface LoginGuard {
   proxySettings: ProxySettings;
 }
 
+/** The valid session of the browser that sent the request, with the token of its cookie */
+export interface CheckedSession {
+  session: UserSession;
+  token: string;
+}
+
+/** The session of the browser that sent the request and the token that was checked, or null */
+export function checkedSession(c: Context, auth: Auth): CheckedSession | null {
+  const token = getCookie(c, SESSION_COOKIE);
+  const session = token === undefined ? null : auth.sessionOf(token);
+  return session && token !== undefined ? { session, token } : null;
+}
+
 /** The session of the browser that sent the request, or null */
 export function currentSession(c: Context, auth: Auth): UserSession | null {
-  const token = getCookie(c, SESSION_COOKIE);
-  return token === undefined ? null : auth.sessionOf(token);
+  return checkedSession(c, auth)?.session ?? null;
 }
 
 /**
@@ -206,20 +218,20 @@ function withoutFailing(message: string, save: () => void): void {
 /**
  * Save that the browser of the request was used now, so its session does not stop for no use.
  * A cookie from a login over plain HTTP has no Secure flag. When the browser uses it over HTTPS, it gets the cookie again
- * with the Secure flag. This occurs only when the use is saved (at most once in SEEN_INTERVAL_MS), so most replies set no cookie.
+ * with the Secure flag. This occurs only when the use is saved: normally at most once in SEEN_INTERVAL_MS, and also
+ * each time the address of the browser changes. So most replies set no cookie. The cookie gets the token that was checked.
  */
 export function markSessionSeen(
   c: Context,
   { auth, proxySettings }: Pick<LoginGuard, 'auth' | 'proxySettings'>,
-  session: UserSession,
+  { session, token }: CheckedSession,
 ): void {
   const origin = originOf(c, proxySettings);
   let saved = false;
   withoutFailing('[Sessions] Could not save when a browser was used', () => {
     saved = auth.markSeen(session, origin.address);
   });
-  const token = getCookie(c, SESSION_COOKIE);
-  if (saved && origin.isHttps && token !== undefined) setSessionCookie(c, origin, token, auth.secondsLeftOf(session));
+  if (saved && origin.isHttps) setSessionCookie(c, origin, token, auth.secondsLeftOf(session));
 }
 
 /**
@@ -241,10 +253,10 @@ export function isStillLoggedIn(c: Context, auth: Auth): boolean {
 export function requireLogin(guard: LoginGuard) {
   const { auth, proxySettings } = guard;
   return createMiddleware<LoggedInEnv>(async (c, next) => {
-    const session = currentSession(c, auth);
-    if (session) {
-      markSessionSeen(c, guard, session);
-      c.set('user', session.user);
+    const browser = checkedSession(c, auth);
+    if (browser) {
+      markSessionSeen(c, guard, browser);
+      c.set('user', browser.session.user);
       return next();
     }
 
