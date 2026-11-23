@@ -5,6 +5,7 @@ Tests that keep the guardrails in [AGENTS.md](../../AGENTS.md#guardrails):
 - No FANUC FOCAS2 files are in git.
 - `docker-compose.yml` keeps the volume names, and the folder name `chatter` stays in the Docker package and on the Pi card.
 - `docker-compose.yml` and `docker-compose.dev.yml` keep the deduplication of VictoriaMetrics, so a second history restore does not double the samples.
+- `docker-compose.yml` keeps the facts that the docs quote: the container name `chatterbox` (for `docker logs chatterbox`) and the port entry `"3001:3001"` of Chatter (the HTTPS page tells users to change it). To change one, change the docs in the same change.
 - No compose file opens VictoriaMetrics, vmalert or the alert port 3002 to the network.
 - The update helper on the Pi (`STEPS` in `update-chatter.sh`) and Chatter (`UPDATE_STEPS` in `packages/shared`) have the same steps, in the same order.
 - Each docs link in the app goes to a page and a heading that exist. The links of released apps (`guide/update#back-up` and `guide/manage`) always stay.

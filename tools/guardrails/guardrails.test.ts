@@ -15,6 +15,7 @@ const trackedFiles = () =>
 
 interface ComposeService {
   command?: string[];
+  container_name?: string;
   ports?: ComposePort[];
   volumes?: string[];
 }
@@ -96,6 +97,19 @@ describe('closed ports', () => {
         .map(port => `${service}: ${JSON.stringify(port)}`),
     );
     expect(opened).toEqual([]);
+  });
+});
+
+describe('facts that the docs quote', () => {
+  // The docs tell users to run "docker logs chatterbox", and to change "3001:3001" to "127.0.0.1:3001:3001".
+  const { chatterbox } = compose('docker-compose.yml').services;
+
+  it('keeps the container name chatterbox in docker-compose.yml', () => {
+    expect(chatterbox.container_name).toBe('chatterbox');
+  });
+
+  it('publishes the port of Chatter as "3001:3001" in docker-compose.yml', () => {
+    expect(chatterbox.ports).toContain('3001:3001');
   });
 });
 
