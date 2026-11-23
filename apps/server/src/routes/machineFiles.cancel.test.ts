@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Hono } from 'hono';
 import type { LoggedInEnv } from '../auth/authRoutes.js';
 import { FTPClient } from '../ftp/FTPClient.js';
+import { MachineBusyError } from '../ftp/sessionQueue.js';
 import { HOST, startEndlessMachine, waitFor, type EndlessMachine } from '../ftp/testSupport.js';
 import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
 import type { HardwarePoller } from '../polling/poller.js';
@@ -126,10 +127,13 @@ describe('a program download that the browser cancels', () => {
 
     const upload = startBrowserUpload(port);
     await waitFor(() => uploadOutcomes.length === 1);
-    expect(uploadOutcomes).toHaveLength(1);
     upload.destroy();
 
-    expect(await uploadOutcomes[0]).toBeInstanceOf(Error);
+    // The upload stopped because the browser left, not because the machine was busy
+    const outcome = await uploadOutcomes[0];
+    expect(outcome).toBeInstanceOf(Error);
+    expect(outcome).not.toBeInstanceOf(MachineBusyError);
+    expect((outcome as Error).message).toBe('FTP upload error: Client connection prematurely closed.');
     download.socket.destroy();
     await waitFor(() => machine!.openControlConnections() === 0);
     expect(machine.commands).not.toContain('STOR');

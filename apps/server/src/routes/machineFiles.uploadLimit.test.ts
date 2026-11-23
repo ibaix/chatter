@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import type { LoggedInEnv } from '../auth/authRoutes.js';
 import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
 import type { HardwarePoller } from '../polling/poller.js';
+import { PROGRAM_UPLOAD_LIMIT_BYTES } from '@local-chatter/shared';
 import { machineFileRoutes } from './machineFiles.js';
 
 // The server holds the files of an upload in memory, and a Pi can have only 512 MB. Each machine has its own FTP queue,
@@ -36,7 +37,10 @@ function appWith(held: ReturnType<typeof heldUploads>) {
       return { success: [], failed: [] };
     }),
   };
-  const poller = { getConnector: () => connector as unknown as BaseMachineConnector } as unknown as HardwarePoller;
+  // Machine "missing" does not exist
+  const poller = {
+    getConnector: (id: string) => (id === 'missing' ? undefined : connector as unknown as BaseMachineConnector),
+  } as unknown as HardwarePoller;
   const app = new Hono<LoggedInEnv>()
     .use(async (c, next) => {
       c.set('user', { id: 1, username: 'operator', role: 'operator' });
@@ -162,5 +166,50 @@ describe('the limit of uploads at the same time, for all machines', () => {
     expect(replies).toEqual([500, 500, 500]);
     connector.uploadFile.mockImplementation(held.upload);
     expect((await post(app, '/machine/1/files/upload', uploadForm())).status).toBe(200);
+  });
+
+  /** An upload to machine 1 that the browser stops while the machine runs it */
+  async function abortedUpload(app: Hono<LoggedInEnv>, connector: ReturnType<typeof appWith>['connector']) {
+    connector.uploadFile.mockImplementationOnce((...args: unknown[]) => {
+      const signal = args[3] as AbortSignal;
+      return new Promise<void>((_, reject) => signal.addEventListener('abort', () => reject(new Error('The browser left'))));
+    });
+    const browser = new AbortController();
+    const reply = app.request('/machine/1/files/upload', { method: 'POST', body: uploadForm(), signal: browser.signal });
+    await until(() => connector.uploadFile.mock.calls.length === 1);
+    browser.abort();
+    return reply;
+  }
+
+  function tooLargeForm(): FormData {
+    const form = new FormData();
+    form.append('file', new File([Buffer.alloc(PROGRAM_UPLOAD_LIMIT_BYTES + 1)], 'O1000.nc'));
+    form.append('path', '/O1000.nc');
+    return form;
+  }
+
+  // A place that an upload does not give back blocks the uploads to that machine, and after two, to all machines
+  it.each([
+    { name: 'a body that is too large', status: 413, send: (app: Hono<LoggedInEnv>) => post(app, '/machine/1/files/upload', tooLargeForm()) },
+    { name: 'a machine that does not exist', status: 404, send: (app: Hono<LoggedInEnv>) => post(app, '/machine/missing/files/upload', uploadForm()) },
+    {
+      name: 'a file that is already on the machine',
+      status: 409,
+      send: (app: Hono<LoggedInEnv>, connector: ReturnType<typeof appWith>['connector']) => {
+        connector.uploadFile.mockRejectedValueOnce(new Error('File "O1000.nc" already exists. Enable overwrite to replace it.'));
+        return post(app, '/machine/1/files/upload', uploadForm());
+      },
+    },
+    { name: 'a browser that leaves', status: 499, send: abortedUpload },
+  ])('frees the place of an upload after $name', async ({ status, send }) => {
+    held = heldUploads();
+    const { app, connector } = appWith(held);
+
+    expect((await send(app, connector)).status).toBe(status);
+
+    const next = [post(app, '/machine/1/files/upload', uploadForm()), post(app, '/machine/2/files/upload', uploadForm())];
+    await until(() => held?.count() === 2);
+    held.endAll();
+    expect((await Promise.all(next)).map(reply => reply.status)).toEqual([200, 200]);
   });
 });

@@ -1214,6 +1214,17 @@ describe('API Routes', () => {
       expect(log.text('error')).toContain('550 Permission denied');
     });
 
+    // The signal of the request takes a waiting delete out of the queue when the browser leaves
+    it('gives the signal of the request to the delete', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const deleteFile = vi.spyOn(poller.getConnector(machine.id)!, 'deleteFile').mockResolvedValue();
+
+      const res = await call('DELETE', `/api/machine/${machine.id}/files?path=/PRG/O1000.NC`);
+
+      expect(res.status).toBe(200);
+      expect(deleteFile).toHaveBeenCalledWith('/PRG/O1000.NC', expect.any(AbortSignal));
+    });
+
     it('uploads one file and records it', async () => {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
       const uploadFile = vi.spyOn(poller.getConnector(machine.id)!, 'uploadFile').mockResolvedValue();

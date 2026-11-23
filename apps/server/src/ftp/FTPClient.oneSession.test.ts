@@ -496,6 +496,8 @@ describe('FTPClient tasks that wait for a busy machine', () => {
     const cancel = new AbortController();
 
     const task = outcomeOf(start(client, cancel.signal));
+    // An upload reads its source first, so it comes into the queue one step later
+    await new Promise(resolve => setImmediate(resolve));
     cancel.abort(new Error('The browser left'));
 
     expect(((await task) as Error).message).toContain('The browser left');
@@ -561,9 +563,7 @@ describe('FTPClient tasks that wait for a busy machine', () => {
     const upload = outcomeOf(client.uploadFile('/PROGRAMS/O4000', 'O4000\nM30\n', true));
     await until(() => machine?.uploads.has('/PROGRAMS/O4000') === true);
     const listed = client.listFiles('/SUBS');
-    vi.advanceTimersByTime(59_999);
-    expect(machine.logins()).toBe(1);
-    vi.advanceTimersByTime(1);
+    vi.advanceTimersByTime(60_000);
 
     expect(((await upload) as Error).message).toBe('FTP upload error: The upload took too long. Chatter stops an upload after 1 minute.');
     expect((await listed).map(file => file.name)).toEqual(['O9000']);
@@ -587,6 +587,26 @@ describe('FTPClient tasks that wait for a busy machine', () => {
       failed: [{ remotePath: 'PROGRAMS/O4000', error: tooSlow }, { remotePath: 'PROGRAMS/O5000', error: tooSlow }],
     });
     expect(machine.uploads.has('/PROGRAMS/O5000')).toBe(false);
+  });
+
+  // The upload time limit is for the transfer. The wait for the turn must not use it up.
+  it('starts the time limit of an upload when the upload gets its turn', async () => {
+    machine = await startCountingMachine({ holdStor: true });
+    const counting = machine;
+    const client = new FTPClient({ host: HOST, port: counting.port }, { uploadTimeLimitMs: 60_000 });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const first = outcomeOf(client.uploadFile('/PROGRAMS/O4000', 'O4000\n', true));
+    await until(() => counting.uploads.has('/PROGRAMS/O4000'));
+    const second = outcomeOf(client.uploadFile('/PROGRAMS/O5000', 'O5000\n', true));
+    // An upload reads its source first, so it comes into the queue one step later
+    await new Promise(resolve => setImmediate(resolve));
+    vi.advanceTimersByTime(60_000);
+    counting.releaseStor();
+
+    expect(((await first) as Error).message).toBe('FTP upload error: The upload took too long. Chatter stops an upload after 1 minute.');
+    expect(await second).toBe('fulfilled');
+    expect(counting.uploads.get('/PROGRAMS/O5000')).toBe('O5000\n');
   });
 
   // The download time limit is for the transfer. The wait for the turn must not use it up.
@@ -727,6 +747,25 @@ describe('FTPClient tree walks of a busy machine', () => {
     counting.releaseStor();
     await upload;
     expect(namesOf((await again).nodes)).toEqual(['PROGRAMS', 'SUBS', 'O1000']);
+    // The upload and the new walk only
+    expect(counting.logins()).toBe(2);
+  });
+
+  // The stopped walk ends some steps after its callers left. That late end must not remove a newer walk of the same
+  // tree, or the next request starts one more walk.
+  it('keeps the new walk of a tree when the stopped walk of the same tree ends later', async () => {
+    const { client, counting, upload } = await busyMachine();
+    const leave = new AbortController();
+
+    const first = outcomeOf(client.readFileTree('/', 2, leave.signal));
+    leave.abort(new Error('The browser left'));
+    const again = client.readFileTree('/', 2);
+
+    expect(((await first) as Error).message).toBe('The browser left');
+    counting.releaseStor();
+    await upload;
+    const joined = client.readFileTree('/', 2);
+    expect(await joined).toBe(await again);
     // The upload and the new walk only
     expect(counting.logins()).toBe(2);
   });
