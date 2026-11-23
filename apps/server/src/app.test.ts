@@ -1504,6 +1504,18 @@ describe('API Routes', () => {
       await Promise.all([other, ...readers.slice(1)].map(reader => reader.cancel()));
     });
 
+    it('keeps the limit of 5 when a login opens 10 live streams, one after the other', async () => {
+      const readers = [];
+      for (let i = 0; i < 10; i++) readers.push(await openEvents(cookie));
+
+      // Each closed stream ends a moment later and frees its slot. That must not free the slot of an open stream.
+      const rests = await Promise.all(readers.map(restIfEnded));
+
+      const states = rests.map(rest => (rest === null ? 'open' : rest.includes('retry: 60000') ? 'closed, retry' : 'closed'));
+      expect(states).toEqual([...Array<string>(5).fill('closed, retry'), ...Array<string>(5).fill('open')]);
+      await Promise.all(readers.slice(5).map(reader => reader.cancel()));
+    });
+
     it('counts the streams of a program with a password (HTTP Basic) for its user', async () => {
       const basic = { Authorization: `Basic ${Buffer.from(`${TEST_LOGIN.username}:${TEST_LOGIN.password}`).toString('base64')}` };
       const browser = await openEvents(cookie);
