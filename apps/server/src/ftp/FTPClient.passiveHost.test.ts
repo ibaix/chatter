@@ -116,11 +116,13 @@ function readAll(socket: net.Socket): Promise<string> {
 
 /** Reply to the commands of FTPClient and basic-ftp. RETR, LIST and STOR use the next data connection. */
 function answerCommands(socket: net.Socket, {
-  pasvReply, epsvReply, nextDataSocket, onUpload, commands, lines, sendFile, sendListing, passReply, replies, storReply
+  pasvReply, epsvReply, nextDataSocket, onUpload, commands, lines, sendFile, sendListing, passReply, replies, storReply, no150ForList
 }: {
   pasvReply: () => string;
   /** The reply to PASS, or undefined for no reply */
   passReply: string | undefined;
+  /** No 150 before the LIST with this number on this control connection (1 for the first) */
+  no150ForList: number;
   sendFile: (transfer: Omit<FileTransfer, 'retrNumber'>) => void;
   sendListing: (transfer: Omit<FileTransfer, 'retrNumber'>) => void;
   replies: Record<string, MachineReply>;
@@ -140,6 +142,7 @@ function answerCommands(socket: net.Socket, {
     CWD: '250 OK',
   };
   socket.write('220 Fake machine\r\n');
+  let listCount = 0;
   let buffered = '';
   socket.on('data', async chunk => {
     buffered += chunk.toString();
@@ -157,7 +160,8 @@ function answerCommands(socket: net.Socket, {
         socket.write('150 Opening data connection\r\n');
         sendFile({ control: socket, data: await nextDataSocket() });
       } else if (command === 'LIST') {
-        socket.write('150 Opening data connection\r\n');
+        listCount += 1;
+        if (listCount !== no150ForList) socket.write('150 Opening data connection\r\n');
         sendListing({ control: socket, data: await nextDataSocket() });
       } else if (command === 'STOR') {
         socket.write('150 Ready for data\r\n');
@@ -199,6 +203,8 @@ interface FakeMachineOptions {
   refuseLoginFrom?: number;
   /** The machine sends no reply to PASS from this control connection on (1 for the first) */
   holdLoginFrom?: number;
+  /** The machine sends no 150 before the LIST with this number on one control connection (1 for the first) */
+  no150ForList?: number;
 }
 
 /** The reply text, or what the machine does in place of a reply */
@@ -213,7 +219,7 @@ const MACHINE_DEFAULTS = {
 async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeMachine> {
   const {
     controlHost, pasvReplyHost, supportsEpsv, bareAddress, pasvReplyFor, refuseFirstPasv, programText, listing, replies, storReply,
-    refuseLoginFrom = Infinity, holdLoginFrom = Infinity, sendFile = (transfer: FileTransfer) => sendWholeFile(transfer, programText),
+    refuseLoginFrom = Infinity, holdLoginFrom = Infinity, no150ForList = 0, sendFile = (transfer: FileTransfer) => sendWholeFile(transfer, programText),
     sendListing = (transfer: FileTransfer) => sendWholeFile(transfer, listing)
   } = { ...MACHINE_DEFAULTS, ...options };
   const dataSockets: net.Socket[] = [];
@@ -264,6 +270,7 @@ async function startFakeMachine(options: FakeMachineOptions = {}): Promise<FakeM
       : machine.controlConnections >= refuseLoginFrom ? '530 Login incorrect' : '230 Logged in';
     answerCommands(socket, {
       passReply,
+      no150ForList,
       pasvReply: nextPasvReply, epsvReply, nextDataSocket, replies, storReply, onUpload: text => { machine.uploadedText = text; }, commands: machine.commands, lines: machine.lines,
       sendFile: transfer => {
         machine.retrCount += 1;
@@ -1334,6 +1341,16 @@ describe('FTPClient raw LIST that ends early', () => {
     return { delays, restore: () => { globalThis.setTimeout = fakeSetTimeout; } };
   }
 
+  /**
+   * Resolve when the client handled the 150 and the clean end of the data, after a listing in one chunk with no reply.
+   * With the FTP timeout of this block (200 ms), each wait is 200 ms: the wait for the first byte, and the waits that
+   * the 150, the data and the end start. The 150 and the data come on different connections, in any order. A move of
+   * the clock before the 150 would let a late 150 start the wait again.
+   */
+  async function untilAfter150AndEnd(timers: { delays: number[] }): Promise<void> {
+    await until(() => timers.delays.filter(ms => ms === timeoutMs).length >= 4);
+  }
+
   /** The lines that the machine got on the last control connection, from its USER */
   const linesOfLastSession = () => {
     const lines = machine?.lines ?? [];
@@ -1382,8 +1399,9 @@ describe('FTPClient raw LIST that ends early', () => {
         data.write(LISTING);
         control.write('226 Transfer complete\r\n');
       }, { timeoutMs: 5_000 });
-      // The data and the 226 each start a 1 s wait, in any order. After both, the wait ends 1 s after the 226.
-      await until(() => timers.delays.filter(ms => ms === 1_000).length >= 2);
+      // The 150, the data and the 226 each start a 1 s wait. The data can come before or after the replies. After all
+      // three, the wait ends 1 s after the last.
+      await until(() => timers.delays.filter(ms => ms === 1_000).length >= 3);
       expect(await hasSettled(tree)).toBe(false);
 
       vi.advanceTimersByTime(999);
@@ -1409,8 +1427,8 @@ describe('FTPClient raw LIST that ends early', () => {
         started.control.write('226 Transfer complete\r\n');
       }, { timeoutMs: 5_000 });
       const replyWaits = () => timers.delays.filter(ms => ms === 1_000).length;
-      // The data and the 226 each start a 1 s wait, in any order
-      await until(() => replyWaits() >= 2);
+      // The 150, the data and the 226 each start a 1 s wait. The data can come before or after the replies.
+      await until(() => replyWaits() >= 3);
       vi.advanceTimersByTime(900);
       const waitsBefore = replyWaits();
       transfer?.data.write(SUB_LISTING);
@@ -1465,14 +1483,11 @@ describe('FTPClient raw LIST that ends early', () => {
   // Some old servers send no reply to LIST, and no line end after the last line. A clean end of the data ends the
   // listing, as for a RETR with no reply.
   it('keeps the whole listing, also a last line with no line end, when the data ends cleanly and no reply comes', async () => {
+    const timers = recordTimerDelays();
     const log = captureLog();
     try {
-      let isClosed: (() => boolean) | undefined;
-      const { tree } = await startTree(({ data }) => {
-        isClosed = trackClose(data);
-        data.end(`${LISTING}${CUT_LINE}00`);
-      });
-      await until(() => isClosed?.() === true);
+      const { tree } = await startTree(({ data }) => data.end(`${LISTING}${CUT_LINE}00`));
+      await untilAfter150AndEnd(timers);
 
       expect(await hasSettled(tree)).toBe(false);
       vi.advanceTimersByTime(longWaitMs);
@@ -1484,6 +1499,7 @@ describe('FTPClient raw LIST that ends early', () => {
       expect(listCount()).toBe(1);
     } finally {
       log.restore();
+      timers.restore();
     }
   });
 
@@ -1503,7 +1519,8 @@ describe('FTPClient raw LIST that ends early', () => {
         isControlClosed = trackClose(transfer.control);
         transfer.data.write(FOLDER_LINE + LISTING.trimEnd());
       }, { depth: 2, timeoutMs: 5_000 });
-      await until(() => timers.delays.includes(1_000));
+      // The 150 and the data each start a 1 s wait, in any order
+      await until(() => timers.delays.filter(ms => ms === 1_000).length >= 2);
       expect(await hasSettled(tree)).toBe(false);
 
       vi.advanceTimersByTime(999);
@@ -1529,6 +1546,38 @@ describe('FTPClient raw LIST that ends early', () => {
     }
   });
 
+  // Some old servers answer LIST in an empty folder with 150, then send no data and no reply, and keep the data
+  // connection open. Before the reply check, Chatter accepted an empty listing 1 s after the 150. It must not wait for
+  // the FTP timeout and then send the "LIST -a" of basic-ftp.
+  it('gives an empty folder 1 s after the 150 when no data and no reply come on the open data connection', async () => {
+    const timers = recordTimerDelays();
+    const log = captureLog();
+    try {
+      let isControlClosed: (() => boolean) | undefined;
+      const { tree } = await startTree(transfer => {
+        isControlClosed = trackClose(transfer.control);
+      }, { timeoutMs: 5_000 });
+      await until(() => timers.delays.includes(1_000));
+      expect(await hasSettled(tree)).toBe(false);
+
+      vi.advanceTimersByTime(999);
+      expect(await hasSettled(tree)).toBe(false);
+      vi.advanceTimersByTime(1);
+
+      const { nodes, isCutShort } = await treeOf(tree);
+      expect(nodes).toEqual([]);
+      expect(isCutShort).toBe(false);
+      expect(log.text('warn')).not.toContain(CUT_WARNING);
+      // No "LIST -a" of basic-ftp
+      expect(listCount()).toBe(1);
+      // A late 226 cannot answer the next command, because the client closed
+      await until(() => isControlClosed?.() === true);
+    } finally {
+      log.restore();
+      timers.restore();
+    }
+  });
+
   it('waits again when more data comes before the reply, and does not cut the listing at a short pause', async () => {
     const timers = recordTimerDelays();
     let transfer: FileTransfer | undefined;
@@ -1538,7 +1587,8 @@ describe('FTPClient raw LIST that ends early', () => {
         started.data.write(LISTING.slice(0, 10));
       }, { timeoutMs: 5_000 });
       const idleWaits = () => timers.delays.filter(ms => ms === 1_000).length;
-      await until(() => idleWaits() >= 1);
+      // The 150 and the first data each start a 1 s wait, in any order
+      await until(() => idleWaits() >= 2);
       vi.advanceTimersByTime(900);
       const waitsBefore = idleWaits();
       transfer?.data.write(LISTING.slice(10));
@@ -1580,18 +1630,21 @@ describe('FTPClient raw LIST that ends early', () => {
   // then be read as the reply to the next CWD, so the walk opens the next folder on a new connection.
   it('reads the next folder on a new connection after a listing with no reply', async () => {
     let first: FileTransfer | undefined;
-    let isClosed: (() => boolean) | undefined;
+    const timers = recordTimerDelays();
     const { tree } = await startTree(transfer => {
       if (transfer.retrNumber > 1) {
         sendWholeFile(transfer, LISTING);
         return;
       }
       first = transfer;
-      isClosed = trackClose(transfer.data);
       transfer.data.end(FOLDER_LINE + LISTING);
     }, { depth: 2 });
-    await until(() => isClosed?.() === true);
-    vi.advanceTimersByTime(longWaitMs);
+    try {
+      await untilAfter150AndEnd(timers);
+      vi.advanceTimersByTime(longWaitMs);
+    } finally {
+      timers.restore();
+    }
     if (first && !first.control.destroyed) first.control.write('226 Transfer complete\r\n');
 
     const { nodes, isCutShort } = await treeOf(tree);
@@ -1603,10 +1656,12 @@ describe('FTPClient raw LIST that ends early', () => {
 
   // A raw LIST that gets no reply closes the client. The new session starts in the login folder, so the fallback
   // must open the folder of the walk again.
+  // After a 150 with no byte and no reply, the folder is empty (see the test of the empty folder). With no 150, the
+  // client waits for the FTP timeout, and then the fallback tries.
   it.each([
-    { name: 'the data connection breaks before the first byte', fail: (data: net.Socket) => data.resetAndDestroy(), waitMs: 0 },
-    { name: 'no byte and no reply come in the FTP timeout', fail: () => undefined, waitMs: timeoutMs },
-  ])('lists the right folder on a new connection when $name', async ({ fail, waitMs }) => {
+    { name: 'the data connection breaks before the first byte', fail: (data: net.Socket) => data.resetAndDestroy(), waitMs: 0, no150ForList: 0 },
+    { name: 'no 150, no byte and no reply come in the FTP timeout', fail: () => undefined, waitMs: timeoutMs, no150ForList: 2 },
+  ])('lists the right folder on a new connection when $name', async ({ fail, waitMs, no150ForList }) => {
     let failed: FileTransfer | undefined;
     const { tree } = await startTree(transfer => {
       if (transfer.retrNumber === 1) sendWholeFile(transfer, FOLDER_LINE + LISTING);
@@ -1614,7 +1669,7 @@ describe('FTPClient raw LIST that ends early', () => {
         failed = transfer;
         fail(transfer.data);
       } else sendWholeFile(transfer, SUB_LISTING);
-    }, { depth: 2 });
+    }, { depth: 2, no150ForList });
     await until(() => failed !== undefined);
     vi.advanceTimersByTime(waitMs);
 
@@ -1631,14 +1686,11 @@ describe('FTPClient raw LIST that ends early', () => {
 
   // The walk keeps what it read, as for its other limits
   it('stops the walk and keeps the tree that it read, when the new login after a listing with no reply fails', async () => {
+    const timers = recordTimerDelays();
     const log = captureLog();
     try {
-      let isClosed: (() => boolean) | undefined;
-      const { tree } = await startTree(({ data }) => {
-        isClosed = trackClose(data);
-        data.end(FOLDER_LINE + LISTING);
-      }, { depth: 2, refuseLoginFrom: 2 });
-      await until(() => isClosed?.() === true);
+      const { tree } = await startTree(({ data }) => data.end(FOLDER_LINE + LISTING), { depth: 2, refuseLoginFrom: 2 });
+      await untilAfter150AndEnd(timers);
       vi.advanceTimersByTime(longWaitMs);
 
       const { nodes, isCutShort } = await treeOf(tree);
@@ -1649,19 +1701,20 @@ describe('FTPClient raw LIST that ends early', () => {
       expect(log.text('warn')).toContain('could not log in again');
     } finally {
       log.restore();
+      timers.restore();
     }
   });
 
   it('stops the walk and keeps the tree that it read, when the time limit comes during the new login', async () => {
+    const timers = recordTimerDelays();
     const log = captureLog();
     try {
-      let isClosed: (() => boolean) | undefined;
       // The FTP timeout is longer than the time limit, so only the time limit can stop the login
-      const { tree } = await startTree(({ data }) => {
-        isClosed = trackClose(data);
-        data.end(FOLDER_LINE + LISTING);
-      }, { depth: 2, holdLoginFrom: 2, timeoutMs: 2 * TREE_WALK_TIME_LIMIT_MS });
-      await until(() => isClosed?.() === true);
+      const { tree } = await startTree(({ data }) => data.end(FOLDER_LINE + LISTING), {
+        depth: 2, holdLoginFrom: 2, timeoutMs: 2 * TREE_WALK_TIME_LIMIT_MS,
+      });
+      // The 150, the data and the end each start a 1 s wait. The 150 and the data come in any order.
+      await until(() => timers.delays.filter(ms => ms === longWaitMs).length >= 3);
       vi.advanceTimersByTime(longWaitMs);
       await until(() => machine?.commands.filter(command => command === 'PASS').length === 2);
 
@@ -1674,13 +1727,15 @@ describe('FTPClient raw LIST that ends early', () => {
       expect(log.text('warn')).toContain('took too long');
     } finally {
       log.restore();
+      timers.restore();
     }
   });
 
-  it('does not log in again when the time limit comes during a listing with no byte', async () => {
+  // After a 150, a listing with no byte ends in 1 s (an empty folder). With no 150, it waits for the FTP timeout.
+  it('does not log in again when the time limit comes during a listing with no 150 and no byte', async () => {
     const log = captureLog();
     try {
-      const { tree } = await startTree(() => undefined, { timeoutMs: 2 * TREE_WALK_TIME_LIMIT_MS });
+      const { tree } = await startTree(() => undefined, { timeoutMs: 2 * TREE_WALK_TIME_LIMIT_MS, no150ForList: 1 });
       await until(() => listCount() === 1);
 
       vi.advanceTimersByTime(TREE_WALK_TIME_LIMIT_MS);
