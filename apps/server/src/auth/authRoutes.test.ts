@@ -3,15 +3,16 @@ import type { Server } from 'node:http';
 import { connect, type AddressInfo } from 'node:net';
 import { once } from 'node:events';
 import { serve } from '@hono/node-server';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app.js';
 import { HardwarePoller } from '../polling/poller.js';
 import { noHistory } from '../recording/testSupport.js';
 import { SESSION_COOKIE } from './authRoutes.js';
+import { MAX_LOGGED_UNKNOWN_USERS } from './LoginLimiter.js';
 import { LoginLog } from './loginLog.js';
 import { ProxySettings } from './proxySettings.js';
 import { authParts } from './testSupport.js';
-import { captureLog } from '../logging/testSupport.js';
+import { captureLog, type CapturedLog } from '../logging/testSupport.js';
 
 /** A database that has no machines */
 const emptyDb = {
@@ -86,10 +87,18 @@ describe('auth routes', () => {
     expect(await status.json()).toEqual({ setupNeeded: false, loggedIn: true, user: { username: 'admin', role: 'admin' } });
   });
 
-  it('refuses a second setup', async () => {
+  it('refuses a second setup, and does not write that it made an Admin', async () => {
     await setUp();
-    const res = await post('/api/auth/setup', { username: 'attacker', password: 'attacker-password' });
-    expect(res.status).toBe(409);
+    const log = captureLog();
+    try {
+      const res = await post('/api/auth/setup', { username: 'attacker', password: 'attacker-password' });
+
+      expect(res.status).toBe(409);
+      expect(log.text()).not.toContain('made a new Admin');
+      expect(log.text()).not.toContain('username=attacker');
+    } finally {
+      log.restore();
+    }
   });
 
   it('refuses a short password', async () => {
@@ -338,6 +347,8 @@ describe('auth routes', () => {
     expect((await post('/api/auth/login', ADMIN)).status).toBe(200);
     log.restore();
     expect(log.text('error')).toContain('disk full');
+    // The server log still has the try
+    expect(log.text('info')).toMatch(/username=admin.*result=logged-in/);
     vi.restoreAllMocks();
   });
 
@@ -432,6 +443,144 @@ describe('auth routes behind a reverse proxy', () => {
     expect(statuses.filter(status => status === 401)).toHaveLength(30);
     expect(statuses.filter(status => status === 429)).toHaveLength(30);
     expect((await postFor('192.168.1.20', '/api/auth/login', ADMIN)).status).toBe(429);
+  });
+
+  describe('server log of login tries', () => {
+    let log: CapturedLog | undefined;
+    afterEach(() => {
+      log?.restore();
+      log = undefined;
+    });
+
+    /** The log lines of one level that have this text */
+    const linesWith = (level: 'info' | 'warn', text: string) =>
+      log!.lines.filter(line => line.level === level && line.text.includes(text)).map(line => line.text);
+
+    it('writes an info line for a good login, with the username and the address from the proxy', async () => {
+      log = captureLog();
+      const res = await postFor('192.168.1.30', '/api/auth/login', BOB);
+      const token = (res.headers.get('Set-Cookie') ?? '').split(';')[0].split('=')[1];
+
+      const lines = linesWith('info', 'result=logged-in');
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('username=bob');
+      expect(lines[0]).toContain('address=192.168.1.30');
+      expect(log.text()).not.toContain(BOB.password);
+      expect(token).toBeTruthy();
+      expect(log.text()).not.toContain(token);
+    });
+
+    it('writes a warn line for a wrong password and for an unknown username, but not the password', async () => {
+      log = captureLog();
+      await postFor('192.168.1.66', '/api/auth/login', { ...ADMIN, password: 'secret-wrong-1' });
+      await postFor('192.168.1.66', '/api/auth/login', { username: 'sam', password: 'secret-wrong-2' });
+
+      expect(linesWith('warn', 'result=wrong-password')).toEqual([
+        expect.stringMatching(/username=admin.*address=192\.168\.1\.66/),
+      ]);
+      expect(linesWith('warn', 'result=no-such-user')).toEqual([
+        expect.stringMatching(/username=sam.*address=192\.168\.1\.66/),
+      ]);
+      expect(log.text()).not.toContain('secret-wrong');
+    });
+
+    it('writes only the first tries with unknown usernames from one address, then one line that it stops', async () => {
+      log = captureLog();
+      for (let i = 0; i < MAX_LOGGED_UNKNOWN_USERS + 5; i++) {
+        await postFor('192.168.1.66', '/api/auth/login', { username: `random-${i}`, password: 'wrong-password' });
+      }
+      await postFor('192.168.1.67', '/api/auth/login', { username: 'other-computer', password: 'wrong-password' });
+      await wrongAdminPassword('192.168.1.66');
+
+      expect(linesWith('warn', 'address=192.168.1.66 result=no-such-user')).toHaveLength(MAX_LOGGED_UNKNOWN_USERS);
+      expect(log.text()).not.toContain(`username=random-${MAX_LOGGED_UNKNOWN_USERS}`);
+      expect(linesWith('warn', 'not logged')).toEqual([expect.stringMatching(/address=192\.168\.1\.66/)]);
+      // Other computers and known usernames still get a line
+      expect(linesWith('warn', 'username=other-computer')).toHaveLength(1);
+      expect(linesWith('warn', 'result=wrong-password')).toEqual([expect.stringMatching(/username=admin.*address=192\.168\.1\.66/)]);
+    });
+
+    it('writes one warn line for the first try of a locked computer, not for each try', async () => {
+      for (let i = 0; i < 10; i++) await wrongAdminPassword('192.168.1.66');
+      log = captureLog();
+      for (let i = 0; i < 5; i++) await postFor('192.168.1.66', '/api/auth/login', ADMIN);
+
+      expect(linesWith('warn', 'result=locked')).toEqual([
+        expect.stringMatching(/username=admin.*address=192\.168\.1\.66/),
+      ]);
+      expect(log.text()).not.toContain(ADMIN.password);
+    });
+
+    it('writes an info line when a user changes the password', async () => {
+      const login = await postFor('192.168.1.30', '/api/auth/login', BOB);
+      const cookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+      log = captureLog();
+      const res = await app.request('/api/auth/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '192.168.1.30', Cookie: cookie },
+        body: JSON.stringify({ currentPassword: BOB.password, newPassword: 'bob-new-password' }),
+      }, fromProxy);
+
+      expect(res.status).toBe(200);
+      expect(linesWith('info', 'result=password-changed')).toEqual([
+        expect.stringMatching(/username=bob.*address=192\.168\.1\.30/),
+      ]);
+      expect(log.text()).not.toContain('bob-new-password');
+      expect(log.text()).not.toContain(BOB.password);
+    });
+
+    it('writes a warn line for a wrong current password in a password change, but not the passwords', async () => {
+      const login = await postFor('192.168.1.30', '/api/auth/login', BOB);
+      const cookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+      log = captureLog();
+      const res = await app.request('/api/auth/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '192.168.1.30', Cookie: cookie },
+        body: JSON.stringify({ currentPassword: 'secret-wrong-current', newPassword: 'bob-new-password' }),
+      }, fromProxy);
+
+      expect(res.status).toBe(401);
+      expect(linesWith('warn', 'result=wrong-password')).toEqual([
+        expect.stringMatching(/username=bob.*address=192\.168\.1\.30/),
+      ]);
+      expect(log.text()).not.toContain('secret-wrong-current');
+      expect(log.text()).not.toContain('bob-new-password');
+    });
+
+    it('writes the login of a program (HTTP Basic) one time, not with each request', async () => {
+      log = captureLog();
+      const headers = { ...basic(BOB.username, BOB.password).headers, 'X-Forwarded-For': '192.168.1.40' };
+      await app.request('/api/machines', { headers }, fromProxy);
+      await app.request('/api/machines', { headers }, fromProxy);
+
+      expect(linesWith('info', 'result=logged-in')).toEqual([
+        expect.stringMatching(/username=bob.*address=192\.168\.1\.40/),
+      ]);
+    });
+  });
+
+  it('writes a warn line when the first-run setup makes the Admin, with the address', async () => {
+    const { auth, accounts } = authParts();
+    const fresh = createApp({
+      poller: new HardwarePoller(emptyDb), auth, accounts, history: noHistory(), proxySettings: ProxySettings.inMemory(PROXY),
+    });
+    const log = captureLog();
+    try {
+      const res = await fresh.request('/api/auth/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '192.168.1.50' },
+        body: JSON.stringify(ADMIN),
+      }, fromProxy);
+
+      expect(res.status).toBe(200);
+      const lines = log.lines.filter(line => line.level === 'warn' && line.text.includes('Admin'));
+      expect(lines).toHaveLength(1);
+      expect(lines[0].text).toContain('username=admin');
+      expect(lines[0].text).toContain('address=192.168.1.50');
+      expect(log.text()).not.toContain(ADMIN.password);
+    } finally {
+      log.restore();
+    }
   });
 
   it('makes the cookie HTTPS-only when the browser used HTTPS', async () => {

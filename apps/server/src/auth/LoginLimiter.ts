@@ -30,6 +30,11 @@ export const MAX_FAILURES = 10;
 export const MAX_USER_FAILURES = 30;
 /** After this many wrong passwords from one known device, that device must wait. A stolen cookie gives no more guesses than this. */
 export const MAX_DEVICE_FAILURES = 10;
+/**
+ * The server log writes at most this many tries with an unknown username from one address in LOCK_MINUTES.
+ * The limiter does not stop tries with new usernames, so without this limit one computer could push all older lines out of the log file.
+ */
+export const MAX_LOGGED_UNKNOWN_USERS = 20;
 /** How long the lock lasts, from the first wrong password */
 export const LOCK_MINUTES = 15;
 const WINDOW_MS = LOCK_MINUTES * 60 * 1000;
@@ -54,6 +59,11 @@ interface AddressFailures extends Failures {
 
 interface UserFailures extends Failures {
   username: string;
+}
+
+/** The tries with an unknown username from one address group */
+interface UnknownUserTries extends Failures {
+  address: string;
 }
 
 /** An address that must wait before it can try a password for this user again */
@@ -162,11 +172,22 @@ export class LoginLimiter {
   private readonly byAddress: FailureCounts<AddressFailures>;
   private readonly byUser: FailureCounts<UserFailures>;
   private readonly byDevice: FailureCounts<UserFailures>;
+  private readonly unknownUsers: FailureCounts<UnknownUserTries>;
 
   constructor(now: () => number = Date.now) {
     this.byAddress = new FailureCounts(now, MAX_FAILURES);
     this.byUser = new FailureCounts(now, MAX_USER_FAILURES);
     this.byDevice = new FailureCounts(now, MAX_DEVICE_FAILURES);
+    this.unknownUsers = new FailureCounts(now, MAX_LOGGED_UNKNOWN_USERS);
+  }
+
+  /**
+   * Count one try with an unknown username from this address. Returns the count of its address group in LOCK_MINUTES.
+   * It only tells the server log when to stop. It does not block the address.
+   */
+  countUnknownUser(address: string): number {
+    const group = addressGroup(address);
+    return this.unknownUsers.add(group, { address: group });
   }
 
   isBlocked(address: string, username: string, device?: string): boolean {

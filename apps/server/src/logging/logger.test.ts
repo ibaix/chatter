@@ -55,6 +55,14 @@ describe('createLogger', () => {
     expect(written[0].text).toMatch(/ m b="two words" c="a=b" d="" e=5 f=\[1,2\]$/);
   });
 
+  it('escapes control characters in a value, so a value cannot send terminal codes', () => {
+    use('info');
+    createLogger('x').warn('m', { username: '\u001b]0;x\u0007\u001b[2Jadmin', other: 'a\u0000b\u007fc' });
+    expect(written[0].text).not.toMatch(/\p{Cc}/u);
+    expect(written[0].text).toContain(String.raw`username="\u001b]0;x\u0007\u001b[2Jadmin"`);
+    expect(written[0].text).toContain(String.raw`other="a\u0000b\u007fc"`);
+  });
+
   it('keeps a message with a line break on one line', () => {
     use('info');
     createLogger('x').warn('m', { reason: 'line one\nline two' });
