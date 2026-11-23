@@ -5,7 +5,7 @@ import { useCan } from '../../components/CurrentUser';
 import { Button } from '../../components/ui/Button';
 import { DownloadIcon, FolderIcon, FolderUpIcon, RefreshIcon, TrashIcon } from '../../components/ui/icons';
 import { CELL, HEAD_CELL, HEAD_ROW, ROW, TABLE } from '../../components/ui/table';
-import type { FTPTreeNode } from '../../types';
+import { FILE_TREE_ENTRY_LIMIT, type FTPTreeNode } from '../../types';
 import { formatSize } from '../../utils/formatters';
 import { errorMessageOf } from '../../utils/errorMessage';
 import { filesOf, foldersOf, formatChanged, parentPath, pathCrumbs } from './fileListing';
@@ -57,6 +57,11 @@ export function FilesOnMachine({ machineId, files, messages, now }: FilesOnMachi
             <RefreshIcon />
           </Button>
         </div>
+        {files.isCutShort && !files.error && (
+          <p className="m-0 px-4 pb-3 text-sm text-primary-text">
+            List cut short. Chatter shows only the first {FILE_TREE_ENTRY_LIMIT} files and folders.
+          </p>
+        )}
         {/* Once above the list: the rows have no download and no link to the text */}
         {!canReadFiles && <p className="m-0 px-4 pb-3 text-zinc-300">{CANNOT_READ_FILES_TEXT}</p>}
         {openFile && <FileViewer key={openFile.path} machineId={machineId} file={openFile} onClose={closeFile} />}

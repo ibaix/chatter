@@ -2,13 +2,22 @@ import net from 'net';
 import { Readable, Writable } from 'stream';
 import * as ftp from 'basic-ftp';
 import { ftpErrorMessage } from './ftpErrorMessage.js';
-import type { FTPConfig, FTPFileInfo, FTPTreeNode, FTPUploadFile, FTPUploadResult } from '../types/index.js';
+import { FILE_TREE_ENTRY_LIMIT } from '@local-chatter/shared';
+import { createLogger } from '../logging/logger.js';
+import type { FileTree, FTPConfig, FTPFileInfo, FTPTreeNode, FTPUploadFile, FTPUploadResult } from '../types/index.js';
 
 const DEFAULT_FTP_PORT = 21;
 const DEFAULT_FTP_USER = 'anonymous';
 /** The time that the FTP client waits for the machine. This is also the default of basic-ftp. */
 const DEFAULT_FTP_TIMEOUT_MS = 30_000;
 const DEFAULT_TREE_DEPTH = 2;
+/**
+ * The most folder levels that one tree request walks. Each level costs a LIST on the machine.
+ * The web app asks for 2 levels, and CNC program folders are not deeper than this.
+ */
+export const MAX_TREE_DEPTH = 5;
+/** The most entries (files and folders) in one tree, so a very large or rogue FTP server cannot fill the memory */
+export const MAX_TREE_ENTRIES = FILE_TREE_ENTRY_LIMIT;
 const ROOT_PATH = '/';
 
 /** The manual download gives up when no byte arrives in this time */
@@ -40,6 +49,19 @@ export interface RawListEntry {
   name: string;
   isDir: boolean;
   size: number;
+}
+
+/** The entries that one tree walk can still add */
+interface TreeWalk {
+  entriesLeft: number;
+  /** True when the walk left out an entry or a folder */
+  isCut: boolean;
+}
+
+/** A folder that the tree walk still has to list, and the list to fill with its entries */
+interface TreeFolder {
+  path: string;
+  nodes: FTPTreeNode[];
 }
 
 type BatchFileOutcome = FTPUploadResult['success'][number] | FTPUploadResult['failed'][number];
@@ -144,6 +166,8 @@ function toRelativeRemotePath(remotePath: string): string {
 function joinRemotePath(dirPath: string, name: string): string {
   return dirPath === ROOT_PATH ? `/${name}` : `${dirPath}/${name}`;
 }
+
+const log = createLogger('ftp');
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error';
@@ -315,12 +339,22 @@ export class FTPClient {
   }
 
   async getFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FTPTreeNode[]> {
+    return (await this.readFileTree(path, depth)).nodes;
+  }
+
+  /** The file tree, and whether the walk cut it at MAX_TREE_ENTRIES entries. The depth limit does not count as a cut. */
+  async readFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FileTree> {
+    const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, isCut: false };
     try {
       assertSafeFtpArgument(path);
       if (depth <= 0) {
-        return [];
+        return { nodes: [], isCutShort: false };
       }
-      return await this.withConnection({ verbose: false }, client => this.buildTree(client, path, depth));
+      const nodes = await this.withConnection({ verbose: false }, client => this.buildTree(client, { path, depth: Math.min(depth, MAX_TREE_DEPTH), walk }));
+      if (walk.isCut) {
+        log.warn(`The file tree on ${this.host} is too large. Chatter shows only the first ${MAX_TREE_ENTRIES} entries.`, { path });
+      }
+      return { nodes, isCutShort: walk.isCut };
     } catch (err) {
       throw new Error(ftpErrorMessage(err, this.host, this.port), { cause: err });
     }
@@ -530,42 +564,60 @@ export class FTPClient {
   }
 
   /**
-   * Build the tree below `path`, `depth` levels deep. A folder that cannot be
-   * opened gives an empty list, so one bad folder does not hide the rest of the tree.
+   * Build the tree below `path`, `depth` levels deep, one level at a time.
+   * The walk lists all the folders of one level before it opens the level below it,
+   * so the entry limit cuts the deepest level first and the upper levels stay complete.
+   * A folder that cannot be opened gives an empty list, so one bad folder does not hide the rest of the tree.
+   * When the walk has no entries left, it opens no more folders, and each folder that it did not open has no children.
    */
-  private async buildTree(client: ftp.Client, path: string, depth: number): Promise<FTPTreeNode[]> {
-    if (depth <= 0) {
-      return [];
+  private async buildTree(
+    client: ftp.Client,
+    { path, depth, walk }: { path: string; depth: number; walk: TreeWalk }
+  ): Promise<FTPTreeNode[]> {
+    const top: TreeFolder = { path, nodes: [] };
+    let level: TreeFolder[] = [top];
+    for (let levelsLeft = depth; levelsLeft > 0 && level.length > 0; levelsLeft--) {
+      const nextLevel: TreeFolder[] = [];
+      for (const folder of level) {
+        if (walk.entriesLeft <= 0) {
+          walk.isCut = true;
+          break;
+        }
+        const entries = await this.listFolder(client, folder.path);
+        const kept = entries.slice(0, walk.entriesLeft);
+        walk.entriesLeft -= kept.length;
+        if (kept.length < entries.length) walk.isCut = true;
+        for (const entry of kept) {
+          const node = treeNodeOf(entry, folder.path);
+          folder.nodes.push(node);
+          if (entry.isDir && levelsLeft > 1) {
+            node.children = [];
+            nextLevel.push({ path: node.path, nodes: node.children });
+          }
+        }
+      }
+      level = nextLevel;
     }
+    return top.nodes;
+  }
+
+  /** The entries of one folder. A folder that cannot be opened gives an empty list. */
+  private async listFolder(client: ftp.Client, path: string): Promise<RawListEntry[]> {
     try {
       await client.cd(path);
       await client.pwd();
-      const entries = await this.listCurrentDirectory(client);
-
-      const nodes: FTPTreeNode[] = [];
-      for (const entry of entries) {
-        nodes.push(await this.treeNodeFor(client, { entry, parentPath: path, depth }));
-      }
-      return nodes;
+      return await this.listCurrentDirectory(client);
     } catch {
       return [];
     }
   }
+}
 
-  private async treeNodeFor(
-    client: ftp.Client,
-    { entry, parentPath, depth }: { entry: RawListEntry; parentPath: string; depth: number }
-  ): Promise<FTPTreeNode> {
-    const fullPath = joinRemotePath(parentPath, entry.name);
-    const node: FTPTreeNode = {
-      name: entry.name,
-      type: entry.isDir ? 'directory' : 'file',
-      size: entry.size || 0,
-      path: fullPath
-    };
-    if (entry.isDir && depth > 1) {
-      node.children = await this.buildTree(client, fullPath, depth - 1);
-    }
-    return node;
-  }
+function treeNodeOf(entry: RawListEntry, parentPath: string): FTPTreeNode {
+  return {
+    name: entry.name,
+    type: entry.isDir ? 'directory' : 'file',
+    size: entry.size || 0,
+    path: joinRemotePath(parentPath, entry.name)
+  };
 }

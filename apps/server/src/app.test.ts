@@ -12,8 +12,9 @@ import { captureLog } from './logging/testSupport.js';
 import { UNEXPECTED_ERROR_TEXT } from './routes/responses.js';
 import type { HistorySource, RangeQuery, StateTime, WindowQuery } from './recording/MetricsReader.js';
 import { StatePeriodStore } from './recording/StatePeriodStore.js';
+import type { FTPClient } from './ftp/FTPClient.js';
 import { type Alert, AlertStore } from './alerts/AlertStore.js';
-import { PROGRAM_UPLOAD_LIMIT_BYTES, SUPPORTED_MACHINE_TYPES } from '@local-chatter/shared';
+import { FILE_LIST_CUT_SHORT_HEADER, PROGRAM_UPLOAD_LIMIT_BYTES, SUPPORTED_MACHINE_TYPES, type FTPTreeNode } from '@local-chatter/shared';
 
 // Mock the db module
 vi.mock('./storage/database.js', () => ({
@@ -851,6 +852,68 @@ describe('API Routes', () => {
       expect(res.status).toBe(404);
       expect(res.body.error).toContain('not found');
     });
+
+    // Each folder level is a LIST on the machine, so a deep tree can keep the machine and Chatter busy for a long time
+    it.each(['0', '6', '50', '99999999999', 'abc', '-1', '1.5'])('refuses depth=%s and sends nothing to the machine', async depth => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      // A mock, so a test that fails does not wait for a machine that is not there
+      const readFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [], isCutShort: false });
+
+      const res = await call('GET', `/api/machine/${machine.id}/files?depth=${depth}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('depth must be a whole number from 1 to 5');
+      expect(readFileTree).not.toHaveBeenCalled();
+    });
+
+    it.each([['1', 1], ['3', 3], ['5', 5]])('lists the tree for depth=%s', async (depth, expectedDepth) => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const readFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [], isCutShort: false });
+
+      const res = await call('GET', `/api/machine/${machine.id}/files?path=/PRG&depth=${depth}`);
+
+      expect(res.status).toBe(200);
+      expect(readFileTree).toHaveBeenCalledWith('/PRG', expectedDepth);
+    });
+
+    // The web app shows a note when the list is cut short. The body stays a plain list, as the API docs show it.
+    const PROGRAM: FTPTreeNode = { name: 'O1000', type: 'file', size: 10, path: '/O1000' };
+
+    it('tells the web app in a header when the list was cut short', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [PROGRAM], isCutShort: true });
+
+      const res = await send(`/api/machine/${machine.id}/files`, { method: 'GET' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get(FILE_LIST_CUT_SHORT_HEADER)).toBe('true');
+      expect(await res.json()).toEqual([PROGRAM]);
+    });
+
+    // The connector must pass the flag of the FTP client on to the route
+    it('sends the cut-short header when the FTP client cut the list short', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      const { ftpClient } = poller.getConnector(machine.id) as unknown as { ftpClient: FTPClient };
+      const readFileTree = vi.spyOn(ftpClient, 'readFileTree').mockResolvedValue({ nodes: [PROGRAM], isCutShort: true });
+
+      const res = await send(`/api/machine/${machine.id}/files?depth=2`, { method: 'GET' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get(FILE_LIST_CUT_SHORT_HEADER)).toBe('true');
+      expect(await res.json()).toEqual([PROGRAM]);
+      expect(readFileTree).toHaveBeenCalledWith('.', 2);
+    });
+
+    it('sends no cut-short header for a full list', async () => {
+      const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
+      vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [PROGRAM], isCutShort: false });
+
+      const res = await send(`/api/machine/${machine.id}/files`, { method: 'GET' });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get(FILE_LIST_CUT_SHORT_HEADER)).toBeNull();
+      expect(await res.json()).toEqual([PROGRAM]);
+    });
   });
 
   describe('GET /api/machine/:id/files/download', () => {
@@ -1250,13 +1313,13 @@ describe('API Routes', () => {
 
     it.each(BAD_PATHS)('refuses a file list of the folder %j', async path => {
       const { id, connector } = await brotherConnector();
-      const getFileTree = vi.spyOn(connector, 'getFileTree');
+      const readFileTree = vi.spyOn(connector, 'readFileTree').mockResolvedValue({ nodes: [], isCutShort: false });
 
       const res = await call('GET', `/api/machine/${id}/files?path=${encodeURIComponent(`/PRG/${path}`)}`);
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe(CONTROL_CHARACTER_ERROR);
-      expect(getFileTree).not.toHaveBeenCalled();
+      expect(readFileTree).not.toHaveBeenCalled();
     });
 
     it.each(BAD_PATHS)('refuses a delete of %j', async path => {
@@ -1431,7 +1494,7 @@ describe('API Routes', () => {
     async function machineWithFile(): Promise<string> {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
       const connector = poller.getConnector(machine.id)!;
-      vi.spyOn(connector, 'getFileTree').mockResolvedValue([{ name: 'O1000.NC', path: '/PRG/O1000.NC', type: 'file', size: 6 }] as never);
+      vi.spyOn(connector, 'readFileTree').mockResolvedValue({ nodes: [{ name: 'O1000.NC', path: '/PRG/O1000.NC', type: 'file', size: 6 }], isCutShort: false } as never);
       vi.spyOn(connector, 'downloadFile').mockImplementation(async (_path, output) => { output.write('G00 X0'); });
       vi.mocked(getUploadEventById).mockResolvedValue({ id: 1, file_name: 'O1000.NC', file_content: 'G00 X0' } as never);
       return machine.id;

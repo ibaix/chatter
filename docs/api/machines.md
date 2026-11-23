@@ -78,7 +78,7 @@ The scan finds only machines that are not added yet. To add a found machine, sen
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/machine/:id/files` | List files. Query: `path` (default `.`) and `depth` (default `2`) |
+| GET | `/api/machine/:id/files` | List files. Query: `path` (default `.`) and `depth` (1 to 5, default `2`). A list has at most 5000 files and folders. When Chatter cuts the list short, the reply has the header `X-Chatter-List-Cut-Short: true` |
 | GET | `/api/machine/:id/files/download` | Download a file (Operator or Admin). Query: `path` |
 | POST | `/api/machine/:id/files/upload` | Upload a single file (Operator or Admin). Form fields: `file`, `path`, `overwrite`, `targetName`. `409` when the file exists and `overwrite` is not `true` |
 | POST | `/api/machine/:id/files/upload-batch` | Upload multiple files (Operator or Admin). Form fields: `files`, `basePath`, `overwrite`, `targetNames`. The reply is `{ success, failed }` |

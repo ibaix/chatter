@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isLocalRange } from '../discovery/addressRange.js';
+import { MAX_TREE_DEPTH } from '../ftp/FTPClient.js';
 import {
   ALERT_CHECKS, ALERT_SEVERITIES, ALERT_SUBJECT_IDS, MAX_ALERT_FOR_MINUTES, MAX_ALERT_NAME_LENGTH, MAX_ALERT_QUERY_LENGTH,
   MAX_ALERT_RULES_PER_MACHINE, MAX_IGNORE_PATTERNS, patternProblem, type AlertSubject,
@@ -114,9 +115,16 @@ export function readTargetNames(json: string | undefined): TargetNames {
   return names.success ? { ok: true, names: names.data } : { ok: false, error: names.error.issues[0].message };
 }
 
+/** Each folder level is a LIST on the machine, so the depth has a limit */
+const BAD_TREE_DEPTH = `depth must be a whole number from 1 to ${MAX_TREE_DEPTH}`;
+const treeDepthText = z.string().refine(
+  depth => /^\d+$/.test(depth) && Number(depth) >= 1 && Number(depth) <= MAX_TREE_DEPTH,
+  BAD_TREE_DEPTH
+);
+
 export const fileTreeQuery = z.object({
   path: remoteName().optional(),
-  depth: wholeNumberText('depth').optional(),
+  depth: treeDepthText.optional(),
 });
 
 export const filePathQuery = z.object({
