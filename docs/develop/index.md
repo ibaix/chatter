@@ -161,8 +161,10 @@ WEB_DIR=../web/dist npm run start -w apps/server
 This builds the shared package, the web app (`apps/web/dist/`), and the server (`apps/server/dist/`).
 With `WEB_DIR` set, the server also serves the web app. The Docker image does this for you.
 
-To remove the admin accounts outside Docker: `npm run reset-password -w apps/server` (or `reset-password:dev` without a build).
-The users who are not admins stay. The next person who opens Chatter makes a new admin account.
+To make a new Admin outside Docker: `npm run reset-password -w apps/server` (or `reset-password:dev` without a build).
+The command asks for the username and the password on the terminal, and removes the old Admin accounts.
+It needs a terminal, so it does not read the password from a pipe.
+The users who are not Admins stay. The first-run setup stays closed.
 
 ## Work on these docs
 
