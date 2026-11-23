@@ -43,7 +43,7 @@ describe('notCountedNote', () => {
   it('names each kind of file once, in the order of the files, and counts binary files', () => {
     expect(notCountedNote(['package-lock.json', 'binary', 'binary'])).toBe('package-lock.json; 2 binary files');
     expect(notCountedNote(['binary', 'SVG', 'package-lock.json', 'package-lock.json'])).toBe(
-      '1 binary file; SVG; package-lock.json (2 files)',
+      '1 binary file; SVG; 2 package-lock.json files',
     );
     expect(notCountedNote([])).toBe('');
   });
@@ -65,13 +65,16 @@ describe('sizeTable', () => {
     );
   });
 
-  it('prints zeros and no note for an empty change', () => {
+  it('prints zeros and no "Not counted" row for an empty change', () => {
     expect(sizeTable(totalsOf([]), REFS).split('\n').slice(4)).toEqual([
       '| Application code | +0 | -0 |',
       '| Tests | +0 | -0 |',
       '| Docs and comments | +0 | -0 |',
-      '| Not counted | +0 | -0 |',
     ]);
+  });
+
+  it('prints the "Not counted" row when a file is not counted, also with 0 lines', () => {
+    expect(sizeTable(totalsOf(FILES.slice(4, 5)), REFS).split('\n').at(-1)).toBe('| Not counted (1 binary file) | +0 | -0 |');
   });
 });
 

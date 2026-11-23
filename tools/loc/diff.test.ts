@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseHunks, parseNumstat } from './diff';
+import { parseHunks, parseNumstat, parseSymlinks } from './diff';
 
 describe('parseNumstat', () => {
   it('reads the counts and the path of each file', () => {
@@ -144,9 +144,44 @@ describe('parseHunks', () => {
     expect(parseHunks(diff)).toEqual(new Map([['tab\there.ts', { added: [1], removed: [] }]]));
   });
 
+  it('reads a path with octal escapes (git quotes a non-ASCII name when core.quotePath is true)', () => {
+    const diff = ['diff --git "a/\\303\\251.ts" "b/\\303\\251.ts"', '--- "a/\\303\\251.ts"', '+++ "b/\\303\\251.ts"', '@@ -0,0 +1 @@', '+a'].join('\n');
+
+    expect(parseHunks(diff)).toEqual(new Map([['é.ts', { added: [1], removed: [] }]]));
+  });
+
   it('reads removed and added lines that look like file headers as lines', () => {
     const diff = ['diff --git a/a.md b/a.md', '--- a/a.md', '+++ b/a.md', '@@ -1 +1 @@', '--- a/x', '+++ b/y'].join('\n');
 
     expect(parseHunks(diff)).toEqual(new Map([['a.md', { added: [1], removed: [1] }]]));
+  });
+});
+
+describe('parseSymlinks', () => {
+  it('finds each file that is a symlink in the base or in the head, by its path in the head', () => {
+    const sha = '0'.repeat(40);
+    const z = [
+      `:000000 120000 ${sha} ${sha} A`,
+      'new-link',
+      `:120000 000000 ${sha} ${sha} D`,
+      'gone-link',
+      `:100644 120000 ${sha} ${sha} T`,
+      'now-link',
+      `:120000 120000 ${sha} ${sha} R100`,
+      'old-link',
+      'moved-link',
+      `:100644 100644 ${sha} ${sha} M`,
+      'a.ts',
+      `:100644 100644 ${sha} ${sha} R090`,
+      'b.ts',
+      'c.ts',
+      '',
+    ].join('\0');
+
+    expect(parseSymlinks(z)).toEqual(new Set(['new-link', 'gone-link', 'now-link', 'moved-link']));
+  });
+
+  it('gives an empty set for an empty diff', () => {
+    expect(parseSymlinks('')).toEqual(new Set());
   });
 });

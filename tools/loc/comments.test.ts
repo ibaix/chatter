@@ -96,6 +96,19 @@ describe('commentLines in TypeScript', () => {
     ).toEqual([]);
   });
 
+  it('does not see a comment in JSX text that starts with //', () => {
+    expect(comments('a.tsx', 'const a = (', '  <p>', '    // not a comment', '  </p>', ');')).toEqual([]);
+    expect(comments('a.tsx', 'const a = (', '  <p>', '    {x}', '    // not a comment', '  </p>', ');')).toEqual([]);
+  });
+
+  it('counts the next lines of a block comment that starts after code as comment lines', () => {
+    expect(comments('a.ts', 'const a = 1; /*', '  more', '*/', 'const b = 2;')).toEqual([2, 3]);
+  });
+
+  it('counts a shebang on line 1 as code', () => {
+    expect(comments('a.ts', '#!/usr/bin/env node', '// c', 'const a = 1;')).toEqual([2]);
+  });
+
   it('keeps going when the file has a syntax error', () => {
     expect(comments('a.ts', 'const = ;', '// still a comment', 'function (')).toEqual([2]);
   });
@@ -133,6 +146,11 @@ describe('commentLines in CSS and HTML', () => {
         'c { color: red; } /* end */',
       ),
     ).toEqual([1, 4, 5, 6]);
+  });
+
+  it('does not start a comment at /* in a CSS string', () => {
+    expect(comments('a.css', 'a { content: "/*"; }', 'b { color: red; }', 'c { color: blue; } /* x */')).toEqual([]);
+    expect(comments('a.css', "a { content: '\\'/*'; }", 'b { color: red; }', '/* x */')).toEqual([3]);
   });
 
   it('finds HTML comments', () => {

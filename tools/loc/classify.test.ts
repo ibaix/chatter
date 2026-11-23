@@ -19,11 +19,15 @@ describe('classifyPath', () => {
     expect(classifyPath(path, PLAIN)).toEqual({ part: 'notCounted', reason });
   });
 
-  it('does not count a binary file or a generated file', () => {
+  it('does not count a binary file, a generated file or a symlink', () => {
     expect(classifyPath('docs/public/a.png', { binary: true, generated: false })).toEqual({ part: 'notCounted', reason: 'binary' });
     expect(classifyPath('apps/server/src/gen.ts', { binary: false, generated: true })).toEqual({
       part: 'notCounted',
       reason: 'generated',
+    });
+    expect(classifyPath('.claude/skills/x', { binary: false, generated: false, symlink: true })).toEqual({
+      part: 'notCounted',
+      reason: 'symlink',
     });
   });
 
@@ -36,6 +40,11 @@ describe('classifyPath', () => {
     'apps/server/src/logging/testSupport.ts',
     'apps/server/src/notifications/channels/testSupport.ts',
     'apps/server/src/logging/quietLogsInTests.ts',
+    'apps/server/src/history-backup/archiveTestSupport.ts',
+    'apps/web/src/A.spec.tsx',
+    'apps/server/src/__tests__/a.ts',
+    'tools/x/fixtures/a.json',
+    'apps/server/src/fixture/a.ts',
   ])('counts %s as tests', path => {
     expect(classifyPath(path, PLAIN)).toEqual({ part: 'tests' });
   });
@@ -54,7 +63,7 @@ describe('classifyPath', () => {
     },
   );
 
-  it('counts each test file and each vitest setup file of the repo as tests', () => {
+  it('counts each test file, test helper and vitest setup file of the repo as tests', () => {
     const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: dirname(fileURLToPath(import.meta.url)), encoding: 'utf8' }).trim();
     const files = execFileSync('git', ['ls-files'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean);
     const setupFiles = files
@@ -64,10 +73,12 @@ describe('classifyPath', () => {
         const entries = match ? [...match[1].matchAll(/['"]([^'"]+)['"]/g)].map(m => m[1]) : [];
         return entries.map(entry => posix.normalize(posix.join(posix.dirname(config), entry)));
       });
-    const testFiles = files.filter(f => /\.test\./.test(f));
+    // A test file, a test helper, or a file in a folder that only tests use
+    const testFiles = files.filter(f => /\.(test|spec)\.|[tT]estSupport\.|(^|\/)(__tests__|fixtures?)\//.test(f));
 
     expect(setupFiles).toContain('apps/server/src/logging/quietLogsInTests.ts');
     expect(testFiles.length).toBeGreaterThan(100);
+    expect(testFiles).toContain('apps/server/src/history-backup/archiveTestSupport.ts');
     const notTests = [...testFiles, ...setupFiles].filter(f => classifyPath(f, PLAIN).part !== 'tests');
     expect(notTests).toEqual([]);
   });
