@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { PassThrough } from 'stream';
+import { describe, expect, it, vi } from 'vitest';
+import type { FTPClient } from '../ftp/FTPClient.js';
 import { BrotherConnector } from './brother/BrotherConnector.js';
 
 /** Any connector, because reportPollTimeout comes from BaseMachineConnector */
@@ -25,5 +27,20 @@ describe('reportPollTimeout', () => {
     expect(machine.getStatus().errors[0]).toBe(
       'The machine did not answer all requests in 1 second. Chatter disconnected. It will connect again.',
     );
+  });
+});
+
+describe('downloadFile', () => {
+  it('gives the signal of the caller to the FTP client, so a cancel stops the download on the machine', async () => {
+    const machine = connector();
+    const downloadFile = vi.fn<FTPClient['downloadFile']>().mockResolvedValue(undefined);
+    (machine as unknown as { ftpClient: Pick<FTPClient, 'downloadFile'> }).ftpClient = { downloadFile };
+    const output = new PassThrough();
+    const signal = new AbortController().signal;
+
+    await machine.downloadFile('O1000', output, signal);
+
+    expect(downloadFile).toHaveBeenCalledOnce();
+    expect(downloadFile.mock.calls[0][2]).toBe(signal);
   });
 });
