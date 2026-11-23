@@ -125,6 +125,8 @@ interface TreeWalk {
    * and that late reply must not go to the next command.
    */
   stopReason?: TreeCutReason;
+  /** Aborts when each caller of the walk left. The walk then stops, and opens no more folders and makes no new login. */
+  signal?: AbortSignal;
 }
 
 type TreeCutReason = 'entries' | 'folders' | 'time' | 'longList' | 'cutList' | 'login';
@@ -709,7 +711,7 @@ export class FTPClient {
     depth: number,
     { signal, onTurn }: { signal: AbortSignal; onTurn: () => void }
   ): Promise<FileTree> {
-    const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, foldersLeft: MAX_TREE_FOLDERS };
+    const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, foldersLeft: MAX_TREE_FOLDERS, signal };
     try {
       assertSafeFtpArgument(path);
       if (depth <= 0) {
@@ -720,11 +722,14 @@ export class FTPClient {
         { timeLimitMs: TREE_WALK_TIME_LIMIT_MS, onTimeUp: () => stopWalk(walk, 'time') },
         () => this.buildTree(client, { path, depth, walk })
       ));
+      // Each caller left while the last folder was open: nobody reads this tree
+      signal.throwIfAborted();
       if (walk.cutReason) {
         log.warn(this.treeCutMessage(walk.cutReason), { path });
       }
       return { nodes, isCutShort: walk.cutReason !== undefined };
     } catch (err) {
+      if (signal.aborted) throw signal.reason;
       rethrowIfBusy(err);
       throw new Error(ftpErrorMessage(err, this.host, this.port), { cause: err });
     }
@@ -1263,12 +1268,13 @@ export class FTPClient {
 
   /**
    * Log in again when the client closed, for example after a raw LIST that got no reply. False when the walk must
-   * stop: after its time limit (which closed the client), or when the new login fails. The walk then keeps what it read.
+   * stop: after its time limit (which closed the client), when each caller left, or when the new login fails. The walk
+   * then keeps what it read.
    * It does not use stopReasonOf, because the folder limit is reached while the last folder is still in the list.
    */
   private async loginAgainForWalk(client: ftp.Client, walk: TreeWalk): Promise<boolean> {
     if (!client.closed) return true;
-    if (walk.stopReason) return false;
+    if (walk.stopReason || walk.signal?.aborted) return false;
     try {
       await this.login(client);
       return true;
@@ -1297,6 +1303,8 @@ export class FTPClient {
     for (let levelsLeft = depth; levelsLeft > 0 && level.length > 0; levelsLeft--) {
       const nextLevel: TreeFolder[] = [];
       for (const folder of level) {
+        // Each caller left. The abort closed the client, so the walk must not log in again.
+        walk.signal?.throwIfAborted();
         const stopReason = stopReasonOf(walk);
         if (stopReason) {
           cutWalk(walk, stopReason);
