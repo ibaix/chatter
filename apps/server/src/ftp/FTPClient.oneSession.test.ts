@@ -689,6 +689,16 @@ describe('FTPClient tree walks of a busy machine', () => {
     expect(counting.logins()).toBe(4);
   });
 
+  // A walk of depth 0 lists no folder, so it does not use the machine and cannot be busy
+  it('gives a tree of depth 0 at once, also when two walks wait', async () => {
+    const { client, counting, upload } = await busyMachine();
+    const waiting = [client.readFileTree('/', 2), client.readFileTree('/SUBS', 1)];
+
+    expect(await client.readFileTree('/PROGRAMS', 0)).toEqual({ nodes: [], isCutShort: false });
+    counting.releaseStor();
+    await Promise.all([upload, ...waiting]);
+  });
+
   it('gives the walk to the callers that stay, when one caller leaves', async () => {
     const { client, counting, upload } = await busyMachine();
     const leave = new AbortController();
