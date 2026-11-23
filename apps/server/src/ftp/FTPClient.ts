@@ -29,7 +29,7 @@ const MAX_FOLDER_LIST_MB = MAX_FOLDER_LIST_BYTES / 1024 / 1024;
 /** The most folders that one tree walk opens. Each folder costs some commands and a LIST on the machine. */
 export const MAX_TREE_FOLDERS = 200;
 /**
- * One tree walk stops after this time, and keeps what it read. The raw LIST waits 1 s for each folder,
+ * One tree walk stops after this time, and keeps what it read. A slow machine can take some time for each folder,
  * so a normal walk of many folders can take some time.
  */
 export const TREE_WALK_TIME_LIMIT_MS = 120_000;
@@ -56,8 +56,12 @@ const DOWNLOAD_TIME_LIMIT_MS = 30 * 60_000;
  * longer than the FTP timeout.
  */
 export const REPLY_AFTER_DATA_WAIT_MS = 3_000;
-/** The raw LIST does not wait for the server to close the data connection, so it waits this long for the listing */
-const RAW_LIST_TRANSFER_WAIT_MS = 1_000;
+/**
+ * The raw LIST waits this long for its reply (usually 226) after a clean end of the data connection, and for more data
+ * after its reply. Some old servers send no reply, and some do not close the data connection. A tree walk waits once
+ * for each folder, so this time is shorter than the wait of the raw RETR.
+ */
+const REPLY_AFTER_LIST_WAIT_MS = 1_000;
 /**
  * The raw RETR and the raw LIST stop when their data connection does not open in this time, and use the
  * fallback of basic-ftp. On a shop network a connection opens in a few milliseconds. The FTP timeout (30 s)
@@ -105,7 +109,7 @@ interface TreeWalk {
   stopReason?: TreeCutReason;
 }
 
-type TreeCutReason = 'entries' | 'folders' | 'time' | 'longList';
+type TreeCutReason = 'entries' | 'folders' | 'time' | 'longList' | 'cutList';
 
 function cutWalk(walk: TreeWalk, reason: TreeCutReason): void {
   walk.cutReason ??= reason;
@@ -125,16 +129,21 @@ function stopReasonOf(walk: TreeWalk): TreeCutReason | undefined {
   return undefined;
 }
 
-/** One folder listing, and whether it was longer than MAX_FOLDER_LIST_BYTES */
+/** One folder listing, whether it was longer than MAX_FOLDER_LIST_BYTES, and whether it ended before it was complete */
 interface FolderListing {
   entries: RawListEntry[];
   isTooLong: boolean;
+  isCut: boolean;
 }
 
-/** The text of a raw LIST, and whether Chatter stopped it at MAX_FOLDER_LIST_BYTES */
+/**
+ * The text of a raw LIST, whether Chatter stopped it at MAX_FOLDER_LIST_BYTES, and whether it ended before it was
+ * complete (an error reply or a stall after some bytes, or a last line with no line end and no reply)
+ */
 interface RawListing {
   text: string;
   isTooLong: boolean;
+  isCut: boolean;
 }
 
 /** A folder list that was too long or too slow. The caller cannot know if a file is in the folder. */
@@ -320,9 +329,9 @@ async function listFolderWithLimits(client: ftp.Client, path: string): Promise<f
   }
 }
 
-/** The complete lines of a listing. When the listing was cut, its last line can be cut in two, so it is left out. */
-function completeLines(text: string, isCut: boolean): string {
-  return isCut ? text.slice(0, text.lastIndexOf('\n') + 1) : text;
+/** The complete lines of a listing. When the listing can be cut, its last line can be cut in two, so it is left out. */
+function completeLines(text: string): string {
+  return text.slice(0, text.lastIndexOf('\n') + 1);
 }
 
 function alreadyExistsMessage(remotePath: string): string {
@@ -906,43 +915,97 @@ export class FTPClient {
   private async rawListCurrentDirectory(client: ftp.Client): Promise<RawListing> {
     const { host, port } = await requestPassiveAddress(client.ftp);
     const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
+    return this.receiveListing(client, dataSocket);
+  }
 
+  /**
+   * Send LIST and read the listing, as receiveFile reads a file. The listing is complete when the data connection
+   * ends cleanly and the machine sends its 2xx reply. Then it resolves at once.
+   * - An error reply (for example 426) or a stall after some bytes cuts the listing short. An error with no byte
+   *   rejects, so the fallback can try. After an error reply, the client still reads the data until it ends, for
+   *   REPLY_AFTER_LIST_WAIT_MS at most, because the data can come after the reply.
+   * - Some old servers send no reply. A listing whose data ended cleanly is then complete after REPLY_AFTER_LIST_WAIT_MS.
+   * - Some servers do not close the data connection. A listing with a 2xx reply is then complete when no data
+   *   comes in REPLY_AFTER_LIST_WAIT_MS.
+   * Each listing that is not complete keeps only its complete lines, and is cut short when it lost a line.
+   * When the reply did not come, the client closes, so a late reply cannot go to the next command.
+   */
+  private receiveListing(client: ftp.Client, dataSocket: net.Socket): Promise<RawListing> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       let byteCount = 0;
       let isTooLong = false;
-      const listing = (): RawListing => ({ text: completeLines(Buffer.concat(chunks).toString(), isTooLong), isTooLong });
-      // After a listing that is too long, the fallback must not read the same listing again
-      const fail = (err: unknown) => (isTooLong ? resolve(listing()) : reject(err));
+      let hasDataEnded = false;
+      let isReplyDone = false;
+      /** The error reply to LIST. The client reads the rest of the data first, as it can come after the reply. */
+      let replyError: Error | undefined;
+      let isSettled = false;
+      let timer: NodeJS.Timeout | undefined;
+
+      const listing = (isCut: boolean): RawListing => {
+        const text = Buffer.concat(chunks).toString();
+        if (hasDataEnded && isReplyDone && !isCut && !replyError) return { text, isTooLong, isCut: false };
+        const lines = completeLines(text);
+        return { text: lines, isTooLong, isCut: isCut || lines.length < text.length };
+      };
+      const settle = (outcome: Error | { isCut: boolean }) => {
+        if (isSettled) return;
+        isSettled = true;
+        clearTimeout(timer);
+        dataSocket.destroy();
+        if (!isReplyDone) client.close();
+        if (outcome instanceof Error) reject(outcome);
+        else resolve(listing(outcome.isCut));
+      };
+      // The bytes that came are kept. With no byte, the fallback can still read the listing.
+      const fail = (err: Error) => settle(byteCount > 0 ? { isCut: true } : err);
+      const startTimer = (waitMs: number, onTimeUp: () => void) => {
+        clearTimeout(timer);
+        if (!isSettled) timer = setTimeout(onTimeUp, waitMs);
+      };
+      const startIdleTimer = () => startTimer(this.timeoutMs, () => fail(new Error('Timeout: the raw LIST data connection is idle')));
+      const finish = () => (replyError ? fail(replyError) : settle({ isCut: false }));
+      const startReplyWait = () => startTimer(Math.min(this.timeoutMs, REPLY_AFTER_LIST_WAIT_MS), finish);
+      const settleWhenComplete = () => {
+        if (hasDataEnded && isReplyDone) finish();
+        else startReplyWait();
+      };
 
       dataSocket.on('data', (chunk: Buffer) => {
-        if (isTooLong) return;
+        if (isSettled) return;
         const room = MAX_FOLDER_LIST_BYTES - byteCount;
         chunks.push(chunk.length > room ? chunk.subarray(0, room) : chunk);
         byteCount += Math.min(chunk.length, room);
         if (chunk.length > room) {
           isTooLong = true;
-          dataSocket.destroy();
-        }
+          settle({ isCut: false });
+        } else if (isReplyDone) startReplyWait();
+        else startIdleTimer();
+      });
+      // 'end' comes only when the machine closes the data connection cleanly, not when the connection breaks
+      dataSocket.on('end', () => {
+        hasDataEnded = true;
+        settleWhenComplete();
       });
       dataSocket.on('error', fail);
-      // Until the reply to LIST comes, an idle data connection is destroyed, so the walk goes on with the fallback.
-      // After the reply, the wait for the listing has its own short limit, and a folder can be empty.
-      dataSocket.setTimeout(this.timeoutMs, () => {
-        dataSocket.destroy();
-        reject(new Error('Timeout: the raw LIST data connection is idle'));
-      });
 
-      client.send('LIST').then(() => {
-        dataSocket.setTimeout(0);
-        setTimeout(() => {
-          dataSocket.end();
-          resolve(listing());
-        }, RAW_LIST_TRANSFER_WAIT_MS);
-      }, (err: unknown) => {
-        dataSocket.end();
-        fail(err);
+      startIdleTimer();
+      client.ftp.handle('LIST', (reply, task) => {
+        if (reply instanceof Error) task.reject(reply);
+        else if (reply.code >= 200 && reply.code < 300) task.resolve(reply);
+        else if (reply.code >= 300) task.reject(new Error(`Unexpected reply to LIST: ${reply.message}`));
+        // A 1xx reply (for example 150) only tells that the transfer starts
+      }).then(() => {
+        isReplyDone = true;
+        settleWhenComplete();
+      }, (err: Error) => {
+        // The machine answered. A closed control connection is closed anyway.
+        isReplyDone = true;
+        replyError = err;
+        settleWhenComplete();
       });
+      // The timers above watch the transfer. The control connection is quiet until the 226, so its own timeout stops.
+      client.ftp.socket.setTimeout(0);
     });
   }
 
@@ -956,6 +1019,8 @@ export class FTPClient {
         return `The file tree on ${this.host} took too long. Chatter stops a walk after ${TREE_WALK_TIME_LIMIT_MS / 1000} s.`;
       case 'longList':
         return `A folder list on ${this.host} is too long. Chatter reads at most ${MAX_FOLDER_LIST_MB} MB of one folder list, and then opens no more folders.`;
+      case 'cutList':
+        return `A folder list on ${this.host} ended before it was complete. Chatter shows the complete lines that it read.`;
     }
   }
 
@@ -974,9 +1039,16 @@ export class FTPClient {
     try {
       raw = await this.rawListCurrentDirectory(client);
     } catch {
+      // A raw LIST that got no reply closed the client
+      await this.loginWhenClosed(client);
       return listWithBasicFtp(client);
     }
-    return { entries: parseRawList(raw.text), isTooLong: raw.isTooLong };
+    return { entries: parseRawList(raw.text), isTooLong: raw.isTooLong, isCut: raw.isCut };
+  }
+
+  /** Log in again on a client that closed, for example after a raw LIST that got no reply */
+  private async loginWhenClosed(client: ftp.Client): Promise<void> {
+    if (client.closed) await this.login(client);
   }
 
   /**
@@ -1003,8 +1075,9 @@ export class FTPClient {
           return top.nodes;
         }
         walk.foldersLeft -= 1;
-        const { entries, isTooLong } = await this.listFolder(client, folder.path);
+        const { entries, isTooLong, isCut } = await this.listFolder(client, folder.path);
         if (isTooLong) stopWalk(walk, 'longList');
+        if (isCut) cutWalk(walk, 'cutList');
         const kept = entries.slice(0, walk.entriesLeft);
         walk.entriesLeft -= kept.length;
         if (kept.length < entries.length) cutWalk(walk, 'entries');
@@ -1022,14 +1095,19 @@ export class FTPClient {
     return top.nodes;
   }
 
-  /** The entries of one folder. A folder that cannot be opened gives an empty list. */
+  /**
+   * The entries of one folder. A folder that cannot be opened gives an empty list.
+   * When the client closed, for example after a listing that got no reply, it logs in again first.
+   * When that login fails, the walk fails.
+   */
   private async listFolder(client: ftp.Client, path: string): Promise<FolderListing> {
+    await this.loginWhenClosed(client);
     try {
       await client.cd(path);
       await client.pwd();
       return await this.listCurrentDirectory(client);
     } catch {
-      return { entries: [], isTooLong: false };
+      return { entries: [], isTooLong: false, isCut: false };
     }
   }
 }
@@ -1047,8 +1125,8 @@ function treeNodeOf(entry: RawListEntry, parentPath: string): FTPTreeNode {
 async function listWithBasicFtp(client: ftp.Client): Promise<FolderListing> {
   try {
     const list = await client.list();
-    return { entries: list.map(item => ({ name: item.name, isDir: item.isDirectory, size: item.size })), isTooLong: false };
+    return { entries: list.map(item => ({ name: item.name, isDir: item.isDirectory, size: item.size })), isTooLong: false, isCut: false };
   } catch (err) {
-    return { entries: [], isTooLong: isListingTooLong(err) };
+    return { entries: [], isTooLong: isListingTooLong(err), isCut: false };
   }
 }
