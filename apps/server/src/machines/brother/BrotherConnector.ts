@@ -3,6 +3,7 @@ import { BaseMachineConnector } from '../BaseMachineConnector.js';
 import { PollTimingRecorder } from '../pollTimings.js';
 import { tuneMachineSocket } from '../machineSocket.js';
 import { createLogger } from '../../logging/logger.js';
+import { ReplyTooLargeError, warnReplyTooLarge } from '../replyLimit.js';
 import { TOOL_SYNC_TIMEOUT_MS, ToolSyncTracker, isIdle } from './toolSync.js';
 import {
   ATC_COMMANDS,
@@ -36,6 +37,12 @@ import type {
 const log = createLogger('brother');
 
 const DEFAULT_DATA_PORT = 10000;
+
+/**
+ * The largest reply that Chatter reads. The largest reply of a real Speedio (C00) is the tool data, about 13 KB.
+ * A reply with no closing % must stop, because a Pi can have 512 MB of RAM.
+ */
+export const MAX_BROTHER_REPLY_BYTES = 1024 * 1024;
 
 /**
  * Chatter closes the data connection on purpose and opens it again every 60 seconds, at the start of a poll.
@@ -260,6 +267,7 @@ export class BrotherConnector extends BaseMachineConnector {
   /**
    * Send a command and wait for the reply between % signs.
    * With no reply in time, it disconnects: a late reply would come as the reply of the next command.
+   * A reply longer than MAX_BROTHER_REPLY_BYTES disconnects too.
    * It also ends when the socket closes, because a destroyed socket gives no 'data', 'error' or 'timeout' after it.
    */
   async sendCommand(command: string): Promise<ParsedResponse> {
@@ -268,13 +276,22 @@ export class BrotherConnector extends BaseMachineConnector {
 
     return new Promise((resolve, reject) => {
       let reply = '';
+      /** The place of the opening %, or -1 before it came */
+      let start = -1;
 
+      // Each chunk is searched once, so a long reply in many chunks does not take more and more time
       const onData = (chunk: Buffer) => {
+        const searchFrom = reply.length;
         reply += chunk.toString('ascii');
-        const match = reply.match(/%([^%]*)%/);
-        if (match) {
+        if (start === -1) start = reply.indexOf('%', searchFrom);
+        const end = start === -1 ? -1 : reply.indexOf('%', Math.max(start + 1, searchFrom));
+        if (end !== -1) {
           cleanup();
-          resolve(parseResponse(match[1]));
+          resolve(parseResponse(reply.slice(start + 1, end)));
+        } else if (reply.length > MAX_BROTHER_REPLY_BYTES) {
+          cleanup();
+          this.disconnect();
+          reject(warnReplyTooLarge(log, this.id, new ReplyTooLargeError(MAX_BROTHER_REPLY_BYTES)));
         }
       };
 

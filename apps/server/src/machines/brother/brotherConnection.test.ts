@@ -1,7 +1,7 @@
 import net from 'net';
 import Database from 'better-sqlite3';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { BROTHER_RECONNECT_MS, BrotherConnector, NO_REPLY_ERROR } from './BrotherConnector.js';
+import { BROTHER_RECONNECT_MS, BrotherConnector, MAX_BROTHER_REPLY_BYTES, NO_REPLY_ERROR } from './BrotherConnector.js';
 import type { BrotherMachineStatus } from '../../types/index.js';
 import { TOOL_SYNC_TIMEOUT_MS } from './toolSync.js';
 import { captureLog, type CapturedLog } from '../../logging/testSupport.js';
@@ -9,6 +9,7 @@ import { ConnectionLog } from '../../logging/ConnectionLog.js';
 import { HardwarePoller } from '../../polling/poller.js';
 import type { MachineRegistry } from '../../polling/MachineRegistry.js';
 import { MOCK_RESPONSES, closeFakeBrothers, closedPort, startFakeBrother, type FakeBrother } from './testSupport.js';
+import { sendForever } from '../testSupport.js';
 
 /**
  * The TCP connection to the control, with a real socket and a fake Brother: the connect, a reply that does not come,
@@ -567,5 +568,93 @@ describe('Brother planned reconnect when the control does not close its side', (
 
     expect(await sync).toEqual({ outcome: 'synced', toolSync: expect.objectContaining({ error: null, running: false }) });
     expect(fake.machineSides).toHaveLength(2);
+  });
+});
+
+describe('Brother reply size limit, with a real TCP connection', () => {
+  let server: net.Server | undefined;
+  const machineSides: net.Socket[] = [];
+
+  /** A control that calls `answer` with its side of the connection at the first command */
+  async function startControl(answer: (socket: net.Socket) => void): Promise<number> {
+    const control = net.createServer(socket => {
+      machineSides.push(socket);
+      socket.on('error', () => {});
+      socket.once('data', () => answer(socket));
+    });
+    server = control;
+    await new Promise<void>(resolve => control.listen(0, '127.0.0.1', resolve));
+    return (control.address() as net.AddressInfo).port;
+  }
+
+  afterEach(async () => {
+    for (const socket of machineSides.splice(0)) socket.destroy();
+    const control = server;
+    server = undefined;
+    if (control) await new Promise(resolve => control.close(resolve));
+  });
+
+  it('rejects a reply with no closing % at the limit, closes the connection and writes one warning', async () => {
+    let sent: Promise<number> | undefined;
+    const port = await startControl(socket => {
+      socket.write('%RLOD    TOLNI1  00\r\n');
+      sent = sendForever(socket);
+    });
+    const brother = connectorFor(port, 60_000);
+    await brother.connect();
+    const log = captureLog();
+    try {
+      await expect(brother.sendCommand('TOLNI1')).rejects.toThrow(
+        'The machine sent a reply larger than 1 MB. Chatter stopped reading it and closed the connection.');
+
+      expect(brother.connected).toBe(false);
+      // The control stops when Chatter closes the connection. Only the socket buffers hold more than the limit.
+      expect(await sent).toBeLessThan(MAX_BROTHER_REPLY_BYTES + 8 * 1024 * 1024);
+      expect(log.text('warn').split('\n')).toHaveLength(1);
+      expect(log.text('warn')).toContain('b1');
+      expect(log.text('warn')).toContain(String(MAX_BROTHER_REPLY_BYTES));
+    } finally {
+      log.restore();
+    }
+  });
+
+  it('shows the machine offline with the reason when a poll gets an endless reply', async () => {
+    const port = await startControl(socket => { void sendForever(socket); });
+
+    const status = await connectorFor(port, 60_000).poll();
+
+    expect(status.connected).toBe(false);
+    expect(status.errors.join('; ')).toContain('The machine sent a reply larger than 1 MB.');
+  });
+
+  it('still reads the tool data of a real control, which is about 13 KB', async () => {
+    const toolLines = Array.from({ length: 240 }, (_, i) =>
+      `T${String(i + 1).padStart(2, '0')}, 1.5000, 0.0000, 0.2500, 0.0000, 0, 0, 0, 0, 'ENDMILL '`);
+    const tolni1 = `RLOD    TOLNI1  00\r\n${toolLines.join('\r\n')}\r\n\r\n00%`;
+    expect(tolni1.length).toBeGreaterThan(13 * 1024);
+    const fake = await startFakeBrother({ replies: { ...MOCK_RESPONSES, TOLNI1: tolni1 } });
+    const brother = connectorFor(fake.port, 60_000);
+    await brother.connect();
+
+    const reply = await brother.sendCommand('TOLNI1');
+
+    expect(reply.T01).toEqual(['1.5000', '0.0000', '0.2500', '0.0000', '0', '0', '0', '0', "'ENDMILL '"]);
+    expect(Object.keys(reply).filter(key => /^T\d+$/.test(key))).toHaveLength(240);
+  });
+
+  it('reads a reply that comes in parts, also with the closing % alone in the last part', async () => {
+    const parts = ['%RLOD    PA', 'NEL   00\r\nD01,0,0,0\r\n\r\n10', '%'];
+    const port = await startControl(async socket => {
+      for (const part of parts) {
+        socket.write(part);
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+    });
+    const brother = connectorFor(port, 60_000);
+    await brother.connect();
+
+    const reply = await brother.sendCommand('PANEL');
+
+    expect(reply.D01).toEqual(['0', '0', '0']);
   });
 });
