@@ -167,7 +167,7 @@ export class Auth {
    */
   deviceCookieFor(username: string): string | null {
     const user = this.users.findByName(username);
-    return user && signDeviceCookie(this.deviceKey, { userId: user.id, deviceId: newDeviceId() }, user.passwordHash);
+    return user && signDeviceCookie(this.deviceKey, { userId: user.id, deviceId: newDeviceId() }, user);
   }
 
   /**
@@ -175,7 +175,7 @@ export class Auth {
    * The username is read as logIn() and hasUser() read it: upper and lower case are the same, and the login form trims it.
    */
   knownDeviceOf(cookie: string | null | undefined, username: string): string | null {
-    const device = readDeviceCookie(this.deviceKey, cookie ?? undefined, id => this.users.find(id)?.passwordHash ?? null);
+    const device = readDeviceCookie(this.deviceKey, cookie ?? undefined, id => this.users.find(id));
     if (!device) return null;
     return this.users.findByName(username)?.id === device.userId ? device.deviceId : null;
   }

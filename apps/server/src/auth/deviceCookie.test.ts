@@ -9,12 +9,13 @@ const KEY = Buffer.alloc(DEVICE_KEY_BYTES, 7);
 const OTHER_KEY = Buffer.alloc(DEVICE_KEY_BYTES, 8);
 const DEVICE = { userId: 4, deviceId: newDeviceId() };
 const PASSWORD_HASH = 'scrypt$salt$hash-of-the-password';
+const USER = { passwordHash: PASSWORD_HASH, deviceEpoch: 0 };
 
 describe('device cookie', () => {
   it('gives the user and the device back from a cookie that it signed', () => {
-    const cookie = signDeviceCookie(KEY, DEVICE, PASSWORD_HASH);
+    const cookie = signDeviceCookie(KEY, DEVICE, USER);
 
-    expect(readDeviceCookie(KEY, cookie, () => PASSWORD_HASH)).toEqual(DEVICE);
+    expect(readDeviceCookie(KEY, cookie, () => USER)).toEqual(DEVICE);
   });
 
   it('gives a new device ID each time', () => {
@@ -22,7 +23,7 @@ describe('device cookie', () => {
   });
 
   it('has only the user ID, the device ID and the signature: no password and no key', () => {
-    const cookie = signDeviceCookie(KEY, DEVICE, PASSWORD_HASH);
+    const cookie = signDeviceCookie(KEY, DEVICE, USER);
 
     expect(cookie.split('.')).toEqual([String(DEVICE.userId), DEVICE.deviceId, expect.any(String)]);
     expect(cookie).not.toContain('scrypt');
@@ -30,22 +31,32 @@ describe('device cookie', () => {
   });
 
   it('refuses a cookie when the password of the user changed', () => {
-    const cookie = signDeviceCookie(KEY, DEVICE, PASSWORD_HASH);
-    expect(readDeviceCookie(KEY, cookie, () => 'scrypt$salt$hash-of-a-new-password')).toBeNull();
+    const cookie = signDeviceCookie(KEY, DEVICE, USER);
+    expect(readDeviceCookie(KEY, cookie, () => ({ ...USER, passwordHash: 'scrypt$salt$hash-of-a-new-password' }))).toBeNull();
+  });
+
+  it('refuses a cookie from before the device epoch of the user changed', () => {
+    const cookie = signDeviceCookie(KEY, DEVICE, USER);
+    expect(readDeviceCookie(KEY, cookie, () => ({ ...USER, deviceEpoch: 1 }))).toBeNull();
+  });
+
+  it('accepts a cookie that it signed after the device epoch changed', () => {
+    const user = { ...USER, deviceEpoch: 3 };
+    expect(readDeviceCookie(KEY, signDeviceCookie(KEY, DEVICE, user), () => user)).toEqual(DEVICE);
   });
 
   it('refuses a cookie when the user does not exist', () => {
-    const cookie = signDeviceCookie(KEY, DEVICE, PASSWORD_HASH);
+    const cookie = signDeviceCookie(KEY, DEVICE, USER);
     expect(readDeviceCookie(KEY, cookie, () => null)).toBeNull();
   });
 
   it('refuses a cookie that a different key signed', () => {
-    const cookie = signDeviceCookie(OTHER_KEY, DEVICE, PASSWORD_HASH);
-    expect(readDeviceCookie(KEY, cookie, () => PASSWORD_HASH)).toBeNull();
+    const cookie = signDeviceCookie(OTHER_KEY, DEVICE, USER);
+    expect(readDeviceCookie(KEY, cookie, () => USER)).toBeNull();
   });
 
   it('refuses a cookie with a changed user ID, device ID or signature', () => {
-    const [userId, deviceId, signature] = signDeviceCookie(KEY, DEVICE, PASSWORD_HASH).split('.');
+    const [userId, deviceId, signature] = signDeviceCookie(KEY, DEVICE, USER).split('.');
     const changedSignature = (signature[0] === 'A' ? 'B' : 'A') + signature.slice(1);
     const tampered = [
       [String(Number(userId) + 1), deviceId, signature],
@@ -53,12 +64,12 @@ describe('device cookie', () => {
       [userId, deviceId, changedSignature],
     ];
 
-    for (const parts of tampered) expect(readDeviceCookie(KEY, parts.join('.'), () => PASSWORD_HASH)).toBeNull();
+    for (const parts of tampered) expect(readDeviceCookie(KEY, parts.join('.'), () => USER)).toBeNull();
   });
 
   it('refuses a cookie that is not in the right form', () => {
     for (const cookie of [undefined, '', 'abc', '4.x.y', `4.${DEVICE.deviceId}`, `-4.${DEVICE.deviceId}.${'A'.repeat(43)}`]) {
-      expect(readDeviceCookie(KEY, cookie, () => PASSWORD_HASH)).toBeNull();
+      expect(readDeviceCookie(KEY, cookie, () => USER)).toBeNull();
     }
   });
 });

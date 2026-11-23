@@ -15,6 +15,8 @@ export interface User {
 /** A user and the hash of their password */
 export interface StoredUser extends User {
   passwordHash: string;
+  /** Goes up when the user forgets their other browsers. It is in the signature of each device cookie. */
+  deviceEpoch: number;
 }
 
 /** What it takes to make a user */
@@ -44,6 +46,7 @@ interface UserRow {
   role: Role;
   created_at: number;
   last_login_at: number | null;
+  device_epoch: number;
 }
 
 /** Older versions kept their one account in the "settings" table, with these keys */
@@ -65,9 +68,11 @@ export class UserStore {
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL,
         created_at INTEGER NOT NULL,
-        last_login_at INTEGER
+        last_login_at INTEGER,
+        device_epoch INTEGER NOT NULL DEFAULT 0
       )
     `);
+    this.addDeviceEpoch();
     this.moveOldAccount();
   }
 
@@ -140,6 +145,16 @@ export class UserStore {
     this.db.prepare("DELETE FROM users WHERE role = 'admin'").run();
   }
 
+  /** The device cookies of this user stop. See deviceCookie.ts. */
+  forgetDevicesOf(id: number): void {
+    this.db.prepare('UPDATE users SET device_epoch = device_epoch + 1 WHERE id = ?').run(id);
+  }
+
+  /** The device cookies of each user stop, for the password reset from the command line */
+  forgetAllDevices(): void {
+    this.db.prepare('UPDATE users SET device_epoch = device_epoch + 1').run();
+  }
+
   markLoggedIn(id: number): void {
     this.db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(this.now(), id);
   }
@@ -166,6 +181,14 @@ export class UserStore {
     if (!otherAdmin) throw new LastAdminError();
   }
 
+  /** A users table of an older version has no device epoch. Its device cookies stop once, because their signature has no epoch. */
+  private addDeviceEpoch(): void {
+    const columns = this.db.pragma('table_info(users)') as { name: string }[];
+    if (!columns.some(column => column.name === 'device_epoch')) {
+      this.db.exec('ALTER TABLE users ADD COLUMN device_epoch INTEGER NOT NULL DEFAULT 0');
+    }
+  }
+
   /** The account of an older version becomes the first admin */
   private moveOldAccount(): void {
     const settings = new SettingsTable(this.db);
@@ -189,5 +212,5 @@ function toUser({ id, username, role, created_at, last_login_at }: UserRow): Use
 }
 
 function toStoredUser(row: UserRow): StoredUser {
-  return { ...toUser(row), passwordHash: row.password_hash };
+  return { ...toUser(row), passwordHash: row.password_hash, deviceEpoch: row.device_epoch };
 }

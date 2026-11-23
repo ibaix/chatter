@@ -10,8 +10,9 @@ const log = createLogger('auth');
  * who sends wrong passwords for a user cannot lock that user out of their own browser.
  *
  * The cookie is "<user ID>.<device ID>.<signature>". The signature is an HMAC with a key of the server,
- * over the user ID, the device ID and the password hash of the user. So the cookie stops when the password
- * changes or the user is removed. The cookie has no password, no password hash and no key.
+ * over the user ID, the device ID, the password hash and the device epoch of the user. So the cookie stops
+ * when the password changes, when the user logs out their other browsers (the epoch goes up),
+ * or when the user is removed. The cookie has no password, no password hash and no key.
  */
 
 export const DEVICE_KEY_BYTES = 32;
@@ -19,7 +20,7 @@ export const DEVICE_KEY_BYTES = 32;
 export const DEVICE_KEY_FILE = 'device-key';
 const DEVICE_ID_BYTES = 16;
 /** Changes when the form of the cookie changes, so an old cookie is not read the wrong way */
-const SIGNATURE_LABEL = 'chatter-device-v1';
+const SIGNATURE_LABEL = 'chatter-device-v2';
 const COOKIE_FORM = /^([1-9]\d{0,15})\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/;
 /** Only the owner can read and write the key file */
 const OWNER_ONLY = 0o600;
@@ -30,33 +31,41 @@ export interface KnownDevice {
   deviceId: string;
 }
 
+/** What the signature reads from the user. When one of these changes, each device cookie of the user stops. */
+export interface DeviceSecret {
+  passwordHash: string;
+  deviceEpoch: number;
+}
+
 /** A random ID for a browser that logs in for the first time */
 export const newDeviceId = () => randomBytes(DEVICE_ID_BYTES).toString('base64url');
 
-const signatureOf = (key: Buffer, { userId, deviceId }: KnownDevice, passwordHash: string) =>
-  createHmac('sha256', key).update(`${SIGNATURE_LABEL}\n${userId}\n${deviceId}\n${passwordHash}`).digest();
+const signatureOf = (key: Buffer, { userId, deviceId }: KnownDevice, { passwordHash, deviceEpoch }: DeviceSecret) =>
+  createHmac('sha256', key)
+    .update(`${SIGNATURE_LABEL}\n${userId}\n${deviceId}\n${deviceEpoch}\n${passwordHash}`)
+    .digest();
 
 /** The value of the device cookie for this user and device */
-export function signDeviceCookie(key: Buffer, device: KnownDevice, passwordHash: string): string {
-  return `${device.userId}.${device.deviceId}.${signatureOf(key, device, passwordHash).toString('base64url')}`;
+export function signDeviceCookie(key: Buffer, device: KnownDevice, secret: DeviceSecret): string {
+  return `${device.userId}.${device.deviceId}.${signatureOf(key, device, secret).toString('base64url')}`;
 }
 
 /**
  * The user and the device of a cookie that this server signed, or null.
- * `passwordHashOf` gives the password hash of a user ID now, or null when the user does not exist.
+ * `secretOf` gives the password hash and the device epoch of a user ID now, or null when the user does not exist.
  */
 export function readDeviceCookie(
   key: Buffer,
   cookie: string | undefined,
-  passwordHashOf: (userId: number) => string | null,
+  secretOf: (userId: number) => DeviceSecret | null,
 ): KnownDevice | null {
   const parts = COOKIE_FORM.exec(cookie ?? '');
   if (!parts) return null;
   const device = { userId: Number(parts[1]), deviceId: parts[2] };
-  const passwordHash = passwordHashOf(device.userId);
-  if (passwordHash === null) return null;
+  const secret = secretOf(device.userId);
+  if (secret === null) return null;
   const signature = Buffer.from(parts[3], 'base64url');
-  const expected = signatureOf(key, device, passwordHash);
+  const expected = signatureOf(key, device, secret);
   return signature.length === expected.length && timingSafeEqual(signature, expected) ? device : null;
 }
 
