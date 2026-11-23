@@ -1,4 +1,6 @@
-import { createWriteStream, mkdirSync, openSync, renameSync, statSync, type WriteStream } from 'node:fs';
+import {
+  closeSync, constants, createWriteStream, mkdirSync, openSync, renameSync, statSync, writeSync, type WriteStream,
+} from 'node:fs';
 import path from 'node:path';
 
 /** The size of one log file. With the old file, the log takes at most 2 MB on the card. */
@@ -119,5 +121,33 @@ function fileSize(filePath: string): number {
     return statSync(filePath).size;
   } catch {
     return 0;
+  }
+}
+
+/**
+ * Adds one line to the log file of the server, from a second process such as `npm run reset-password`.
+ * Gives false, and writes nothing, when the file does not exist or cannot be written.
+ *
+ * It never makes the file or its folder. A person can run the command outside Docker with sudo. A file that root made
+ * has mode 0600, and the server, which does not run as root, could not write its log any more.
+ * It never rotates the file either. The server counts the size of its file by itself, so a rotate here could make the
+ * server write into the old file, and its next rotate would delete lines. The line makes the file only a little longer
+ * than its limit, until the next rotate of the server.
+ */
+export function appendToExistingLog(filePath: string, text: string): boolean {
+  let fd: number;
+  try {
+    // No O_CREAT, so a missing file stays missing
+    fd = openSync(filePath, constants.O_WRONLY | constants.O_APPEND);
+  } catch {
+    return false;
+  }
+  try {
+    writeSync(fd, `${text}\n`);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    closeSync(fd);
   }
 }

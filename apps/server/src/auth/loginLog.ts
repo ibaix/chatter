@@ -11,8 +11,10 @@ const MAX_TEXT_LENGTH = 64;
  * wrong-password: the account exists, but the password was wrong.
  * no-such-user: no account has this username.
  * locked: the computer had too many wrong passwords, so Chatter did not check the password.
+ * reset-password: `npm run reset-password` on the server made this user the new Admin. It is not a password try,
+ * but the Admin must see it here, because it changes who controls Chatter.
  */
-export type LoginResult = 'logged-in' | 'password-changed' | 'wrong-password' | 'no-such-user' | 'locked';
+export type LoginResult = 'logged-in' | 'password-changed' | 'wrong-password' | 'no-such-user' | 'locked' | 'reset-password';
 
 /** One password try */
 export interface LoginTry {

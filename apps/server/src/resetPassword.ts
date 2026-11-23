@@ -1,16 +1,38 @@
 /**
- * Remove the admin accounts, for when no admin knows their password.
- * Every browser is logged out, and no browser is a known browser any more. The users who are not admins stay.
- * After this, the next person who opens Chatter makes a new admin account.
+ * Make a new Admin, for when no Admin knows their password. It asks for the username and the password on the terminal.
+ * The old Admin accounts are removed, and each browser is logged out. The users who are not Admins stay.
+ * The first-run setup stays closed, so no other person on the network can make the Admin.
  *
  *   docker compose exec chatterbox npm run reset-password
  */
 import 'dotenv/config';
-import { resetAdmins } from './auth/adminReset.js';
+import { LoginLog } from './auth/loginLog.js';
+import { runPasswordReset } from './auth/resetPasswordPrompt.js';
 import { SessionStore } from './auth/sessionStore.js';
 import { UserStore } from './auth/userStore.js';
-import { closeDatabase, getDb } from './storage/database.js';
+import { appendToExistingLog } from './logging/LogFile.js';
+import { addLogListener } from './logging/logger.js';
+import { ServerLog } from './logging/ServerLog.js';
+import { closeDatabase, dataFolder, getDb } from './storage/database.js';
 
-resetAdmins(new UserStore(getDb()), new SessionStore(getDb()));
-await closeDatabase();
-console.log('The admin accounts are removed. Open Chatter now and make a new admin account.');
+// The warning about the new Admin also goes to the log file `logs/chatter.log` in the data folder, which is in the
+// support bundle. The log view of Settings > Diagnostics does not show it: that view shows the lines of the server
+// process only. The row in the login log (Settings > Logins) shows the reset in the app.
+const logFile = ServerLog.forDataFolder(dataFolder()).file;
+const stopListening = addLogListener(entry => {
+  if (logFile) appendToExistingLog(logFile.filePath, entry.text);
+});
+try {
+  const db = getDb();
+  const done = await runPasswordReset({
+    input: process.stdin,
+    output: process.stdout,
+    users: new UserStore(db),
+    sessions: new SessionStore(db),
+    loginLog: new LoginLog(db),
+  });
+  if (!done) process.exitCode = 1;
+} finally {
+  stopListening();
+  await closeDatabase();
+}
