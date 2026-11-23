@@ -66,6 +66,14 @@ describe('anchorsOf', () => {
     expect(anchorsOf('~~~bash\n# not a heading\n~~~\n## Real')).toEqual(['real']);
   });
 
+  it('ends a code block only at a fence of the same character, as long or longer, with no info string', () => {
+    expect(anchorsOf('````md\n```\n# fake\n```\n# fake2\n````\n## Real')).toEqual(['real']);
+    expect(anchorsOf('~~~md\n```\n# fake\n```\n# fake2\n~~~\n## Real')).toEqual(['real']);
+    expect(anchorsOf('```\n# fake\n```bash\n# fake2\n```\n## Real')).toEqual(['real']);
+    // Backticks after the opening backticks make inline code, not a code block
+    expect(anchorsOf('```inline``` code\n## Real')).toEqual(['real']);
+  });
+
   it('skips a code block in a list item', () => {
     expect(anchorsOf('- x\n  ```\n  # fake\n  ```\n## Real')).toEqual(['real']);
   });

@@ -45,14 +45,21 @@ export function anchorsOf(markdown: string): string[] {
   return anchors;
 }
 
-/** The lines of a Markdown page that are not in a code block (``` or ~~~). */
+/**
+ * The lines of a Markdown page that are not in a code block (``` or ~~~). As in CommonMark, a code block ends at
+ * a fence of the same character that is at least as long as the opening fence and has no text after it.
+ */
 function linesOutsideCodeBlocks(markdown: string): string[] {
   const lines: string[] = [];
   let fence: string | undefined;
   for (const line of markdown.split('\n')) {
-    const fenceMark = /^\s*(```|~~~)/.exec(line)?.[1];
-    if (fenceMark && (fence === undefined || fence === fenceMark)) {
-      fence = fence === undefined ? fenceMark : undefined;
+    const mark = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence === undefined && mark && !(mark[1][0] === '`' && mark[2].includes('`'))) {
+      fence = mark[1];
+      continue;
+    }
+    if (fence !== undefined && mark?.[1][0] === fence[0] && mark[1].length >= fence.length && mark[2].trim() === '') {
+      fence = undefined;
       continue;
     }
     if (fence === undefined) lines.push(line);
