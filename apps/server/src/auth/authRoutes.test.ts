@@ -8,6 +8,7 @@ import { createApp } from '../app.js';
 import { HardwarePoller } from '../polling/poller.js';
 import { noHistory } from '../recording/testSupport.js';
 import { SESSION_COOKIE } from './authRoutes.js';
+import { MAX_LOGGED_UNKNOWN_USERS } from './LoginLimiter.js';
 import { LoginLog } from './loginLog.js';
 import { ProxySettings } from './proxySettings.js';
 import { authParts } from './testSupport.js';
@@ -481,6 +482,22 @@ describe('auth routes behind a reverse proxy', () => {
         expect.stringMatching(/username=sam.*address=192\.168\.1\.66/),
       ]);
       expect(log.text()).not.toContain('secret-wrong');
+    });
+
+    it('writes only the first tries with unknown usernames from one address, then one line that it stops', async () => {
+      log = captureLog();
+      for (let i = 0; i < MAX_LOGGED_UNKNOWN_USERS + 5; i++) {
+        await postFor('192.168.1.66', '/api/auth/login', { username: `random-${i}`, password: 'wrong-password' });
+      }
+      await postFor('192.168.1.67', '/api/auth/login', { username: 'other-computer', password: 'wrong-password' });
+      await wrongAdminPassword('192.168.1.66');
+
+      expect(linesWith('warn', 'address=192.168.1.66 result=no-such-user')).toHaveLength(MAX_LOGGED_UNKNOWN_USERS);
+      expect(log.text()).not.toContain(`username=random-${MAX_LOGGED_UNKNOWN_USERS}`);
+      expect(linesWith('warn', 'not logged')).toEqual([expect.stringMatching(/address=192\.168\.1\.66/)]);
+      // Other computers and known usernames still get a line
+      expect(linesWith('warn', 'username=other-computer')).toHaveLength(1);
+      expect(linesWith('warn', 'result=wrong-password')).toEqual([expect.stringMatching(/username=admin.*address=192\.168\.1\.66/)]);
     });
 
     it('writes one warn line for the first try of a locked computer, not for each try', async () => {

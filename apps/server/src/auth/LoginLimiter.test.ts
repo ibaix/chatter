@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureLog, type CapturedLog } from '../logging/testSupport.js';
-import { LoginLimiter, MAX_DEVICE_FAILURES, MAX_FAILURES, MAX_USER_FAILURES } from './LoginLimiter.js';
+import { LoginLimiter, MAX_DEVICE_FAILURES, MAX_FAILURES, MAX_LOGGED_UNKNOWN_USERS, MAX_USER_FAILURES } from './LoginLimiter.js';
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 
@@ -323,6 +323,34 @@ describe('LoginLimiter for a known device', () => {
 
     failOnDevice(limiter, 1);
     expect(limiter.isBlocked('10.0.0.5', 'admin', DEVICE)).toBe(true);
+  });
+});
+
+describe('LoginLimiter tries with an unknown username', () => {
+  it('counts the tries of each address group, also for many different usernames', () => {
+    const limiter = new LoginLimiter();
+    expect(limiter.countUnknownUser('10.0.0.5')).toBe(1);
+    expect(limiter.countUnknownUser('10.0.0.5')).toBe(2);
+    expect(limiter.countUnknownUser('10.0.0.6')).toBe(1);
+    expect(limiter.countUnknownUser('2001:db8:1:2::66')).toBe(1);
+    expect(limiter.countUnknownUser('2001:db8:1:2::67')).toBe(2);
+  });
+
+  it('starts the count again after 15 minutes', () => {
+    let now = 0;
+    const limiter = new LoginLimiter(() => now);
+    for (let i = 0; i < 5; i++) limiter.countUnknownUser('10.0.0.5');
+
+    now = FIFTEEN_MINUTES + 1;
+    expect(limiter.countUnknownUser('10.0.0.5')).toBe(1);
+  });
+
+  it('keeps the count of a busy address when many new addresses fill the list', () => {
+    const limiter = new LoginLimiter();
+    for (let i = 0; i < MAX_LOGGED_UNKNOWN_USERS; i++) limiter.countUnknownUser('10.0.0.5');
+    for (let i = 0; i < 2000; i++) limiter.countUnknownUser(`10.1.${Math.floor(i / 250)}.${i % 250}`);
+
+    expect(limiter.countUnknownUser('10.0.0.5')).toBe(MAX_LOGGED_UNKNOWN_USERS + 1);
   });
 });
 
