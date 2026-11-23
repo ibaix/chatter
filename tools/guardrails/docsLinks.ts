@@ -83,7 +83,12 @@ export interface HeadingLink {
 
 /**
  * The links of a docs page (file, from docs/) to a heading of a docs page, for example "./update.md#back-up"
- * or "#back-up". Links to other sites, and links in code, are not included.
+ * or "#back-up". Links to other sites, and links in code or in the frontmatter, are not included.
+ *
+ * It reads inline links (with a title in "", '' or (), and a target in <> with no spaces) and reference
+ * definitions ([label]: target). It does NOT read: HTML links (<a href>), links in the frontmatter, a link or
+ * a reference definition on more than one line, a target with spaces or parentheses, and links in .vue files
+ * or in docs/.vitepress/config.mts.
  */
 export function headingLinksIn(markdown: string, file: string): HeadingLink[] {
   const links: HeadingLink[] = [];
