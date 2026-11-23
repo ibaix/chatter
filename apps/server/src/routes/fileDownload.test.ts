@@ -5,8 +5,10 @@ import { attachmentHeader, downloadAsStream } from './fileDownload.js';
 import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
 
 /** A connector whose download runs the given steps on the output stream */
-function connectorThat(download: (output: Writable) => Promise<void>): BaseMachineConnector {
-  return { downloadFile: (_path: string, output: Writable) => download(output) } as BaseMachineConnector;
+function connectorThat(download: (output: Writable, signal?: AbortSignal) => Promise<void>): BaseMachineConnector {
+  return {
+    downloadFile: (_path: string, output: Writable, signal?: AbortSignal) => download(output, signal),
+  } as BaseMachineConnector;
 }
 
 async function readAll(stream: ReadableStream): Promise<string> {
@@ -71,6 +73,20 @@ describe('downloadAsStream', () => {
     expect(writesAfterCancel).toBe(1);
   });
 
+  it('stops the download on the machine when the reader stops early', async () => {
+    let downloadSignal: AbortSignal | undefined;
+    const connector = connectorThat(async (output, signal) => {
+      downloadSignal = signal;
+      output.write('G00');
+    });
+
+    const stream = await downloadAsStream(connector, '/O0100.NC');
+    expect(downloadSignal?.aborted).toBe(false);
+    await stream.cancel();
+
+    expect(downloadSignal?.aborted).toBe(true);
+  });
+
   // A slow browser must slow the machine download. Else the whole file waits in the memory of a Pi.
   describe('with a reader that is slow', () => {
     const chunk = Buffer.alloc(8 * 1024, 'G');
@@ -101,7 +117,7 @@ describe('downloadAsStream', () => {
       expect((await readAll(stream)).length).toBe(chunk.length * chunkCount);
     });
 
-    it('lets the download run to its end when the reader stops', async () => {
+    it('does not hold a write of a connector that goes on after the reader stops', async () => {
       const { connector, state } = bigFileConnector();
 
       const stream = await downloadAsStream(connector, '/BIG.NC');

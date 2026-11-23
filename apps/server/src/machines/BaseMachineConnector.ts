@@ -212,8 +212,9 @@ export abstract class BaseMachineConnector extends EventEmitter {
     return this.ftpClient.readFileTree(path, depth);
   }
 
-  async downloadFile(filePath: string, writableStream: Writable): Promise<void> {
-    return this.ftpClient.downloadFile(filePath, writableStream);
+  /** `signal` stops the download on the machine, for example when the user cancels it */
+  async downloadFile(filePath: string, writableStream: Writable, signal?: AbortSignal): Promise<void> {
+    return this.ftpClient.downloadFile(filePath, writableStream, signal);
   }
 
   async uploadFile(

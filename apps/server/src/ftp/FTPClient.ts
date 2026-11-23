@@ -596,33 +596,39 @@ export class FTPClient {
   /**
    * Download one file to `writableStream`. The download stops at the time limit and at the byte limit
    * (DOWNLOAD_TIME_LIMIT_MS and MAX_DOWNLOAD_BYTES), and then closes its connections to the machine.
+   * `signal` stops the download in the same way, for example when the user cancels it.
    */
-  async downloadFile(filePath: string, writableStream: Writable): Promise<void> {
+  async downloadFile(filePath: string, writableStream: Writable, signal?: AbortSignal): Promise<void> {
     const remotePath = toRelativeRemotePath(filePath);
     const { maxBytes, timeLimitMs } = this.downloadLimits;
-    const timeLimit = new AbortController();
-    const timer = setTimeout(() => timeLimit.abort(downloadTooSlowError(timeLimitMs)), timeLimitMs);
-    const { signal } = timeLimit;
+    // One stop for the time limit and for the signal of the caller: it closes the client and the raw data socket
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(downloadTooSlowError(timeLimitMs)), timeLimitMs);
+    const stopOnSignal = () => stop.abort(signal?.reason);
+    onAbort(signal, stopOnSignal);
     try {
       assertSafeFtpArgument(remotePath);
-      await this.withConnection({ verbose: true, signal }, async client => {
+      // A signal that aborted before the start stops the download before Chatter connects to the machine
+      stop.signal.throwIfAborted();
+      await this.withConnection({ verbose: true, signal: stop.signal }, async client => {
         const sink: DownloadSink = { destination: writableStream, bytesWritten: 0 };
         try {
           // When the signal closes the client, the RETR fails, and the raw RETR closes its data connection
           await this.downloadOverPassiveSocket(client, remotePath, sink);
         } catch (err) {
           // The user already has part of the file. A second download would add to that part, so the download fails.
-          if (signal.aborted || sink.bytesWritten > 0 || err instanceof NoFallbackError) throw err;
+          if (stop.signal.aborted || sink.bytesWritten > 0 || err instanceof NoFallbackError) throw err;
           const destination = limitBytes(writableStream, maxBytes);
           await this.downloadWithBasicFtp(client, { remotePath, destination, rawError: err });
         }
       });
     } catch (err) {
-      // After the time limit, the error of the closed connection tells less than the reason
-      const reason: unknown = signal.aborted ? signal.reason : err;
+      // After an abort, the error of the closed connection tells less than the reason
+      const reason: unknown = stop.signal.aborted ? stop.signal.reason : err;
       throw new Error(`FTP download error: ${errorText(reason)}`, { cause: err });
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', stopOnSignal);
     }
   }
 

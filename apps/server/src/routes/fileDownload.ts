@@ -20,9 +20,10 @@ const STREAM_QUEUE_BYTES = 64 * 1024;
  */
 export async function downloadAsStream(connector: BaseMachineConnector, filePath: string): Promise<ReadableStream<Uint8Array>> {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
-  // When the reader stops early, the download runs to its end and the rest is dropped. After the stream ends, a late
-  // write is dropped too.
+  // When the reader stops early, the download on the machine stops too. A chunk that is on its way is dropped. After the
+  // stream ends, a late write is dropped too.
   let isStreamOpen = true;
+  const stopDownload = new AbortController();
   /** The end of the write that waits for the reader */
   let finishWaitingWrite: (() => void) | undefined;
   const continueWriting = () => {
@@ -40,7 +41,10 @@ export async function downloadAsStream(connector: BaseMachineConnector, filePath
   const stream = new ReadableStream<Uint8Array>({
     start(streamController) { controller = streamController; },
     pull: continueWriting,
-    cancel() { endStream(() => {}); },
+    cancel() {
+      endStream(() => {});
+      stopDownload.abort();
+    },
   }, new ByteLengthQueuingStrategy({ highWaterMark: STREAM_QUEUE_BYTES }));
 
   let markStarted = () => {};
@@ -58,7 +62,7 @@ export async function downloadAsStream(connector: BaseMachineConnector, filePath
     },
   });
 
-  const download = connector.downloadFile(filePath, output);
+  const download = connector.downloadFile(filePath, output, stopDownload.signal);
   try {
     await Promise.race([started, download]);
   } catch (error) {
