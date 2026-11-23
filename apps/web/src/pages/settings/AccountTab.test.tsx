@@ -51,12 +51,21 @@ describe('AccountTab', () => {
     // The button is off while the request runs too, so wait for the new list, not for the button
     await waitForElementToBeRemoved(() => screen.queryByText('Safari on iPad'));
     expect(logOutOtherBrowsers).toHaveBeenCalledOnce();
-    expect(screen.getByRole('button', { name: 'Log out all other browsers' })).toBeDisabled();
   });
 
-  it('turns off the button when no other browser is logged in', async () => {
+  it('keeps the button on when no other browser is logged in, because a logged-out browser can still be a known browser', async () => {
     await renderTab(onlyThisBrowser);
-    expect(screen.getByRole('button', { name: 'Log out all other browsers' })).toBeDisabled();
+    vi.mocked(logOutOtherBrowsers).mockResolvedValue(onlyThisBrowser);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Log out all other browsers' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Log out all other browsers' })).toBeEnabled());
+    expect(logOutOtherBrowsers).toHaveBeenCalledOnce();
+  });
+
+  it('tells that the other browsers are new browsers for the login limits after the log out', async () => {
+    await renderTab(twoBrowsers);
+    expect(screen.getByText(/each other browser is a new browser for the login limits/)).toBeInTheDocument();
   });
 
   it('loads the list again after a new password, because the other browsers are logged out', async () => {
