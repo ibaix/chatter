@@ -153,6 +153,12 @@ describe('startWebServer', () => {
     socket.destroy();
   });
 
+  it('tells the browser not to guess the type of the 408 reply, because the security headers of the app are not on it', async () => {
+    const { socket, reply } = await startSlowUpload('/short');
+    expect((await reply).toLowerCase()).toContain('\r\nx-content-type-options: nosniff\r\n');
+    socket.destroy();
+  });
+
   it('logs one warning with the method and the path of the closed request, but not its query or its body', async () => {
     const log = captureLog();
     try {

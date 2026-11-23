@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { PROGRAM_UPLOAD_LIMIT_BYTES } from '@local-chatter/shared';
+import { FILE_LIST_CUT_SHORT_HEADER, PROGRAM_UPLOAD_LIMIT_BYTES } from '@local-chatter/shared';
 import type { HardwarePoller } from '../polling/poller.js';
 import { recordUpload } from '../storage/database.js';
 import { attachmentHeader, downloadAsStream } from './fileDownload.js';
@@ -111,7 +111,9 @@ export function machineFileRoutes(poller: HardwarePoller) {
       const connector = poller.getConnector(c.req.param('id'));
       if (!connector) return notFound(c);
 
-      return c.json(await connector.getFileTree(path, parseInt(depth)));
+      const { nodes, isCutShort } = await connector.readFileTree(path, parseInt(depth));
+      if (isCutShort) c.header(FILE_LIST_CUT_SHORT_HEADER, 'true');
+      return c.json(nodes);
     })
 
     .get('/machine/:id/files/download', canReadFiles, checkedQuery(filePathQuery), async c => {

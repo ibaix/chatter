@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Makes one signed update file for one processor type. Settings > Updates installs it on the Pi card.
-# The release job in .github/workflows/docker.yml runs it only for armv7: only the Pi card has the update helper.
+# The sign job in .github/workflows/docker.yml runs it only for armv7: only the Pi card has the update helper.
 # The script can also make amd64 and arm64 update files, for a helper on other computers later.
 #
 # Run:   UPDATE_SIGNING_KEY="$(cat signing-key.pem)" tools/release/make-update-file.sh 1.2.0 armv7 update-files

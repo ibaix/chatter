@@ -9,6 +9,8 @@ import { errorMessageOf } from '../../utils/errorMessage';
  */
 export function useMachineFiles(machineId: string, isWanted: boolean) {
   const [files, setFiles] = useState<FTPTreeNode[]>([]);
+  // True when the server cut the list short, because the machine has too many files
+  const [isCutShort, setIsCutShort] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentPath, setCurrentPath] = useState('/');
@@ -26,7 +28,8 @@ export function useMachineFiles(machineId: string, isWanted: boolean) {
     try {
       const tree = await fetchFileTree(machineId, path);
       if (!isNewest()) return;
-      setFiles(tree);
+      setFiles(tree.nodes);
+      setIsCutShort(tree.isCutShort);
       setUploadPath(path);
     } catch (err) {
       if (isNewest()) setError(errorMessageOf(err, 'Unknown error'));
@@ -45,7 +48,7 @@ export function useMachineFiles(machineId: string, isWanted: boolean) {
     // Load again only when the machine changes, or when the list is wanted the first time
   }, [machineId, isWanted]);
 
-  return { files, loading, error, currentPath, uploadPath, refresh, openFolder };
+  return { files, isCutShort, loading, error, currentPath, uploadPath, refresh, openFolder };
 }
 
 export type MachineFiles = ReturnType<typeof useMachineFiles>;

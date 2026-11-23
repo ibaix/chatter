@@ -136,16 +136,35 @@ describe('docs links', () => {
   });
 });
 
+interface WorkflowStep {
+  if?: string;
+  'continue-on-error'?: unknown;
+  uses?: string;
+  run?: string;
+  with?: Record<string, unknown>;
+}
+interface WorkflowJob {
+  if?: string;
+  uses?: string;
+  needs?: string | string[];
+  environment?: string | { name: string };
+  permissions?: unknown;
+  secrets?: unknown;
+  steps?: WorkflowStep[];
+}
+interface Workflow {
+  permissions?: unknown;
+  jobs: Record<string, WorkflowJob>;
+}
+const workflowFiles = readdirSync(join(ROOT, '.github/workflows')).filter(file => /\.ya?ml$/.test(file));
+const workflowText = (file: string) => read(join('.github/workflows', file));
+const workflow = (file: string) => parse(workflowText(file)) as Workflow;
+const allJobs = () =>
+  workflowFiles.flatMap(file => Object.entries(workflow(file).jobs).map(([name, job]) => ({ id: `${file}: ${name}`, job })));
+
 describe('workflow permissions', () => {
   // The token of a workflow can change the repo, the releases and the images on ghcr.io.
   // Each workflow reads only by default. A job that must write gets the permission in its own block.
-  interface Workflow {
-    permissions?: unknown;
-    jobs: Record<string, { if?: string; permissions?: unknown }>;
-  }
-  const workflowFiles = readdirSync(join(ROOT, '.github/workflows')).filter(file => /\.ya?ml$/.test(file));
-  const workflow = (file: string) => parse(read(join('.github/workflows', file))) as Workflow;
-
   // The scopes that a permissions block can write: "write-all" or each scope with a level other than read or none
   function writeScopes(permissions: unknown): string[] {
     if (permissions === undefined || permissions === 'read-all') return [];
@@ -187,12 +206,12 @@ describe('workflow permissions', () => {
   // Only these jobs can write, each with exactly these scopes. A new job that writes must be added here in review.
   const writers: Record<string, Record<string, string[]>> = {
     'card.yml': { card: ['contents'] },
-    'docker.yml': { publish: ['packages'], release: ['contents'], card: ['contents'] },
+    'docker.yml': { publish: ['packages'], sign: ['contents'], release: ['contents'], card: ['contents'] },
     'docs.yml': { deploy: ['id-token', 'pages'] },
     'ghcr-cleanup.yml': { cleanup: ['packages'] },
     'release-tags.yml': { tags: ['packages'] },
   };
-  const allJobs = workflowFiles.flatMap(file => Object.keys(workflow(file).jobs).map(job => [file, job] as const));
+  const jobIds = workflowFiles.flatMap(file => Object.keys(workflow(file).jobs).map(job => [file, job] as const));
 
   it('finds each allow-listed job in the workflows', () => {
     const missing = Object.entries(writers).flatMap(([file, jobs]) =>
@@ -201,7 +220,7 @@ describe('workflow permissions', () => {
     expect(missing).toEqual([]);
   });
 
-  it.each(allJobs)('gives %s (job %s) only the write permissions of the allow-list', (file, job) => {
+  it.each(jobIds)('gives %s (job %s) only the write permissions of the allow-list', (file, job) => {
     expect(writeScopes(workflow(file).jobs[job].permissions)).toEqual(writers[file]?.[job] ?? []);
   });
 
@@ -253,6 +272,125 @@ describe('workflow permissions', () => {
   });
 });
 
+describe('pinned actions', () => {
+  // A tag such as v4 can move to other code. A full commit cannot. A changed action could change the files that
+  // the release signs. The comment gives the version, so Dependabot can update the commit and the comment.
+  // A local action or workflow (./) is in this repo, so it needs no commit.
+  const pinned = /^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/;
+  const isLocal = (action: string) => action.startsWith('./');
+  // The actions and the called workflows that the parsed file runs, in each job and in each step
+  const usesOf = (file: string) =>
+    Object.values(workflow(file).jobs).flatMap(job => [job.uses, ...(job.steps ?? []).map(step => step.uses)].filter(uses => uses !== undefined));
+
+  it.each(workflowFiles)('pins each action in %s by a full commit', file => {
+    expect(usesOf(file).filter(action => !isLocal(action) && !pinned.test(action))).toEqual([]);
+  });
+
+  // The parser drops the comments, so this test reads the lines. A uses line can have quotes around the action.
+  const usesLine = /^\s*(?:-\s+)?uses:\s*(\S+)(.*)$/;
+  const versionComment = /^\s+# v\d+(\.\d+)*$/;
+  const usesLines = (file: string) =>
+    workflowText(file)
+      .split('\n')
+      .map(line => usesLine.exec(line))
+      .filter(match => match !== null)
+      .map(([line, action, rest]) => ({ line: line.trim(), action: action.replace(/^(['"])(.*)\1$/, '$2'), rest }));
+
+  it.each(workflowFiles)('gives the version in a comment after each pinned action in %s', file => {
+    const lines = usesLines(file);
+    // The same uses as the parser finds, so that no uses is missed by the line scan
+    expect(lines.map(({ action }) => action)).toEqual(usesOf(file));
+    expect(lines.filter(({ action, rest }) => !isLocal(action) && !versionComment.test(rest)).map(({ line }) => line)).toEqual([]);
+  });
+});
+
+describe('release signing', () => {
+  // The update signing key signs each update file. Each Pi card installs a signed update as root.
+  // Only the sign job in docker.yml gets the key. It runs no action except the checkout, and it signs only a tag
+  // on main, after the publish job.
+  const SIGN_JOB = 'docker.yml: sign';
+  const { publish, sign, release } = workflow('docker.yml').jobs;
+  const environmentOf = (job: WorkflowJob) => (typeof job.environment === 'object' ? job.environment.name : job.environment);
+  const needsOf = (job: WorkflowJob) => [job.needs ?? []].flat();
+  const stepIndex = (job: WorkflowJob, test: (step: WorkflowStep) => boolean) => (job.steps ?? []).findIndex(test);
+  // The check is one script with its own shell test (tools/release/test/check-tag-on-main.test.sh)
+  const onMainCheck = (step: WorkflowStep) => step.run?.trim() === 'tools/release/check-tag-on-main.sh';
+
+  // GitHub reads the names in an expression in any case, so secrets.update_signing_key is the same key.
+  // The parsed file has no comments, so a comment that names the key does not count.
+  it('gives the signing key only to the sign job', () => {
+    expect(allJobs().filter(({ job }) => /UPDATE_SIGNING_KEY/i.test(JSON.stringify(job))).map(({ id }) => id)).toEqual([SIGN_JOB]);
+    const mentions = workflowFiles.flatMap(file => JSON.stringify(workflow(file)).match(/secrets\.UPDATE_SIGNING_KEY/gi) ?? []);
+    expect(mentions).toHaveLength(1);
+  });
+
+  // toJSON(secrets) gives all the secrets, and secrets[<name>] can give any secret by a name that the test cannot read
+  it.each(workflowFiles)('reads no secret by a computed name, and not all the secrets, in %s', file => {
+    const text = JSON.stringify(workflow(file));
+    expect(text).not.toMatch(/toJSON\(\s*secrets\s*\)/i);
+    expect(text).not.toMatch(/\bsecrets\s*\[/i);
+  });
+
+  it('gives the release environment, which holds the key, only to the sign job', () => {
+    expect(allJobs().filter(({ job }) => environmentOf(job) === 'release').map(({ id }) => id)).toEqual([SIGN_JOB]);
+  });
+
+  it('gives no job all the secrets', () => {
+    expect(allJobs().filter(({ job }) => job.secrets === 'inherit').map(({ id }) => id)).toEqual([]);
+  });
+
+  it('runs no action in the sign job except the checkout, as the first step', () => {
+    const actions = (sign.steps ?? []).flatMap((step, index) => (step.uses ? [`${index}: ${step.uses.split('@')[0]}`] : []));
+    expect(actions).toEqual(['0: actions/checkout']);
+  });
+
+  // A push to main and a pre-release tag such as v1.2.0-rc1 get no update file. The update helper accepts only a
+  // version such as 1.2.0.
+  const releaseTagOnly = "startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')";
+  const conditionOf = (jobOrStep: { if?: string }) => jobOrStep.if?.replace(/\s+/g, ' ').trim();
+
+  it('signs only for a release tag such as v1.2.0', () => {
+    expect(conditionOf(sign)).toBe(releaseTagOnly);
+  });
+
+  // The release job runs after the sign job. Its own condition keeps it off a push to main, also when "needs" changes.
+  it('adds the release files only for a release tag such as v1.2.0', () => {
+    expect(conditionOf(release)).toBe(releaseTagOnly);
+  });
+
+  it('signs only after the publish job', () => {
+    expect(needsOf(sign)).toContain('publish');
+  });
+
+  it('gives the sign job only the permissions that it needs', () => {
+    expect(sign.permissions).toEqual({ contents: 'write', packages: 'read' });
+  });
+
+  it.each([
+    ['publish', publish, (step: WorkflowStep) => step.uses?.startsWith('docker/build-push-action@') ?? false],
+    ['sign', sign, (step: WorkflowStep) => step.run?.includes('make-update-file.sh') ?? false],
+  ] as const)('checks in the %s job that the tag is on main, before it publishes or signs', (_name, job, isGuarded) => {
+    const check = stepIndex(job, onMainCheck);
+    const guarded = stepIndex(job, isGuarded);
+    expect(check).toBeGreaterThanOrEqual(0);
+    expect(guarded).toBeGreaterThan(check);
+    // The check script needs the history of main
+    expect(job.steps?.find(step => step.uses?.startsWith('actions/checkout@'))?.with?.['fetch-depth']).toBe(0);
+  });
+
+  // The sign job runs only for a tag, so its check has no condition. The publish job also builds for a push to main,
+  // so its check runs for each tag. A failed check must stop the job.
+  it.each([
+    ['publish', publish, "startsWith(github.ref, 'refs/tags/v')"],
+    ['sign', sign, undefined],
+  ] as const)('stops the %s job when the tag is not on main', (_name, job, condition) => {
+    const checks = (job.steps ?? []).filter(onMainCheck);
+    expect(checks).toHaveLength(1);
+    expect(conditionOf(checks[0])).toBe(condition);
+    expect(checks[0]['continue-on-error']).toBeUndefined();
+  });
+});
+
 describe('test runs', () => {
   // npm test runs each tools folder with test:tools. npm run coverage runs the projects of vitest.config.ts.
   // A tools folder with tests must be in both, or one of the two runs skips it.
@@ -272,20 +410,24 @@ describe('test runs', () => {
     expect(projects).toContain(`'tools/${name}'`);
   });
 
-  // npm test does not run the shell tests of the Pi card (they need Linux or Docker). Only a workflow runs them,
-  // so a test script that no workflow names never runs. The *.lib.sh files and in-linux.sh are helpers, not tests.
-  const PI_TESTS = 'tools/pi-image/test';
-  const piTestScripts = readdirSync(join(ROOT, PI_TESTS)).filter(file => file.endsWith('.test.sh'));
-  const workflows = readdirSync(join(ROOT, '.github/workflows'))
-    .filter(file => /\.ya?ml$/.test(file))
-    .map(file => read(join('.github/workflows', file)))
+  // npm test does not run the shell tests of the Pi card and of the release scripts (some need Linux or Docker).
+  // Only a workflow runs them, so a test script that no workflow runs never runs. The *.lib.sh files and
+  // in-linux.sh are helpers, not tests. Only the run text of the steps counts, not a comment.
+  const shellTests = ['tools/pi-image/test', 'tools/release/test'].flatMap(dir =>
+    readdirSync(join(ROOT, dir)).filter(file => file.endsWith('.test.sh')).map(file => `${dir}/${file}`),
+  );
+  const runText = workflowFiles
+    .flatMap(file => Object.values(workflow(file).jobs).flatMap(job => (job.steps ?? []).map(step => step.run ?? '')))
     .join('\n');
 
-  it('finds the shell tests of the Pi card', () => {
-    expect(piTestScripts).toContain('update-chatter-check.test.sh');
+  it('finds the shell tests of the Pi card and of the release scripts', () => {
+    expect(shellTests).toEqual(expect.arrayContaining([
+      'tools/pi-image/test/update-chatter-check.test.sh',
+      'tools/release/test/check-tag-on-main.test.sh',
+    ]));
   });
 
-  it.each(piTestScripts)(`runs ${PI_TESTS}/%s in a workflow`, file => {
-    expect(workflows).toContain(`${PI_TESTS}/${file}`);
+  it.each(shellTests)('runs %s in a workflow', path => {
+    expect(runText).toContain(path);
   });
 });

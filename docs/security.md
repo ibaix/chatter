@@ -21,8 +21,16 @@ These limits are known. They are not bugs, but you must know them:
 - **No HTTPS by itself.** Other people on the network can read the login cookie, and the password that a program sends. To use HTTPS, put a reverse proxy in front of Chatter (see [Use HTTPS](./guide/https.md)).
 - **Chatter sends no HSTS header.** HSTS tells a browser to use only HTTPS for an address. On a LAN address with plain HTTP, it can lock the users out. If your proxy gives HTTPS, the proxy can send HSTS. Chatter sends the other security headers: other sites cannot show Chatter in a frame, and the page loads scripts only from Chatter.
 - **Chatter accepts at most 256 connections at a time.** This keeps file handles free for the database, the log and the machines. A computer that sends no request in 20 seconds is disconnected. Each login can have 5 live update streams. When a login opens a 6th, its oldest stream closes. A computer on the network can still use all 256 connections, and then other browsers cannot open Chatter until it stops.
-- **Trust only the address of your proxy** in **Settings > HTTPS and proxy**, or with `TRUST_PROXY`. A wrong address lets a computer hide its real address, and so get around the 15 minute wait after 10 wrong passwords. An Admin can end the wait for a computer in **Settings > Logins**.
+- **Wrong passwords cause a wait.** After 10 wrong passwords for one user from one computer in 15 minutes, that computer must wait before it can try that user again. The other users of that computer can still log in. After 30 wrong passwords for one user from all computers in 15 minutes, nobody can log in as that user. Each wait ends 15 minutes after the first wrong password, so it can be shorter than 15 minutes. Good logins do not count. A good login does not end the wait for a different user. Chatter counts all IPv6 addresses in one /64 network as one computer. Browsers that are logged in, and programs whose login worked before, keep working during a wait. An Admin can end a wait in **Settings > Logins**. A restart of Chatter also ends each wait.
+- **Anyone on the network can lock a user on new browsers.** A person who knows a username, for example `admin`, can send 30 wrong passwords from 3 or more computers. Then nobody can log in as that user from a new browser for up to 15 minutes. The person can do this again after each lock. A known browser (see the next item) can still log in. Chatter writes a warning in the server log when a user lock starts, with the username and the address of the last try. To get in again, see [Locked out after wrong passwords](#locked-out-after-wrong-passwords).
+- **A browser where you logged in before is a known browser.** After a good login, Chatter gives the browser a device cookie for 400 days. This is longer than a login (1 year), so the browser is still known when its login ends. Each good login gives a new cookie. Chatter signs the cookie with a key in the data folder (`device-key`, next to `chatter.db`). The cookie holds no password. The lock of a user and the wait of a computer do not stop a known browser. A known browser has its own limit: after 10 wrong passwords in 15 minutes, that browser must wait. A browser is known only for the last user that logged in on it. A new password stops each device cookie of that user, and the browser where you changed the password gets a new one. When an Admin removes a user, the device cookies of that user stop. Programs that use HTTP Basic have no device cookie, so they always have the normal limits. Chatter writes an info line in the server log for each password try from a known browser, with `knownDevice=true`.
+- **A shared computer stays known after log out.** Log out does not remove the device cookie. So the next person at that browser gets the limit of a known browser for the last user: 10 password tries in 15 minutes, also while that user is locked. Only a new password stops the device cookies of a user. **Log out all other browsers** does not stop them, and an Admin unlock does not stop them. On a shared computer, use a private browser window, or remove the cookies of Chatter after you log out.
+- **Some setups show one address for all computers.** On Docker Desktop (Mac and Windows), and for IPv6 through the Docker port, Chatter sees the same address for each computer. Then the wait of one computer applies to each person in the shop, for that user. Do not trust the Docker network gateway as a proxy to fix this, because each computer can then send a false address.
+- **Trust only the address of your proxy** in **Settings > HTTPS and proxy**, or with `TRUST_PROXY`. A wrong address lets a computer hide its real address, and so get around the wait after wrong passwords.
 - **FTP is not encrypted.** The FTP username, the FTP password, and the files go over the network as plain text.
+- **A machine can send a very long file list.** Chatter has limits, so a bad or broken FTP server cannot fill the memory of a Pi or keep Chatter busy. Chatter reads at most 1 MB of one folder list. One file list has at most 5000 files and folders and at most 5 folder levels. For one file list, Chatter opens at most 200 folders and stops after 2 minutes. Then the **Files** tab of the machine tells that the list is cut short. After a folder list that is too long, Chatter opens no more folders. When the folder list is too long or too slow before an upload, the upload stops, because Chatter cannot know if the file is there.
+- **A machine can send a very large or very slow file.** Chatter downloads at most 64 MB of one file, and stops a download after 30 minutes. When the browser reads slowly, Chatter reads slowly from the machine, so the file does not wait in the memory of the Pi.
+- **Some old machines do not confirm the end of a download.** After a file, an FTP server must send a reply (usually `226`). Some old machines never send it. So Chatter accepts a file when the machine closes the data connection correctly, and no reply comes in 3 seconds. Then the log gets a warning with the machine, the file and the number of bytes. A broken or bad FTP server can thus cut a file short with no error. A data connection that breaks, or that stops in the middle, always gives an error.
 - **The machines have no login on their data ports** (Brother, Haas, MTConnect, FANUC). Anyone on the network can read the machine data from those ports. A Siemens control has a login only if you set one up for OPC UA (see [Siemens machines](./guide/siemens.md)).
 - **A login lasts 1 year.** Log out stops the login of that browser, also a copy of its cookie. To stop your other logins, use **Log out all other browsers** in **Settings > Your account**, or change your password. To log out a different user, an Admin sets a new password for that user.
 - **Give each person their own account, with the smallest role that they need.** A Viewer can see the machines and their history, and change their own password. A Viewer sees the names of the program files, but cannot download or read a program. A Viewer cannot start a read of the tool table (**Sync**). An Operator can also read, send, and delete files, and click **Sync**. An Admin can do everything.
@@ -37,6 +45,9 @@ These limits are known. They are not bugs, but you must know them:
 Chatter itself cannot install an update. It only puts the update file and a request in a folder. A helper on the Pi, outside Docker, does the install.
 
 - The helper installs only a file that is signed with the Chatter release key, and only a newer version. So a bad download or a bad upload cannot install.
+- GitHub signs the update file in a separate job. Only that job gets the release key, and it runs no GitHub Action except the checkout. Each workflow pins its actions by a full commit.
+- The sign job refuses a tag that is not on `main`. This check stops a mistake, but not an attack. For a tag, GitHub runs the workflow file of the tagged commit. So a person who can push to the repo can push a tag on another commit, with a changed workflow that skips the check and reads the key. The `release` environment gives the key to each tag such as `v1.2.0`. A tag ruleset and required reviewers on the `release` environment stop this attack. These settings are a separate item, and they are not on yet.
+- Until these settings are on, a new tag on an old commit of `main` also gets a signed update file.
 - The helper does not trust anything that Chatter says or puts in the folder. So an attacker who breaks into Chatter cannot use the helper to take control of the Pi.
 - A newer helper also accepts the request `reboot`, and restarts the Pi at most once in 15 minutes. So an attacker who breaks into Chatter can restart the Pi, but cannot keep it down.
 - A newer helper writes `network.json` (the addresses of the Pi, the gateway, and if SSH is on) and `helper.log` for **Settings > Diagnostics**. It writes each value only when the value has the expected shape.
@@ -75,6 +86,8 @@ The **Advanced** panel of the Settings tab of a machine backs up its history to 
 
 The folder `opcua-pki` next to `chatter.db` holds the private key of the Chatter certificate for Siemens machines.
 
+The file `device-key` next to `chatter.db` holds the key that signs the device cookies. Only the user that runs Chatter can read it. A person with this file and the password hash of a user can make a device cookie for that user. To stop all device cookies, delete the file and restart Chatter. Chatter then makes a new key, and each browser is new again.
+
 Do not share these files. Keep their backups private, and also the backups of the machine history (the volume `victoriametrics-data`).
 
 ## Keep VictoriaMetrics and vmalert closed
@@ -85,6 +98,19 @@ VictoriaMetrics (the machine history database) and vmalert have no login. Anyone
 - Without Docker, Chatter listens on port 3002 only on `127.0.0.1`. Change `ALERT_HOST` only to an address that other computers cannot reach.
 
 Only an Admin can change the alert rules. A custom alert query can only read the machine history. It cannot change or delete data.
+
+## Locked out after wrong passwords
+
+When Chatter says **Too many wrong passwords**, do one of these:
+
+- **Use a browser that is already logged in.** A login lasts 1 year, and the lock does not stop it.
+- **Use a browser where you logged in before.** The lock does not stop a known browser. You can also change your password in that browser.
+- **Ask an Admin to unlock you.** The Admin opens **Settings > Logins**, and clicks **Unlock** next to your computer or your username. When you are the only Admin, use a browser where you are already logged in. Chatter writes in the server log who unlocked and from which address.
+- **Wait.** The lock ends 15 minutes after the first wrong password. **Settings > Logins** shows the time left.
+- **Restart Chatter.** A restart ends each lock. Run `docker compose restart chatterbox` in the Chatter folder. On the Raspberry Pi card, first run `cd /opt/chatter`, and put `sudo` before `docker`.
+- **Make a new Admin account.** This is the last step. Do it only when no Admin can log in. See [Forgot a password](#forgot-a-password).
+
+If the lock comes back again and again, someone on the network sends wrong passwords. Look in **Settings > Logins** and in the server log for the address.
 
 ## Forgot a password
 

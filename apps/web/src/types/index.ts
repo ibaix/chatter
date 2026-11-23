@@ -10,6 +10,7 @@ export type {
   MachineType,
   Machine,
   MachineUpdate,
+  FileTree,
   FTPTreeNode,
   UploadFile,
   UploadEvent,
@@ -24,6 +25,7 @@ export type {
 export {
   DEFAULT_MTCONNECT_PORT,
   DEFAULT_OPCUA_PORT,
+  FILE_LIST_CUT_SHORT_HEADER,
   OPCUA_SECURITY_MODES,
   MACHINE_EVENTS,
   isValidIPv4,
