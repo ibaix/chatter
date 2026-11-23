@@ -3,8 +3,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import indexHtml from '../../index.html?raw';
 import themeStartScript from '../../public/theme-start.js?raw';
-import { afterEach, describe, expect, it } from 'vitest';
-import { applyTheme, PAGE_COLORS, readThemeChoice, saveThemeChoice, THEME_STORAGE_KEY, themeOf } from './theme';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { applyTheme, PAGE_COLORS, readThemeChoice, saveThemeChoice, THEME_STORAGE_KEY, type ThemeChoice, themeOf } from './theme';
 
 function memoryStorage(values: Record<string, string> = {}): Storage {
   const store = new Map(Object.entries(values));
@@ -131,6 +131,52 @@ describe('public/theme-start.js', () => {
 
   it('gives the browser bar the light page color before the page draws', () => {
     expect(themeStartScript).toContain(`setAttribute('content', '${PAGE_COLORS.light}')`);
+  });
+});
+
+describe('public/theme-start.js, when it runs', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete document.documentElement.dataset.theme;
+    document.head.innerHTML = '';
+  });
+
+  /** Runs the script on a page like index.html, and gives the theme that the page shows */
+  function runThemeStart(storage: Storage, computerIsLight: boolean) {
+    document.head.innerHTML = `<meta name="theme-color" content="${PAGE_COLORS.dark}">`;
+    vi.stubGlobal('localStorage', storage);
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(prefers-color-scheme: light)' && computerIsLight }));
+    // The script is a plain script, not a module, so the test runs its text as the browser does
+    new Function(themeStartScript)();
+    return {
+      theme: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark',
+      barColor: document.querySelector('meta[name="theme-color"]')?.getAttribute('content'),
+    };
+  }
+
+  it.each<[string, ThemeChoice | null, boolean]>([
+    ['light', 'light', false],
+    ['dark', 'dark', true],
+    ['system, on a light computer', 'system', true],
+    ['system, on a dark computer', 'system', false],
+    ['no saved choice, on a light computer', null, true],
+    ['not a choice, on a light computer', 'purple' as ThemeChoice, true],
+  ])('shows the same theme as the app for %s', (_, saved, computerIsLight) => {
+    const storage = memoryStorage(saved === null ? {} : { [THEME_STORAGE_KEY]: saved });
+    const expected = themeOf(readThemeChoice(storage), !computerIsLight);
+
+    const shown = runThemeStart(storage, computerIsLight);
+
+    expect(shown.theme).toBe(expected);
+    expect(shown.barColor).toBe(PAGE_COLORS[expected]);
+  });
+
+  it('stays dark, as the app does, when the browser blocks the storage', () => {
+    const expected = themeOf(readThemeChoice(brokenStorage()), false);
+    expect(expected).toBe('dark');
+
+    expect(() => runThemeStart(brokenStorage(), true)).not.toThrow();
+    expect(runThemeStart(brokenStorage(), true).theme).toBe(expected);
   });
 });
 
