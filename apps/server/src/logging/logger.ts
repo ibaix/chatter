@@ -139,10 +139,15 @@ export function jsonLine({ time, level, component, message, context }: LogLine):
   return JSON.stringify({ time: time.toISOString(), level, component, msg: message, ...details });
 }
 
-/** Words with spaces get quotes, so each pair stays one token */
+/**
+ * Words with spaces get quotes, so each pair stays one token.
+ * A control character (for example ESC in a username) gets a \u code, so a value cannot send codes to a terminal.
+ */
 function textValue(value: unknown): string {
   const text = value instanceof Error ? errorText(value) : typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
-  return /[\s"=]/.test(text) || text === '' ? JSON.stringify(text) : text;
+  if (!/[\s"=\p{Cc}]/u.test(text) && text !== '') return text;
+  // JSON.stringify escapes only the codes below 0x20, so escape DEL and the C1 codes here
+  return JSON.stringify(text).replace(/\p{Cc}/gu, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
 function jsonValue(value: unknown): unknown {
