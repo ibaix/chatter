@@ -94,11 +94,21 @@ describe('SessionStore', () => {
     const token = sessions.create(SAM, BROWSER);
 
     now = SEEN_INTERVAL_MS - 1;
-    sessions.markSeen(sessions.find(token)!, BROWSER.address);
+    expect(sessions.markSeen(sessions.find(token)!, BROWSER.address)).toBe(false);
     expect(sessions.find(token)!.lastSeenAt.getTime()).toBe(0);
 
-    sessions.markSeen(sessions.find(token)!, '10.0.0.9');
+    expect(sessions.markSeen(sessions.find(token)!, '10.0.0.9')).toBe(true);
     expect(sessions.find(token)).toMatchObject({ address: '10.0.0.9', lastSeenAt: new Date(now) });
+  });
+
+  it('saves the last use again at exactly SEEN_INTERVAL_MS after the last save', () => {
+    let now = 0;
+    const sessions = SessionStore.inMemory(() => now);
+    const token = sessions.create(SAM, BROWSER);
+
+    now = SEEN_INTERVAL_MS;
+    expect(sessions.markSeen(sessions.find(token)!, BROWSER.address)).toBe(true);
+    expect(sessions.find(token)!.lastSeenAt.getTime()).toBe(SEEN_INTERVAL_MS);
   });
 
   it(`keeps at most ${MAX_SESSIONS} sessions, and removes the one used the longest time ago`, () => {

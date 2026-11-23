@@ -684,6 +684,38 @@ describe('the Secure flag of a login cookie from plain HTTP', () => {
     expect((await withSession('/api/machines', 'https')).headers.get('Set-Cookie')).toContain('Secure');
   });
 
+  it('sets the cookie again at once when the address of the browser changes', async () => {
+    expect((await withSession('/api/machines', 'https')).headers.get('Set-Cookie')).toContain('Secure');
+
+    now += 1;
+    const res = await viaProxy('/api/machines', 'https', { Cookie: cookie, 'X-Forwarded-For': '192.168.1.21' });
+    expect(res.headers.get('Set-Cookie')).toContain('Secure');
+  });
+
+  it('sets the cookie again with the Secure flag for HTTPS with no proxy', async () => {
+    const res = await app.request('https://chatterbox/api/machines', { headers: { Cookie: cookie } }, fromUntrusted);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Set-Cookie')).toContain('Secure');
+  });
+
+  it('does not set the cookie, and does not fail the request, when the use cannot be saved', async () => {
+    vi.spyOn(auth, 'markSeen').mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    const log = captureLog();
+    try {
+      const res = await withSession('/api/machines', 'https');
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Set-Cookie')).toBeNull();
+      expect(log.lines.some(line => line.level === 'error' && line.text.includes('[Sessions] Could not save when a browser was used'))).toBe(true);
+    } finally {
+      log.restore();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('does not trust the X-Forwarded-Proto header of a computer that is not a trusted proxy', async () => {
     const res = await app.request('/api/machines', {
       headers: { Cookie: cookie, 'X-Forwarded-For': USER, 'X-Forwarded-Proto': 'https' },
