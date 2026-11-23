@@ -856,7 +856,8 @@ describe('API Routes', () => {
     // Each folder level is a LIST on the machine, so a deep tree can keep the machine and Chatter busy for a long time
     it.each(['0', '6', '50', '99999999999', 'abc', '-1', '1.5'])('refuses depth=%s and sends nothing to the machine', async depth => {
       const machine = await poller.addBrotherMachine({ name: 'Speedio', host: '192.168.1.50' });
-      const readFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree');
+      // A mock, so a test that fails does not wait for a machine that is not there
+      const readFileTree = vi.spyOn(poller.getConnector(machine.id)!, 'readFileTree').mockResolvedValue({ nodes: [], isCutShort: false });
 
       const res = await call('GET', `/api/machine/${machine.id}/files?depth=${depth}`);
 
@@ -1312,7 +1313,7 @@ describe('API Routes', () => {
 
     it.each(BAD_PATHS)('refuses a file list of the folder %j', async path => {
       const { id, connector } = await brotherConnector();
-      const readFileTree = vi.spyOn(connector, 'readFileTree');
+      const readFileTree = vi.spyOn(connector, 'readFileTree').mockResolvedValue({ nodes: [], isCutShort: false });
 
       const res = await call('GET', `/api/machine/${id}/files?path=${encodeURIComponent(`/PRG/${path}`)}`);
 

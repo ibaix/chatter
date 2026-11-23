@@ -154,13 +154,14 @@ describe('FTPClient.getFileTree limits', () => {
     expect(tree.isCutShort).toBe(false);
   });
 
-  it('gives an empty tree that is not cut short, and opens no folder, for a depth of 0', async () => {
+  it('gives an empty tree that is not cut short, and does not connect, for a depth of 0', async () => {
     listingOf = () => [folder('SUB'), file('O1000')];
 
     const tree = await new FTPClient({ host: '192.168.1.50' }).readFileTree('/', 0);
 
     expect(tree).toEqual({ nodes: [], isCutShort: false });
     expect(listedFolders).toEqual([]);
+    expect(mockFtpClient.access).not.toHaveBeenCalled();
   });
 
   it('does not call a tree cut short when it stops at the depth that the caller asks for', async () => {
