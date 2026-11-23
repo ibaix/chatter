@@ -165,6 +165,7 @@ To make a new Admin outside Docker: `npm run reset-password -w apps/server` (or 
 The command asks for the username and the password on the terminal, and removes the old Admin accounts.
 It needs a terminal, so it does not read the password from a pipe.
 The users who are not Admins stay. The first-run setup stays closed.
+The command adds its log line to `logs/chatter.log` only when the file exists. It never makes the file, so a run with `sudo` cannot make a root file that the server cannot write.
 
 ## Work on these docs
 
