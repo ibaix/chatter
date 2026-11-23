@@ -224,6 +224,66 @@ describe('known device cookie', () => {
     expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: again })).status).toBe(200);
   });
 
+  describe('log out all other browsers', () => {
+    const LOG_OUT_OTHERS = '/api/auth/sessions/log-out-others';
+    /** The session cookie and the device cookie of a browser that logs in */
+    async function browserOf(login: typeof ADMIN): Promise<{ cookies: string; device: string }> {
+      const res = await send(ADMIN_COMPUTER, '/api/auth/login', login);
+      expect(res.status).toBe(200);
+      return { cookies: res.headers.getSetCookie().map(line => line.split(';')[0]).join('; '), device: deviceCookie(res) };
+    }
+
+    it('stops the device cookies of the other browsers of the user, and gives this browser a new one', async () => {
+      const thisBrowser = await browserOf(ADMIN);
+      const otherBrowser = await browserOf(ADMIN);
+
+      const res = await send(ADMIN_COMPUTER, LOG_OUT_OTHERS, {}, { cookie: thisBrowser.cookies });
+      expect(res.status).toBe(200);
+      const newDevice = deviceCookie(res);
+      expect(setCookieLine(res, DEVICE_COOKIE)).toContain(`Max-Age=${400 * DAY_SECONDS}`);
+      await lockUser();
+
+      expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: otherBrowser.device })).status).toBe(429);
+      // The cookie of this browser from before is also old now
+      expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: thisBrowser.device })).status).toBe(429);
+      expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: newDevice })).status).toBe(200);
+    });
+
+    it('makes the new device cookie HTTPS-only when the browser used HTTPS, and not when it used HTTP', async () => {
+      const httpsBrowser = await browserOf(ADMIN);
+      const httpBrowser = await browserOf(BOB);
+
+      const overHttps = await send(ADMIN_COMPUTER, LOG_OUT_OTHERS, {}, { cookie: httpsBrowser.cookies, protocol: 'https' });
+      expect(setCookieLine(overHttps, DEVICE_COOKIE)).toContain('Secure');
+      const overHttp = await send(ADMIN_COMPUTER, LOG_OUT_OTHERS, {}, { cookie: httpBrowser.cookies });
+      expect(setCookieLine(overHttp, DEVICE_COOKIE)).toBeDefined();
+      expect(setCookieLine(overHttp, DEVICE_COOKIE)).not.toContain('Secure');
+    });
+
+    it('gives no device cookie to a browser that is not a known browser', async () => {
+      const login = await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN);
+      const sessionOnly = setCookieLine(login, SESSION_COOKIE)!.split(';')[0];
+
+      const res = await send(ADMIN_COMPUTER, LOG_OUT_OTHERS, {}, { cookie: sessionOnly });
+      expect(res.status).toBe(200);
+      expect(setCookieLine(res, DEVICE_COOKIE)).toBeUndefined();
+    });
+
+    it('does not stop the device cookies of a different user', async () => {
+      const adminBrowser = await browserOf(ADMIN);
+      const bobBrowser = await browserOf(BOB);
+
+      await send(ADMIN_COMPUTER, LOG_OUT_OTHERS, {}, { cookie: bobBrowser.cookies });
+      await lockUser(ADMIN);
+      expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: adminBrowser.device })).status).toBe(200);
+
+      const bobDevice = deviceCookie(await send(ADMIN_COMPUTER, '/api/auth/login', BOB));
+      await send(ADMIN_COMPUTER, LOG_OUT_OTHERS, {}, { cookie: adminBrowser.cookies });
+      await lockUser(BOB);
+      expect((await send(ADMIN_COMPUTER, '/api/auth/login', BOB, { cookie: bobDevice })).status).toBe(200);
+    });
+  });
+
   describe('server log', () => {
     let log: CapturedLog | undefined;
     afterEach(() => {

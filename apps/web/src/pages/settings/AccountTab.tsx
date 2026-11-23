@@ -95,9 +95,9 @@ function ChangePasswordPanel({ onChanged }: { onChanged: () => void }) {
 function SessionsPanel() {
   const { report, loadError, changeError, isChanging, change } = useServerReport(fetchSessions);
   const sessions = report?.sessions ?? [];
-  const hasOtherBrowsers = sessions.some(session => !session.isThisBrowser);
+  // Always on: a browser that is logged out can still be a known browser, and this stops that too
   const logOutOthersButton = (
-    <Button onClick={() => change(logOutOtherBrowsers)} disabled={!hasOtherBrowsers || isChanging}>
+    <Button onClick={() => change(logOutOtherBrowsers)} disabled={isChanging}>
       Log out all other browsers
     </Button>
   );
@@ -105,7 +105,13 @@ function SessionsPanel() {
   return (
     <Panel
       title="Where you are logged in"
-      description="A browser stays logged in for 1 year, or until you log it out. Programs that send the password are not on this list."
+      description={
+        <>
+          A browser stays logged in for 1 year, or until you log it out. Programs that send the password are not on this list.
+          When you click <strong>Log out all other browsers</strong>, each other browser is a new browser for the login
+          limits. This includes the browsers that are logged out.
+        </>
+      }
       actions={logOutOthersButton}
     >
       {loadError && <Notice tone="error" title={loadError} className="mx-5 my-4" />}

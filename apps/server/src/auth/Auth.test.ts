@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Auth } from './Auth.js';
 import { authParts } from './testSupport.js';
 import type { UserAccounts } from './userAccounts.js';
@@ -200,6 +200,31 @@ describe('Auth', () => {
       const newCookie = auth.deviceCookieFor('sam');
       accounts.remove(sam.id);
       expect(auth.knownDeviceOf(newCookie, 'sam')).toBeNull();
+    });
+
+    it('does not know the devices of the user after a log out of the other browsers, and knows a new cookie', async () => {
+      const token = (await auth.setUp(ADMIN, BROWSER))!;
+      await accounts.add({ ...SAM, role: 'operator' });
+      const adminCookie = auth.deviceCookieFor('admin');
+      const samCookie = auth.deviceCookieFor('sam');
+
+      auth.logOutOtherBrowsers(auth.sessionOf(token)!);
+
+      expect(auth.knownDeviceOf(adminCookie, 'admin')).toBeNull();
+      expect(auth.knownDeviceOf(auth.deviceCookieFor('admin'), 'admin')).toEqual(expect.any(String));
+      expect(auth.knownDeviceOf(samCookie, 'sam')).toEqual(expect.any(String));
+    });
+
+    it('keeps the other browsers logged in when the device cookies cannot stop', async () => {
+      const token = (await auth.setUp(ADMIN, BROWSER))!;
+      await auth.logIn(ADMIN, BROWSER);
+      vi.spyOn(users, 'forgetDevicesOf').mockImplementation(() => {
+        throw new Error('disk full');
+      });
+
+      expect(() => auth.logOutOtherBrowsers(auth.sessionOf(token)!)).toThrow('disk full');
+
+      expect(auth.browserSessions(auth.sessionOf(token)!.user)).toHaveLength(2);
     });
 
     it('gives no cookie for a user that does not exist', () => {

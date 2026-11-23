@@ -91,4 +91,57 @@ describe('UserStore', () => {
     expect(settings.get('password_hash')).toBeUndefined();
     expect(settings.get('session_secret')).toBeUndefined();
   });
+
+  describe('device epoch', () => {
+    it('starts at 0 for a new user', () => {
+      const users = UserStore.inMemory();
+      expect(users.find(users.add(operator()).id)?.deviceEpoch).toBe(0);
+    });
+
+    it('goes up only for the one user when that user forgets the other devices', () => {
+      const users = UserStore.inMemory();
+      const sam = users.add(operator('sam'));
+      const jo = users.add(operator('jo'));
+
+      users.forgetDevicesOf(sam.id);
+      users.forgetDevicesOf(sam.id);
+
+      expect(users.find(sam.id)?.deviceEpoch).toBe(2);
+      expect(users.find(jo.id)?.deviceEpoch).toBe(0);
+    });
+
+    it('goes up for each user at a password reset from the command line', () => {
+      const users = UserStore.inMemory();
+      const sam = users.add(operator('sam'));
+      const jo = users.add(operator('jo'));
+      users.forgetDevicesOf(jo.id);
+
+      users.forgetAllDevices();
+
+      expect(users.find(sam.id)?.deviceEpoch).toBe(1);
+      expect(users.find(jo.id)?.deviceEpoch).toBe(2);
+    });
+
+    it('is added at 0 to the users of an older version, and the users stay', () => {
+      const db = new Database(':memory:');
+      // The users table before the device epoch
+      db.exec(`
+        CREATE TABLE users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+          password_hash TEXT NOT NULL,
+          role TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          last_login_at INTEGER
+        )
+      `);
+      db.prepare("INSERT INTO users (username, password_hash, role, created_at) VALUES ('sam', ?, 'operator', 1)").run(HASH);
+
+      const users = new UserStore(db);
+
+      expect(users.findByName('sam')).toMatchObject({ passwordHash: HASH, role: 'operator', deviceEpoch: 0 });
+      users.forgetDevicesOf(users.findByName('sam')!.id);
+      expect(new UserStore(db).findByName('sam')?.deviceEpoch).toBe(1);
+    });
+  });
 });

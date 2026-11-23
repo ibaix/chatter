@@ -119,7 +119,7 @@ export function createApp({
     // The update helper reads the version here, with no login, to see that the new version runs
     .get('/health', c => c.json({ status: 'ok', uptime: process.uptime(), version, instance: INSTANCE_ID }))
     .route('/', authRoutes(loginGuard))
-    .route('/', sessionRoutes(auth))
+    .route('/', sessionRoutes(loginGuard))
     // Every route below needs a login
     .use(requireLogin(loginGuard))
     .get('/status', c => c.json(poller.getStatus()))
