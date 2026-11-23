@@ -16,6 +16,7 @@ import { AlertRuleService } from './alert-rules/AlertRuleService.js';
 import { reportRoutes } from './routes/reports.js';
 import { AlertStore } from './alerts/AlertStore.js';
 import { errorReply } from './routes/responses.js';
+import { securityHeaders } from './securityHeaders.js';
 import type { Auth } from './auth/Auth.js';
 import { authRoutes, requireLogin } from './auth/authRoutes.js';
 import { sessionRoutes } from './auth/sessionRoutes.js';
@@ -141,7 +142,9 @@ export function createApp({
     .route('/', diagnosticRoutes({ poller, updates, version, notifications }, diagnostics));
 
   // No CORS headers: only pages from this server can call the API from a browser
+  // The security headers also go on the web app routes that index.ts adds after these
   return new Hono()
+    .use(securityHeaders())
     .onError(errorReply)
     .notFound(c => c.json({ error: 'Not found' }, 404))
     .route(API_PREFIX, api);

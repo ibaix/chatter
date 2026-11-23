@@ -172,3 +172,8 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # The Content-Security-Policy of the server blocks scripts in the page, eval and styles from other sites.
+      # This step fails when the built web app has one of them.
+      - name: Check the built web app for the Content-Security-Policy
+        run: npm run check:web-dist

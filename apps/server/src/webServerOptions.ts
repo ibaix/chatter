@@ -68,7 +68,8 @@ function limitRequestTime(server: Server, limitMs: number): void {
         req.socket.destroy();
         return;
       }
-      res.writeHead(408, { 'Content-Type': 'application/json', Connection: 'close' });
+      // This reply does not go through the app, so the security headers of the app are not on it
+      res.writeHead(408, { 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff', Connection: 'close' });
       res.end(JSON.stringify({ error: REQUEST_TOO_SLOW_TEXT }), () => req.socket.destroy());
     }, limitMs);
     timer.unref();
