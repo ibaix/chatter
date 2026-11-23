@@ -129,6 +129,18 @@ interface RawListing {
 /** A folder list that was too long or too slow. The caller cannot know if a file is in the folder. */
 class FolderListLimitError extends Error {}
 
+/**
+ * The machine refused the raw RETR with an error reply, for example "550 No such file". This is a clear answer about
+ * the file, so a second RETR through the fallback would get the same answer.
+ */
+class RetrRefusedError extends Error {}
+
+/**
+ * "425 Cannot open data connection": the machine could not use the data connection of the raw RETR. This is not an
+ * answer about the file, so the fallback of basic-ftp can still work.
+ */
+const CANNOT_OPEN_DATA_CONNECTION = 425;
+
 /** A folder that the tree walk still has to list, and the list to fill with its entries */
 interface TreeFolder {
   path: string;
@@ -521,10 +533,8 @@ export class FTPClient {
           await this.downloadOverPassiveSocket(client, remotePath, sink);
         } catch (err) {
           // The user already has part of the file. A second download would add to that part, so the download fails.
-          if (sink.bytesWritten > 0) throw err;
-          // Fall back to basic-ftp's standard download. A failed RETR closes the client, so log in again first.
-          if (client.closed) await this.login(client);
-          await client.downloadTo(writableStream, remotePath);
+          if (sink.bytesWritten > 0 || err instanceof RetrRefusedError) throw err;
+          await this.downloadWithBasicFtp(client, { remotePath, destination: writableStream, rawError: err });
         }
       });
     } catch (err) {
@@ -585,6 +595,24 @@ export class FTPClient {
     } catch (err) {
       throw new Error(`FTP delete error: ${errorText(err)}`, { cause: err });
     }
+  }
+
+  /**
+   * The fallback: basic-ftp's standard download. A failed raw RETR closes the client, so log in again first.
+   * When that second login fails, the error of the raw RETR tells the user more than the login error.
+   */
+  private async downloadWithBasicFtp(
+    client: ftp.Client,
+    { remotePath, destination, rawError }: { remotePath: string; destination: Writable; rawError: unknown }
+  ): Promise<void> {
+    if (client.closed) {
+      try {
+        await this.login(client);
+      } catch {
+        throw rawError;
+      }
+    }
+    await client.downloadTo(destination, remotePath);
   }
 
   /** Open a connection, run `work` on it, and always close it */
@@ -726,7 +754,9 @@ export class FTPClient {
 
       startIdleTimer();
       client.ftp.handle(`RETR ${filePath}`, (reply, task) => {
-        if (reply instanceof Error) task.reject(reply);
+        if (reply instanceof ftp.FTPError && reply.code !== CANNOT_OPEN_DATA_CONNECTION) {
+          task.reject(new RetrRefusedError(reply.message, { cause: reply }));
+        } else if (reply instanceof Error) task.reject(reply);
         else if (reply.code >= 200 && reply.code < 300) task.resolve(reply);
         else if (reply.code >= 300) task.reject(new Error(`Unexpected reply to RETR: ${reply.message}`));
         // A 1xx reply (for example 150) only tells that the transfer starts
