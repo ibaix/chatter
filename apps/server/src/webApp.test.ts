@@ -26,6 +26,7 @@ describe('webAppRoutes', () => {
     mkdirSync(join(webDir, 'assets'));
     writeFileSync(join(webDir, 'index.html'), '<div id="root"></div>');
     writeFileSync(join(webDir, 'assets', 'app.js'), 'console.log(1)');
+    writeFileSync(join(webDir, 'theme-start.js'), 'console.log(2)');
     const { auth, accounts, cookie } = await loggedInAuth();
     loggedIn = { headers: { Cookie: cookie } };
     poller = new HardwarePoller(emptyDb);
@@ -55,6 +56,27 @@ describe('webAppRoutes', () => {
   it('gives 404 for a missing file, not the index page', async () => {
     const res = await app.request('/assets/index-old.js');
     expect(res.status).toBe(404);
+  });
+
+  describe('cache', () => {
+    // A file outside assets/ has no hash in its name, so after an update it has the same address and new content.
+    // no-cache makes the browser ask the server each time, so it does not keep an old copy.
+    it.each(['/', '/machine/brother_1', '/index.html', '/theme-start.js'])('tells the browser to check %s again each time', async path => {
+      const res = await app.request(path);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Cache-Control')).toBe('no-cache');
+    });
+
+    it('lets the browser keep a built file in assets/, because its name changes when its content changes', async () => {
+      const res = await app.request('/assets/app.js');
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Cache-Control')).toBeNull();
+    });
+
+    it('does not change the API replies', async () => {
+      const res = await app.request('/api/machines', loggedIn);
+      expect(res.headers.get('Cache-Control')).toBeNull();
+    });
   });
 
   it('still serves the API', async () => {
