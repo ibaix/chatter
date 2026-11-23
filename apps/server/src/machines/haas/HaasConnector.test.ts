@@ -417,6 +417,23 @@ describe('Haas data stream', () => {
 
     expect(status.data).toMatchObject({ toolNumber: 5, program: 'O1' });
   });
+
+  it('forgets a part of a line when the data stream closes, so the first line of the next connection reads correctly', async () => {
+    let connections = 0;
+    server = net.createServer(socket => {
+      connections++;
+      const reply = connections === 1 ? 'ProgramName|O9|Active' : `ActiveTool|5${DELIMITER}`;
+      socket.once('data', () => (connections === 1 ? socket.end(reply) : socket.write(reply)));
+    });
+    const dataPort = await listen(server);
+    connector = new HaasConnector({ name: 'VF2', host: '127.0.0.1', dataPort, queryPort: CLOSED_PORT });
+
+    const status = await pollUntil(data => data.toolNumber !== undefined);
+
+    expect(connections).toBe(2);
+    expect(status.data.toolNumber).toBe(5);
+    expect(status.data.program).toBeUndefined();
+  });
 });
 
 describe('Haas openSocket socket options', () => {

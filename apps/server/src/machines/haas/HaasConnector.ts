@@ -285,6 +285,8 @@ export class HaasConnector extends BaseMachineConnector {
 
   private async connectDataStream(): Promise<void> {
     this.dataSocket?.destroy();
+    // A part of a line from the old connection must not join the first line of the new one
+    this.clearDataRest();
 
     const socket = new net.Socket();
     this.dataSocket = socket;
