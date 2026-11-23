@@ -179,7 +179,9 @@ describe('known device cookie', () => {
     const cookie = await knownDeviceOf(ADMIN);
     await lockUser();
     const [name, value] = cookie.split('=');
-    const changed = `${name}=${value.slice(0, -1)}${value.endsWith('A') ? 'B' : 'A'}`;
+    // Change the first character of the signature: the last one has bits that the decoder ignores
+    const signatureAt = value.lastIndexOf('.') + 1;
+    const changed = `${name}=${value.slice(0, signatureAt)}${value[signatureAt] === 'A' ? 'B' : 'A'}${value.slice(signatureAt + 1)}`;
     const madeUp = `${name}=1.${'A'.repeat(22)}.${'A'.repeat(43)}`;
 
     expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: changed })).status).toBe(429);
