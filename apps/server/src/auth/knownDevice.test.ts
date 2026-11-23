@@ -121,6 +121,13 @@ describe('known device cookie', () => {
     expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie })).status).toBe(200);
   });
 
+  it('knows the device for the username with spaces and other case, as the login form reads it', async () => {
+    const cookie = await knownDeviceOf(ADMIN);
+    await lockUser();
+
+    expect((await send(ADMIN_COMPUTER, '/api/auth/login', { ...ADMIN, username: ' Admin ' }, { cookie })).status).toBe(200);
+  });
+
   it('lets a known device log in while its address is locked for the user', async () => {
     const cookie = await knownDeviceOf(ADMIN);
     for (let i = 0; i < 10; i++) await send(ADMIN_COMPUTER, '/api/auth/login', WRONG);

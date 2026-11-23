@@ -169,11 +169,14 @@ export class Auth {
     return user && signDeviceCookie(this.deviceKey, { userId: user.id, deviceId }, user.passwordHash);
   }
 
-  /** The device ID of a valid device cookie for this username, or null. A cookie of a different user gives null. */
+  /**
+   * The device ID of a valid device cookie for this username, or null. A cookie of a different user gives null.
+   * The username is read as logIn() and hasUser() read it: upper and lower case are the same, and the login form trims it.
+   */
   knownDeviceOf(cookie: string | null | undefined, username: string): string | null {
     const device = readDeviceCookie(this.deviceKey, cookie ?? undefined, id => this.users.find(id)?.passwordHash ?? null);
     if (!device) return null;
-    return this.users.findByName(username.trim())?.id === device.userId ? device.deviceId : null;
+    return this.users.findByName(username)?.id === device.userId ? device.deviceId : null;
   }
 
   private startSession(userId: number, client: SessionClient): string {

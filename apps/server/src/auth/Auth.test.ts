@@ -165,7 +165,15 @@ describe('Auth', () => {
       await auth.setUp(ADMIN, BROWSER);
       const cookie = auth.deviceCookieFor('admin')!;
 
-      expect(auth.knownDeviceOf(cookie, ' Admin ')).toEqual(expect.any(String));
+      expect(auth.knownDeviceOf(cookie, 'Admin')).toEqual(expect.any(String));
+    });
+
+    it('reads the username as hasUser does: the login form trims it before Auth gets it', async () => {
+      await auth.setUp(ADMIN, BROWSER);
+      const cookie = auth.deviceCookieFor('admin')!;
+
+      expect(auth.hasUser(' admin ')).toBe(false);
+      expect(auth.knownDeviceOf(cookie, ' admin ')).toBeNull();
     });
 
     it('keeps the device ID that it gets, so the count of the device stays', async () => {
