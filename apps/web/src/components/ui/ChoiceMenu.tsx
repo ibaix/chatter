@@ -38,7 +38,9 @@ export function ChoiceMenu<Id extends string>({ label, choices, value, onChoose,
   return (
     <Menu>
       <Menu.Trigger nativeButton render={renderButton}>
-        <span className="sr-only">{label}: </span>
+        {/* The spaces are outside the sr-only spans: a space at the edge of an inline span is lost from the name */}
+        <span className="sr-only">{label}:</span>
+        {' '}
         {chosen?.name ?? value}
         <ChevronDownIcon size={14} className="text-zinc-300" />
       </Menu.Trigger>
@@ -53,7 +55,7 @@ export function ChoiceMenu<Id extends string>({ label, choices, value, onChoose,
             >
               <CheckIcon size={14} className={cn('shrink-0', !isChosen && 'invisible')} />
               {choice.name}
-              {isChosen && <span className="sr-only"> (chosen)</span>}
+              {isChosen && <>{' '}<span className="sr-only">(chosen)</span></>}
             </Menu.Item>
           );
         })}
