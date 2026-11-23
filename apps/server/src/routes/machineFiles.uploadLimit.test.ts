@@ -11,6 +11,7 @@ import { machineFileRoutes } from './machineFiles.js';
 vi.mock('../storage/database.js', () => ({ recordUpload: vi.fn() }));
 
 const BUSY_TEXT = 'Chatter is busy with other uploads. Try again later.';
+const MACHINE_BUSY_TEXT = 'The machine is busy with other file tasks. Try again later.';
 
 /** An upload on the machine that runs until the test ends it */
 function heldUploads() {
@@ -120,6 +121,33 @@ describe('the limit of uploads at the same time, for all machines', () => {
     expect(reply.status).toBe(503);
     held.endAll();
     await Promise.all(running);
+  });
+
+  // Uploads to one machine run one at a time. So one busy machine must not take both places, and block the uploads to
+  // the other machines.
+  it('lets only one upload to each machine hold its files, before it reads the body', async () => {
+    held = heldUploads();
+    const { app, connector } = appWith(held);
+    const running = post(app, '/machine/1/files/upload', uploadForm());
+    await until(() => held?.count() === 1);
+    const endlessBody = new ReadableStream<Uint8Array>({ pull: () => new Promise(() => undefined) });
+    const request = new Request('http://localhost/machine/1/files/upload-batch', {
+      method: 'POST',
+      body: endlessBody,
+      headers: { 'Content-Type': 'multipart/form-data; boundary=chatter' },
+      duplex: 'half',
+    } as RequestInit);
+
+    const sameMachine = await app.request(request);
+    const otherMachine = post(app, '/machine/2/files/upload', uploadForm());
+    await until(() => held?.count() === 2);
+
+    expect(sameMachine.status).toBe(503);
+    expect(await sameMachine.json()).toEqual({ error: MACHINE_BUSY_TEXT });
+    expect(connector.uploadFiles).not.toHaveBeenCalled();
+    held.endAll();
+    expect((await Promise.all([running, otherMachine])).map(reply => reply.status)).toEqual([200, 200]);
+    expect((await post(app, '/machine/1/files/upload', uploadForm())).status).toBe(200);
   });
 
   it('frees the place of an upload that fails', async () => {
