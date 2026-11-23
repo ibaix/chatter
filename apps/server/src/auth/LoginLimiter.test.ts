@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureLog, type CapturedLog } from '../logging/testSupport.js';
-import { LoginLimiter, MAX_FAILURES, MAX_USER_FAILURES } from './LoginLimiter.js';
+import { LoginLimiter, MAX_DEVICE_FAILURES, MAX_FAILURES, MAX_USER_FAILURES } from './LoginLimiter.js';
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 
@@ -240,6 +240,89 @@ describe('LoginLimiter', () => {
 
     expect(limiter.isFirstBlockedTry('10.9.9.1', 'admin')).toBe(true);
     expect(limiter.isFirstBlockedTry('10.9.9.2', 'admin')).toBe(false);
+  });
+});
+
+describe('LoginLimiter for a known device', () => {
+  const DEVICE = 'device-1';
+
+  function failOnDevice(limiter: LoginLimiter, times: number, device = DEVICE, username = 'admin') {
+    for (let i = 0; i < times; i++) limiter.recordAttempt('10.0.0.5', username, device);
+  }
+
+  it('lets a known device try while the user and its address are locked', () => {
+    const limiter = new LoginLimiter();
+    failFromManyAddresses(limiter, 'admin', MAX_USER_FAILURES);
+    failTimes(limiter, '10.0.0.5', MAX_FAILURES);
+
+    expect(limiter.isBlocked('10.0.0.5', 'admin')).toBe(true);
+    expect(limiter.isBlocked('10.0.0.5', 'admin', DEVICE)).toBe(false);
+  });
+
+  it('blocks a known device after 10 wrong passwords, and only that device', () => {
+    expect(MAX_DEVICE_FAILURES).toBe(10);
+    const limiter = new LoginLimiter();
+    failOnDevice(limiter, MAX_DEVICE_FAILURES - 1);
+    expect(limiter.isBlocked('10.0.0.5', 'admin', DEVICE)).toBe(false);
+
+    failOnDevice(limiter, 1);
+    expect(limiter.isBlocked('10.0.0.5', 'admin', DEVICE)).toBe(true);
+    expect(limiter.isBlocked('10.0.0.5', 'admin', 'device-2')).toBe(false);
+  });
+
+  it('does not count the tries of a known device for the user or the address', () => {
+    const limiter = new LoginLimiter();
+    for (let i = 0; i < MAX_USER_FAILURES; i++) failOnDevice(limiter, 1, `device-${i}`);
+
+    expect(limiter.isBlocked('10.0.0.5', 'admin')).toBe(false);
+    expect(limiter.lockedUsers()).toEqual([]);
+    expect(limiter.lockedAddresses()).toEqual([]);
+  });
+
+  it('forgets the tries of a device after a good password', () => {
+    const limiter = new LoginLimiter();
+    failOnDevice(limiter, MAX_DEVICE_FAILURES - 1);
+    limiter.recordAttempt('10.0.0.5', 'admin', DEVICE);
+    limiter.recordSuccess('10.0.0.5', 'admin', DEVICE);
+
+    failOnDevice(limiter, 1);
+    expect(limiter.isBlocked('10.0.0.5', 'admin', DEVICE)).toBe(false);
+  });
+
+  it('reports only the first blocked try of a device', () => {
+    const limiter = new LoginLimiter();
+    failOnDevice(limiter, MAX_DEVICE_FAILURES);
+
+    expect(limiter.isFirstBlockedTry('10.0.0.5', 'admin', DEVICE)).toBe(true);
+    expect(limiter.isFirstBlockedTry('10.0.0.5', 'admin', DEVICE)).toBe(false);
+  });
+
+  it('lets the device try again after 15 minutes', () => {
+    let now = 0;
+    const limiter = new LoginLimiter(() => now);
+    failOnDevice(limiter, MAX_DEVICE_FAILURES);
+
+    now = FIFTEEN_MINUTES + 1;
+    expect(limiter.isBlocked('10.0.0.5', 'admin', DEVICE)).toBe(false);
+  });
+
+  it('unlocks the devices of a user when an admin unlocks the user', () => {
+    const limiter = new LoginLimiter();
+    failOnDevice(limiter, MAX_DEVICE_FAILURES, DEVICE, 'Admin');
+    failOnDevice(limiter, MAX_DEVICE_FAILURES, 'device-of-bob', 'bob');
+
+    limiter.unlockUser('admin');
+    expect(limiter.isBlocked('10.0.0.5', 'admin', DEVICE)).toBe(false);
+    expect(limiter.isBlocked('10.0.0.5', 'bob', 'device-of-bob')).toBe(true);
+  });
+
+  it('keeps the count of a guessed device when many new devices fill the list', () => {
+    const limiter = new LoginLimiter();
+    failOnDevice(limiter, MAX_DEVICE_FAILURES - 1);
+    for (let i = 0; i < 2000; i++) failOnDevice(limiter, 1, `new-device-${i}`);
+
+    failOnDevice(limiter, 1);
+    expect(limiter.isBlocked('10.0.0.5', 'admin', DEVICE)).toBe(true);
   });
 });
 
