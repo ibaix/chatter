@@ -1,16 +1,27 @@
 /**
- * Remove the admin accounts, for when no admin knows their password.
- * Every browser is logged out, and no browser is a known browser any more. The users who are not admins stay.
- * After this, the next person who opens Chatter makes a new admin account.
+ * Make a new Admin, for when no Admin knows their password. It asks for the username and the password on the terminal.
+ * The old Admin accounts are removed, and each browser is logged out. The users who are not Admins stay.
+ * The first-run setup stays closed, so no other person on the network can make the Admin.
  *
  *   docker compose exec chatterbox npm run reset-password
  */
 import 'dotenv/config';
-import { resetAdmins } from './auth/adminReset.js';
+import { runPasswordReset } from './auth/resetPasswordPrompt.js';
 import { SessionStore } from './auth/sessionStore.js';
 import { UserStore } from './auth/userStore.js';
-import { closeDatabase, getDb } from './storage/database.js';
+import { ServerLog } from './logging/ServerLog.js';
+import { closeDatabase, dataFolder, getDb } from './storage/database.js';
 
-resetAdmins(new UserStore(getDb()), new SessionStore(getDb()));
-await closeDatabase();
-console.log('The admin accounts are removed. Open Chatter now and make a new admin account.');
+// The warning about the new Admin also goes to the log file that Settings > Diagnostics shows
+const serverLog = ServerLog.forDataFolder(dataFolder());
+const stopListening = serverLog.listen();
+try {
+  const done = await runPasswordReset({
+    input: process.stdin, output: process.stdout, users: new UserStore(getDb()), sessions: new SessionStore(getDb()),
+  });
+  if (!done) process.exitCode = 1;
+} finally {
+  stopListening();
+  await serverLog.file?.close();
+  await closeDatabase();
+}

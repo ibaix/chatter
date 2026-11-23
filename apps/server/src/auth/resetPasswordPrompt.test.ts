@@ -1,4 +1,5 @@
 import { PassThrough, Writable } from 'node:stream';
+import { stripVTControlCharacters } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import { runPasswordReset } from './resetPasswordPrompt.js';
 import { authParts } from './testSupport.js';
@@ -69,11 +70,23 @@ describe('npm run reset-password', () => {
 
     const done = runPasswordReset({ ...terminal, users, sessions });
     await terminal.type(USERNAME_PROMPT, 'boss');
-    await vi.waitFor(() => expect(terminal.text()).toContain(`${USERNAME_PROMPT}boss`));
+    await vi.waitFor(() => expect(stripVTControlCharacters(terminal.text())).toContain(`${USERNAME_PROMPT}boss`));
     await terminal.type(PASSWORD_PROMPT, NEW_PASSWORD);
     await terminal.type(AGAIN_PROMPT, NEW_PASSWORD);
 
     expect(await done).toBe(true);
+    expect(terminal.text()).not.toContain(NEW_PASSWORD);
+  });
+
+  it('does not show a password that the person types before its question shows', async () => {
+    const { users, sessions } = await shop();
+    const terminal = fakeTerminal();
+
+    const done = runPasswordReset({ ...terminal, users, sessions });
+    await terminal.type(USERNAME_PROMPT, `boss\r${NEW_PASSWORD}\r${NEW_PASSWORD}`);
+
+    expect(await done).toBe(true);
+    expect(users.findByName('boss')?.role).toBe('admin');
     expect(terminal.text()).not.toContain(NEW_PASSWORD);
   });
 

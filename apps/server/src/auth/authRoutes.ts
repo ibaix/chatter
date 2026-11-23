@@ -37,6 +37,8 @@ const DEVICE_COOKIE_PATH = '/api/auth';
 const DEVICE_COOKIE_LIFETIME_SECONDS = 400 * 24 * 60 * 60;
 // The scheme name ignores case (RFC 7235)
 const BASIC = /^basic\s+([A-Za-z0-9+/=]+)\s*$/i;
+/** The one reply for each setup that Chatter refuses with 409, so the reply does not tell which usernames exist */
+const SETUP_CLOSED = 'The setup is closed. Ask an Admin for an account.';
 /** Longer than any username and password that the setup allows */
 const MAX_BASIC_LENGTH = 512;
 
@@ -317,13 +319,14 @@ export function authRoutes(guard: LoginGuard) {
       try {
         const setUp = c.req.valid('json');
         const token = await auth.setUp(setUp, clientOf(c, origin));
-        if (!token) return c.json({ error: 'The account is already set up' }, 409);
+        if (!token) return c.json({ error: SETUP_CLOSED }, 409);
         // Only the first visitor can make an Admin, so the log tells who did it
         log.warn('First-run setup made a new Admin', { username: setUp.username, address: origin.address });
         return replyLoggedIn(c, auth, origin, token, setUp.username);
       } catch (error) {
-        // After a password reset from the command line, a user who is not an admin can have this username
-        if (error instanceof UsernameTakenError) return c.json({ error: error.message }, 409);
+        // A user who is not an admin can have this username, in the database of an older version after its
+        // reset-password. The same reply as for a closed setup does not tell that the username exists.
+        if (error instanceof UsernameTakenError) return c.json({ error: SETUP_CLOSED }, 409);
         throw error;
       }
     })
