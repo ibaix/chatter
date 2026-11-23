@@ -62,6 +62,11 @@ describe('anchorsOf', () => {
     expect(anchorsOf('## Foo\n## Foo-1\n## Foo')).toEqual(['foo', 'foo-1', 'foo-2']);
   });
 
+  it('skips the frontmatter', () => {
+    expect(anchorsOf('---\nlayout: home\n# comment\n---\n## Real')).toEqual(['real']);
+    expect(anchorsOf('## Real\n---\n# After a line\n---')).toEqual(['real', 'after-a-line']);
+  });
+
   it('skips code blocks with tildes', () => {
     expect(anchorsOf('~~~bash\n# not a heading\n~~~\n## Real')).toEqual(['real']);
   });
@@ -115,6 +120,10 @@ describe('headingLinksIn', () => {
 
   it('decodes the anchor and reads a link with a title', () => {
     expect(headingLinksIn('[x](./update.md#caf%C3%A9 "Title")', 'guide/a.md')).toEqual([{ file: 'guide/update.md', anchor: 'café' }]);
+  });
+
+  it('skips the frontmatter', () => {
+    expect(headingLinksIn('---\ntext: "[a](#front)"\n---\n[b](#real)', 'a.md')).toEqual([{ file: 'a.md', anchor: 'real' }]);
   });
 
   it('reads a link in angle brackets', () => {

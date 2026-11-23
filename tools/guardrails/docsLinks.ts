@@ -52,7 +52,7 @@ export function anchorsOf(markdown: string): string[] {
 function linesOutsideCodeBlocks(markdown: string): string[] {
   const lines: string[] = [];
   let fence: string | undefined;
-  for (const line of markdown.split('\n')) {
+  for (const line of withoutFrontmatter(markdown).split('\n')) {
     const mark = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
     if (fence === undefined && mark && !(mark[1][0] === '`' && mark[2].includes('`'))) {
       fence = mark[1];
@@ -65,6 +65,11 @@ function linesOutsideCodeBlocks(markdown: string): string[] {
     if (fence === undefined) lines.push(line);
   }
   return lines;
+}
+
+/** The page without the YAML frontmatter (the lines from a first line "---" to the next "---"), which VitePress does not show */
+function withoutFrontmatter(markdown: string): string {
+  return markdown.replace(/^---[ \t]*\r?\n(?:.*\r?\n)*?---[ \t]*(?:\r?\n|$)/, '');
 }
 
 export interface HeadingLink {
