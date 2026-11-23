@@ -854,6 +854,7 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
   it.each([
     { code: 426, reply: '426 Connection closed; transfer aborted', error: '426 Connection closed; transfer aborted' },
     { code: 451, reply: '451 Local error in processing', error: '451 Local error in processing' },
+    { code: 550, reply: '550 Transfer failed', error: '550 Transfer failed' },
     { code: 350, reply: '350 Restarting at 0', error: 'Unexpected reply to RETR: 350 Restarting at 0' },
   ])('fails when the data connection closes and the machine sends $code', async ({ reply, error }) => {
     let transfer: FileTransfer | undefined;
@@ -864,6 +865,43 @@ describe('FTPClient raw RETR that stops in the middle of a file', () => {
     transfer?.control.write(`${reply}\r\n`);
 
     expect(await outcome).toBe(`FTP download error: ${error}`);
+    expect(text()).toBe(firstPart);
+    expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // A machine can send the error reply before it closes the data connection. The bytes that come after the reply
+  // are not part of a good file.
+  it('fails, closes the data connection, and gives the user no later byte, when the 426 comes before the end of the data', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => {
+      transfer = started;
+      started.data.write(firstPart);
+    });
+    await until(() => text() === firstPart);
+    let isClosed = false;
+    transfer?.data.on('close', () => { isClosed = true; });
+
+    transfer?.control.write('426 Connection closed; transfer aborted\r\n');
+
+    expect(await outcome).toBe('FTP download error: 426 Connection closed; transfer aborted');
+    transfer?.data.end('LATE');
+    await until(() => isClosed);
+    expect(text()).toBe(firstPart);
+    expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // A closed control connection is not the reply of an old server that sends no 226. The file can be cut short.
+  it('fails, and does not retry, when the machine closes the control connection after part of the file', async () => {
+    let transfer: FileTransfer | undefined;
+    const { text, outcome } = await downloadFrom(started => { transfer = started; });
+    await until(() => transfer !== undefined);
+    if (transfer) await sendPartAndClose(text, transfer);
+
+    transfer?.control.end();
+
+    expect(await outcome).toMatch(/^FTP download error: /);
     expect(text()).toBe(firstPart);
     expect(machine?.commands.filter(command => command === 'RETR')).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
@@ -1042,6 +1080,7 @@ describe('FTPClient raw RETR that the machine refuses', () => {
   it.each([
     { reply: '550 No such file' },
     { reply: '450 File busy' },
+    { reply: '426 Connection closed; transfer aborted' },
   ])('fails with the reply, and runs no fallback, when the machine answers RETR with $reply', async ({ reply }) => {
     const download = await startDownload({ sendFile: refuseRetr({ 1: reply }), timeoutMs });
     machine = download.machine;
