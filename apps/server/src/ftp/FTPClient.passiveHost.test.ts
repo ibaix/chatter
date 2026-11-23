@@ -1485,17 +1485,74 @@ describe('FTPClient raw LIST that ends early', () => {
     }
   });
 
-  // Real timers: the client must read the data before its idle timer ends, and the test cannot see that read
-  it('cuts the tree short when the machine stops in the middle of a listing', async () => {
-    vi.useRealTimers();
-    // The idle timer starts before the LIST, so it must be long, also on a slow CI computer
-    const { tree } = await startTree(({ data }) => data.write(LISTING + CUT_LINE), { timeoutMs: 1_000 });
+  // Some old servers send no reply to LIST and do not close the data connection. Before the reply check, Chatter
+  // waited 1 s and accepted the listing. So a listing with no reply and no new data for 1 s is complete, as when the
+  // data ends cleanly with no reply. It must not wait for the FTP timeout in each folder.
+  it('keeps the whole listing when no reply comes and no data comes for 1 s on the open data connection', async () => {
+    const timers = recordTimerDelays();
+    const log = captureLog();
+    try {
+      let isControlClosed: (() => boolean) | undefined;
+      const { tree } = await startTree(transfer => {
+        if (transfer.retrNumber > 1) {
+          sendWholeFile(transfer, SUB_LISTING);
+          return;
+        }
+        isControlClosed = trackClose(transfer.control);
+        transfer.data.write(FOLDER_LINE + LISTING.trimEnd());
+      }, { depth: 2, timeoutMs: 5_000 });
+      await until(() => timers.delays.includes(1_000));
+      expect(await hasSettled(tree)).toBe(false);
 
-    const { nodes, isCutShort } = await treeOf(tree);
-    expect(isCutShort).toBe(true);
-    expect(namesOf(nodes)).toEqual(['O1000', 'O2000']);
-    // A second LIST would stop in the same way
-    expect(listCount()).toBe(1);
+      vi.advanceTimersByTime(999);
+      expect(await hasSettled(tree)).toBe(false);
+      expect(machine?.controlConnections).toBe(1);
+      vi.advanceTimersByTime(1);
+
+      const { nodes, isCutShort } = await treeOf(tree);
+      expect(isCutShort).toBe(false);
+      expect(namesOf(nodes)).toEqual(['SUB', 'O1000', 'O2000']);
+      expect(namesOf(nodes[0].children ?? [])).toEqual(['O4000']);
+      expect(log.text('warn')).not.toContain(CUT_WARNING);
+      // A late 226 cannot answer the next command: the client closed, and the next folder is read after a new login
+      expect(isControlClosed?.()).toBe(true);
+      expect(machine?.controlConnections).toBe(2);
+      const session = linesOfLastSession();
+      const cwd = session.indexOf('CWD /SUB');
+      expect(cwd).toBeGreaterThan(-1);
+      expect(cwd).toBeLessThan(session.findIndex(line => line.startsWith('LIST')));
+    } finally {
+      log.restore();
+      timers.restore();
+    }
+  });
+
+  it('waits again when more data comes before the reply, and does not cut the listing at a short pause', async () => {
+    const timers = recordTimerDelays();
+    let transfer: FileTransfer | undefined;
+    try {
+      const { tree } = await startTree(started => {
+        transfer = started;
+        started.data.write(LISTING.slice(0, 10));
+      }, { timeoutMs: 5_000 });
+      const idleWaits = () => timers.delays.filter(ms => ms === 1_000).length;
+      await until(() => idleWaits() >= 1);
+      vi.advanceTimersByTime(900);
+      const waitsBefore = idleWaits();
+      transfer?.data.write(LISTING.slice(10));
+      await until(() => idleWaits() > waitsBefore);
+
+      vi.advanceTimersByTime(900);
+      expect(await hasSettled(tree)).toBe(false);
+      vi.advanceTimersByTime(100);
+
+      const { nodes, isCutShort } = await treeOf(tree);
+      expect(isCutShort).toBe(false);
+      expect(namesOf(nodes)).toEqual(['O1000', 'O2000']);
+      expect(listCount()).toBe(1);
+    } finally {
+      timers.restore();
+    }
   });
 
   it('keeps a last line with no line end when the 226 comes', async () => {
