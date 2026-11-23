@@ -420,6 +420,8 @@ export class FTPClient {
   private user: string;
   private password: string;
   private readonly timeoutMs: number;
+  /** The tree walks that run now, by depth and path. A request for the same tree waits for the same walk. */
+  private readonly treeWalks = new Map<string, Promise<FileTree>>();
 
   constructor({
     host, port = DEFAULT_FTP_PORT, user = DEFAULT_FTP_USER, password = '', timeoutMs = DEFAULT_FTP_TIMEOUT_MS
@@ -464,6 +466,19 @@ export class FTPClient {
    * at TREE_WALK_TIME_LIMIT_MS, or after a folder listing that is too long. The depth limit does not count as a cut.
    */
   async readFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FileTree> {
+    const key = `${depth}:${path}`;
+    const running = this.treeWalks.get(key);
+    if (running) return running;
+    const tree = this.walkFileTree(path, depth);
+    this.treeWalks.set(key, tree);
+    try {
+      return await tree;
+    } finally {
+      this.treeWalks.delete(key);
+    }
+  }
+
+  private async walkFileTree(path: string, depth: number): Promise<FileTree> {
     const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, foldersLeft: MAX_TREE_FOLDERS };
     try {
       assertSafeFtpArgument(path);
