@@ -90,7 +90,9 @@ UPDATE
 3. Unzip the new package to the same place, so that its "chatter" folder replaces this one.
    Chatter keeps its data in Docker volumes, not in this folder. Keep the folder name "chatter":
    Docker uses this name to find your data.
-4. Make your changes again in the new files.
+4. Make your changes again in the new files. Do not copy an old docker-compose.yml over the new one:
+   the new file can have new parts. For example, it has a "networks:" section that keeps the history
+   database away from your network.
 5. In the "chatter" folder, load the new images and start them:
      docker load -i images.tar
      docker compose up -d
