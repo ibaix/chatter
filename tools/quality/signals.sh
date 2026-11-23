@@ -8,6 +8,7 @@
 #
 # Marks:  ✓ passed   ✗ failed (a gate: the CI fails too)   ! a signal to look at   ⊘ skipped, with the reason
 # The full output of each check is in .quality/<check>.log.
+# After the table, it prints the size of the change (npm run loc), except with --all.
 # The script always exits with 0. It reports; it does not decide.
 set -uo pipefail
 
@@ -115,4 +116,11 @@ else
 fi
 
 printf '%s\n' "${ROWS[@]}"
+
+# The size of the change: a signal only. It counts the commits, not the working tree.
+if [ "$ALL" = 0 ]; then
+  echo
+  echo "Size of the change (commits only, not the changes that are not committed)"
+  npx tsx tools/loc/index.ts --base "$BASE" 2> "$LOGS/loc.log" || echo "The size table failed, see $LOGS/loc.log"
+fi
 exit 0

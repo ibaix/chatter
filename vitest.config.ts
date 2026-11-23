@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 // `npm test` does not use this file. It runs each workspace on its own.
 export default defineConfig({
   test: {
-    projects: ['packages/shared', 'apps/web', 'apps/server', 'tools/fake-machines', 'tools/fake-notify', 'tools/quality', 'tools/guardrails'],
+    projects: ['packages/shared', 'apps/web', 'apps/server', 'tools/fake-machines', 'tools/fake-notify', 'tools/quality', 'tools/guardrails', 'tools/loc'],
     coverage: {
       provider: 'v8',
       include: [
@@ -16,6 +16,7 @@ export default defineConfig({
         'tools/fake-notify/**/*.ts',
         'tools/quality/**/*.ts',
         'tools/guardrails/**/*.ts',
+        'tools/loc/**/*.ts',
       ],
       exclude: ['**/*.test.{ts,tsx}', '**/*.d.ts', '**/node_modules/**', 'apps/web/src/test/**'],
       reporter: ['text-summary', 'json-summary', 'lcov'],

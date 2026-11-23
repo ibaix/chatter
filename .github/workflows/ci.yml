@@ -82,6 +82,17 @@ jobs:
           echo '## Changed lines with no test' >> "$GITHUB_STEP_SUMMARY"
           npm run -s coverage:changed -- --base "origin/$BASE_REF" >> "$GITHUB_STEP_SUMMARY"
 
+      # The lines that the commits of the pull request add and remove: code, tests, docs and comments.
+      # Only a report: a failure of the tool does not stop the job.
+      - name: Show the size of the change in the job summary
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          echo '## Size of the change' >> "$GITHUB_STEP_SUMMARY"
+          npm run -s loc -- --base "origin/$BASE_REF" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Keep the coverage reports
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

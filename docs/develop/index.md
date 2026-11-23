@@ -16,6 +16,7 @@
 | `tools/fake-machines` | Fake CNC machines for tests (see [Fake machines](./fake-machines.md)) |
 | `tools/fake-notify` | A fake Twilio and webhook receiver for the notifications (see [Fake notifications](./fake-machines.md#fake-notifications)) |
 | `tools/quality` | Scripts that print the coverage reports as tables (see [Coverage](#coverage)) |
+| `tools/loc` | `npm run loc`: the lines of code, tests and docs that the commits of a branch add and remove (see [Testing](#testing)) |
 | `tools/guardrails` | Tests that keep the rules in `AGENTS.md`: no FANUC files, the volume names, the closed ports, and the docs links of the app |
 | `tools/pi-image` | The Raspberry Pi card image (see [Pi card image](./pi-image.md)) |
 | `tools/release` | The scripts that make the release files |
@@ -105,6 +106,10 @@ tools/victoria-test/stop.sh
 
 To run all the checks for your branch and see one table, run `npm run quality`. Add `-- --coverage` to also list the changed lines that no test runs, or `-- --all` for the whole repo.
 The full output of each check is in `.quality/`. The AI review skills `/chatter-review-code` and `/chatter-review-testing` use the same table.
+
+To see the size of your change, run `npm run loc`. It prints the lines that the commits of your branch add and remove, in four parts: application code, tests, docs and comments, and files that it does not count (such as `package-lock.json` and binary files).
+It counts commits only, not the changes that you did not commit. Add `-- --files` for one row for each file. `npm run quality` prints the same table, and the CI shows it in the summary of the test job of each pull request.
+The size is a signal, not a gate. The rules for each part are in `tools/loc/README.md`.
 
 ### Lint
 
