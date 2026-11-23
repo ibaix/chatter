@@ -29,7 +29,7 @@ A reverse proxy is a server that takes the HTTPS requests from the browsers, and
 Chatter believes the `X-Forwarded-*` headers only from the trusted addresses, because any computer can send them.
 Only one proxy in front of Chatter is supported.
 
-A browser that logged in over plain HTTP before the move keeps that login. The login ends when the browser is not used for 14 days, and 1 year after the log in at the latest.
+A browser that logged in over plain HTTP before the move keeps that login. The login ends when the browser is not used for 14 days, and 1 year after the login at the latest. A visible Chatter page counts as a use. A hidden tab does not.
 
 ## Security headers from the proxy
 
