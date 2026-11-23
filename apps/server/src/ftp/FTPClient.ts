@@ -43,12 +43,12 @@ const DOWNLOAD_STALLED_MESSAGE = 'The machine stopped sending the file. Try agai
  * The most bytes of one download. CNC programs are much smaller (a control holds some MB at most), but a program on a
  * data server can be large. A rogue FTP server cannot send a file with no end.
  */
-export const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
 /**
  * One download stops after this time. A machine that sends one byte just before each timeout cannot keep the
  * download open for ever. A slow control sends about 50 KB each second, so 64 MB takes about 22 minutes.
  */
-export const DOWNLOAD_TIME_LIMIT_MS = 30 * 60_000;
+const DOWNLOAD_TIME_LIMIT_MS = 30 * 60_000;
 /**
  * After a clean end of the data connection, the raw RETR waits this long for the reply to RETR (usually 226).
  * Some old, simple FTP servers never send this reply. Then the file is complete without it. The wait is never
