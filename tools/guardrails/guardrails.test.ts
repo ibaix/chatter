@@ -293,7 +293,7 @@ describe('release signing', () => {
   // Only the sign job in docker.yml gets the key. It runs no action except the checkout, and it signs only a tag
   // on main, after the publish job.
   const SIGN_JOB = 'docker.yml: sign';
-  const { publish, sign } = workflow('docker.yml').jobs;
+  const { publish, sign, release } = workflow('docker.yml').jobs;
   const environmentOf = (job: WorkflowJob) => (typeof job.environment === 'object' ? job.environment.name : job.environment);
   const needsOf = (job: WorkflowJob) => [job.needs ?? []].flat();
   const stepIndex = (job: WorkflowJob, test: (step: WorkflowStep) => boolean) => (job.steps ?? []).findIndex(test);
@@ -325,6 +325,11 @@ describe('release signing', () => {
 
   it('signs only for a release tag such as v1.2.0', () => {
     expect(conditionOf(sign)).toBe(releaseTagOnly);
+  });
+
+  // The release job runs after the sign job. Its own condition keeps it off a push to main, also when "needs" changes.
+  it('adds the release files only for a release tag such as v1.2.0', () => {
+    expect(conditionOf(release)).toBe(releaseTagOnly);
   });
 
   it('signs only after the publish job', () => {
