@@ -25,6 +25,7 @@ If `git merge-base origin/main HEAD` fails, run `git fetch origin` first.
    npm run quality -- --coverage            # add: --base <ref>
    ```
    `✗ tests` is a Blocker. The changed lines that no test runs are in `.quality/coverage-changed.log`. The coverage of each workspace is in `.quality/coverage-summary.log`.
+   After the table, `Size of the change` gives the lines of code, tests and docs that the commits add (`npm run loc`). It is a signal, not a finding. For example, code +300 and tests +0 tells you where to look first.
 2. Make a list of the changed source files, and of the test file for each one (`x.ts` and `x.test.ts`, in the same folder).
 3. Read each changed test. Read what it asserts, not only its name.
 
