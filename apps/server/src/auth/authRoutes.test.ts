@@ -22,6 +22,7 @@ const emptyDb = {
   prepare: () => ({ run: () => ({ changes: 0 }), get: () => undefined, all: () => [] }),
 } as unknown as Database.Database;
 
+const DAY_MS = 24 * 60 * 60 * 1000;
 const ADMIN = { username: 'admin', password: 'first-password' };
 /** The HTTP Basic header that a program sends */
 const basic = (username: string, password: string) =>
@@ -645,9 +646,19 @@ describe('the Secure flag of a login cookie from plain HTTP', () => {
     expect(setCookie).toContain('HttpOnly');
     expect(setCookie).toContain('SameSite=Lax');
     expect(setCookie).toContain('Path=/;');
-    expect(setCookie).toContain(`Max-Age=${SESSION_LIFETIME_SECONDS}`);
+    // The login started SEEN_INTERVAL_MS ago, so the cookie keeps only the time left before the 1-year end
+    expect(setCookie).toContain(`Max-Age=${SESSION_LIFETIME_SECONDS - SEEN_INTERVAL_MS / 1000};`);
     // A shared cache in the proxy must not give this cookie to other browsers
     expect(res.headers.get('Cache-Control')).toBe('no-store');
+  });
+
+  it('gives the cookie only the time left before the 1-year end of the login, not a new year', async () => {
+    now += 10 * DAY_MS + 400;
+    const res = await withSession('/api/machines', 'https');
+
+    // The time left is rounded up to the next full second
+    const secondsLeft = SESSION_LIFETIME_SECONDS - SEEN_INTERVAL_MS / 1000 - 10 * DAY_MS / 1000;
+    expect(res.headers.get('Set-Cookie')).toContain(`Max-Age=${secondsLeft};`);
   });
 
   it('sets the cookie again when a visible page tells over HTTPS that its login is in use', async () => {
