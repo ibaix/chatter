@@ -1,13 +1,14 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type Database from 'better-sqlite3';
 import { createApp } from './app.js';
 import { HardwarePoller } from './polling/poller.js';
 import { noHistory } from './recording/testSupport.js';
 import { webAppRoutes } from './webApp.js';
 import { loggedInAuth } from './auth/testSupport.js';
+import { captureLog } from './logging/testSupport.js';
 
 /** A database that has no machines */
 const emptyDb = {
@@ -18,6 +19,7 @@ describe('webAppRoutes', () => {
   let webDir: string;
   let app: ReturnType<typeof createApp>;
   let loggedIn: RequestInit;
+  let poller: HardwarePoller;
 
   beforeAll(async () => {
     webDir = mkdtempSync(join(tmpdir(), 'chatterbox-web-'));
@@ -26,7 +28,8 @@ describe('webAppRoutes', () => {
     writeFileSync(join(webDir, 'assets', 'app.js'), 'console.log(1)');
     const { auth, accounts, cookie } = await loggedInAuth();
     loggedIn = { headers: { Cookie: cookie } };
-    app = createApp({ poller: new HardwarePoller(emptyDb), auth, accounts, history: noHistory() });
+    poller = new HardwarePoller(emptyDb);
+    app = createApp({ poller, auth, accounts, history: noHistory() });
     app.route('/', webAppRoutes(webDir));
   });
 
@@ -117,6 +120,37 @@ describe('webAppRoutes', () => {
     it('are on a 404 reply', async () => {
       expectSecurityHeaders(await app.request('/api/nothing-here', loggedIn));
       expectSecurityHeaders(await app.request('/assets/index-old.js'));
+    });
+
+    it('are on a reply that refuses a request with no login', async () => {
+      const res = await app.request('/api/machines');
+      expect(res.status).toBe(401);
+      expectSecurityHeaders(res);
+    });
+
+    it('are on a reply that refuses a body that is too large', async () => {
+      const res = await app.request('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'admin', password: 'x'.repeat(2 * 1024 * 1024) }),
+      });
+      expect(res.status).toBe(413);
+      expectSecurityHeaders(res);
+    });
+
+    it('are on the reply of the error handler', async () => {
+      const log = captureLog();
+      const getStatus = vi.spyOn(poller, 'getStatus').mockImplementation(() => {
+        throw new Error('broken');
+      });
+      try {
+        const res = await app.request('/api/status', loggedIn);
+        expect(res.status).toBe(500);
+        expectSecurityHeaders(res);
+      } finally {
+        getStatus.mockRestore();
+        log.restore();
+      }
     });
 
     it('do not stop a file download', async () => {
