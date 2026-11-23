@@ -113,9 +113,9 @@ export class Auth {
     return this.sessions.listOf(user.id);
   }
 
-  /** Save that the browser was used now, from this address */
-  markSeen(session: Session, address: string): void {
-    this.sessions.markSeen(session, address);
+  /** Save that the browser was used now, from this address. True when it saved, false when it skipped a recent use. */
+  markSeen(session: Session, address: string): boolean {
+    return this.sessions.markSeen(session, address);
   }
 
   logOut(session: Session): void {

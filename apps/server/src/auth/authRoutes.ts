@@ -202,14 +202,23 @@ function withoutFailing(message: string, save: () => void): void {
   }
 }
 
-/** Save that the browser of the request was used now, so its session does not stop for no use */
+/**
+ * Save that the browser of the request was used now, so its session does not stop for no use.
+ * A cookie from a login over plain HTTP has no Secure flag. When the browser uses it over HTTPS, it gets the cookie again
+ * with the Secure flag. This occurs only when the use is saved (at most once in SEEN_INTERVAL_MS), so most replies set no cookie.
+ */
 export function markSessionSeen(
   c: Context,
   { auth, proxySettings }: Pick<LoginGuard, 'auth' | 'proxySettings'>,
   session: UserSession,
 ): void {
-  const { address } = originOf(c, proxySettings);
-  withoutFailing('[Sessions] Could not save when a browser was used', () => auth.markSeen(session, address));
+  const origin = originOf(c, proxySettings);
+  let saved = false;
+  withoutFailing('[Sessions] Could not save when a browser was used', () => {
+    saved = auth.markSeen(session, origin.address);
+  });
+  const token = getCookie(c, SESSION_COOKIE);
+  if (saved && origin.isHttps && token !== undefined) setSessionCookie(c, origin, token);
 }
 
 /**
