@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import type { UnofficialStatusCode } from 'hono/utils/http-status';
 import { FILE_LIST_CUT_SHORT_HEADER, PROGRAM_UPLOAD_LIMIT_BYTES } from '@local-chatter/shared';
 import type { HardwarePoller } from '../polling/poller.js';
 import { recordUpload } from '../storage/database.js';
@@ -13,6 +14,8 @@ import { createLogger } from '../logging/logger.js';
 import { batchUploadForm, filePathQuery, fileTreeQuery, readTargetNames, uploadForm } from './schemas.js';
 
 const log = createLogger('machine-files');
+/** The status of a reply that nobody reads, because the browser closed the connection first (as nginx logs it) */
+const CLIENT_CLOSED_REQUEST = 499 as UnofficialStatusCode;
 
 const ROOT_FOLDER = '.';
 const DEFAULT_TREE_DEPTH = '2';
@@ -121,7 +124,16 @@ export function machineFileRoutes(poller: HardwarePoller) {
       const connector = poller.getConnector(c.req.param('id'));
       if (!connector) return notFound(c);
 
-      const stream = await downloadAsStream(connector, path);
+      const browserLeft = c.req.raw.signal;
+      let stream: ReadableStream<Uint8Array>;
+      try {
+        stream = await downloadAsStream(connector, path, browserLeft);
+      } catch (error) {
+        if (!browserLeft.aborted) throw error;
+        // The browser left before the first bytes, and the download stopped. Nobody reads this reply.
+        log.debug('The program download stopped because the browser left before the first bytes', { path: c.req.path });
+        return c.body(null, CLIENT_CLOSED_REQUEST);
+      }
       return c.body(streamWithoutErrorText(c, stream, 'The program download'), 200, {
         'Content-Disposition': attachmentHeader(fileNameOf(path)),
         'Content-Type': 'application/octet-stream',

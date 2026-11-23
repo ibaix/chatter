@@ -17,8 +17,15 @@ const STREAM_QUEUE_BYTES = 64 * 1024;
  *
  * A slow reader slows the download: when the queue of the stream is full, the write waits for the next
  * pull of the reader. Then the output is full too, and the download stops to read from the machine.
+ *
+ * `requestSignal` (the signal of the HTTP request) stops the download when the browser leaves. The browser can leave
+ * before the first bytes, while the caller waits for this promise and has no stream to cancel yet.
  */
-export async function downloadAsStream(connector: BaseMachineConnector, filePath: string): Promise<ReadableStream<Uint8Array>> {
+export async function downloadAsStream(
+  connector: BaseMachineConnector,
+  filePath: string,
+  requestSignal?: AbortSignal,
+): Promise<ReadableStream<Uint8Array>> {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
   // When the reader stops early, the download on the machine stops too. A chunk that is on its way is dropped. After the
   // stream ends, a late write is dropped too.
@@ -62,7 +69,12 @@ export async function downloadAsStream(connector: BaseMachineConnector, filePath
     },
   });
 
-  const download = connector.downloadFile(filePath, output, stopDownload.signal);
+  // One stop for the reader and for the request, so the machine download has one signal
+  const stopOnRequest = () => stopDownload.abort(requestSignal?.reason);
+  if (requestSignal?.aborted) stopOnRequest();
+  else requestSignal?.addEventListener('abort', stopOnRequest, { once: true });
+  const download = connector.downloadFile(filePath, output, stopDownload.signal)
+    .finally(() => requestSignal?.removeEventListener('abort', stopOnRequest));
   try {
     await Promise.race([started, download]);
   } catch (error) {
