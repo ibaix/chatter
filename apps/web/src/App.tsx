@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
 import { api } from './api/client';
+import { saveMachineUpdate } from './api/machines';
 import { AppShell } from './components/layout/AppShell';
 import { useLoginInUse } from './hooks/useLoginInUse';
 import { useMachineEvents } from './hooks/useMachineEvents';
@@ -38,11 +39,7 @@ function App() {
   /** True when the server saved the update. On an error, it shows the error and returns false. */
   const updateMachine = async (id: string, updates: MachineUpdate): Promise<boolean> => {
     try {
-      const response = await api.machine[':id'].$put({ param: { id }, json: updates });
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error('error' in data ? data.error : 'Could not save the machine settings');
-      }
+      await saveMachineUpdate(id, updates);
       return true;
     } catch (err) {
       setError(messageOf(err));

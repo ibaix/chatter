@@ -52,6 +52,7 @@ Set the FTP login with `ftpUser` and `ftpPassword`, when you add or update a mac
 Use the same username and password that are set on the machine control.
 - The server never sends the password back. Machine replies and live events give only `hasFtpPassword` (true or false).
 - An update with no `ftpPassword` keeps the saved password. An empty `ftpPassword` (`""`) removes it.
+- Exception: when a password is saved and the update changes `host` or `ftpPort`, send `ftpPassword` again. To remove the password, send `""`. Else the reply is `400` and the server saves nothing. Chatter does not send a saved password to a new address.
 - An empty `ftpUser` means `anonymous`.
 
 ### OPC UA login (Siemens)
@@ -59,6 +60,7 @@ Use the same username and password that are set on the machine control.
 A Siemens machine also takes `opcuaUser`, `opcuaPassword`, and `opcuaSecurity` (`none` or `signAndEncrypt`, default `none`).
 - An empty `opcuaUser` means an anonymous login.
 - The password works like the FTP password: the server never sends it back (replies give only `hasOpcuaPassword`), an update with no `opcuaPassword` keeps it, and `""` removes it.
+- When an OPC UA password is saved and the update changes `host` or `opcuaPort`, send `opcuaPassword` again, or `""` to remove it. Else the reply is `400` and the server saves nothing. A new `host` needs each saved password: the FTP password and the OPC UA password.
 - `macros` are R parameters: `{ "location": 5 }` reads `R5`.
 
 See [Siemens machines](../guide/siemens.md).

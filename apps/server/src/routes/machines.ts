@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { HardwarePoller } from '../polling/poller.js';
 import { MTConnectConnector } from '../machines/mtconnect/MTConnectConnector.js';
 import { findMachineWithSameAddress, getRequestedDataPort } from '../polling/machinePorts.js';
+import { PasswordNeededError } from '../polling/machineSettings.js';
 import { requirePermission } from '../auth/authRoutes.js';
 import { checkedJson } from './checks.js';
 import { notFound } from './responses.js';
@@ -37,8 +38,13 @@ export function machineRoutes(poller: HardwarePoller) {
     })
 
     .put('/machine/:id', canManageMachines, checkedJson(updateMachineSchema), async c => {
-      const updated = await poller.updateMachine(c.req.param('id'), c.req.valid('json'));
-      return updated ? c.json(updated) : notFound(c);
+      try {
+        const updated = await poller.updateMachine(c.req.param('id'), c.req.valid('json'));
+        return updated ? c.json(updated) : notFound(c);
+      } catch (error) {
+        if (error instanceof PasswordNeededError) return c.json({ error: error.message }, 400);
+        throw error;
+      }
     })
 
     // Read the tool table now. The read changes nothing on the machine, but it is an action: a Viewer only looks.

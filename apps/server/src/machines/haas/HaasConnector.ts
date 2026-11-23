@@ -598,21 +598,4 @@ export class HaasConnector extends BaseMachineConnector {
       spindleLoad: this.data.spindleLoad,
     }, this.macroValues(this.macros, this.data));
   }
-
-  /** Change the connection settings that are set in `config`, and disconnect so the next poll uses them */
-  updateConfig(config: {
-    host?: string;
-    dataPort?: number;
-    queryPort?: number;
-    ftpPort?: number;
-    ftpUser?: string;
-    ftpPassword?: string;
-  }): void {
-    if (config.host) this.host = config.host;
-    if (config.dataPort) this.dataPort = config.dataPort;
-    if (config.queryPort) this.queryPort = config.queryPort;
-
-    this.updateFTPConfig(config);
-    this.disconnect();
-  }
 }

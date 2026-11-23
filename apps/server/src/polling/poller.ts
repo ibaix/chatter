@@ -20,6 +20,7 @@ import {
   applyHaasUpdate,
   applyMTConnectUpdate,
   applySiemensUpdate,
+  checkSavedPasswordsStay,
   createMTConnectConnector,
   fieldsOfAddRequest,
   newBrotherMachine,
@@ -393,12 +394,16 @@ export class HardwarePoller extends EventEmitter {
     });
   }
 
-  /** Apply the change when the machine has this type. Null when it does not. */
+  /**
+   * Apply the change when the machine has this type. Null when it does not.
+   * Throws PasswordNeededError, and saves nothing, when the change moves a saved password to a new address.
+   */
   private updateStoredMachine<Type extends StoredMachineType, Connector extends BaseMachineConnector>(
     { id, type, connectorClass, updates, applyToConnector }: StoredMachineUpdate<Type, Connector>,
   ): Connector | null {
     const connector = this.registry.get(id);
     if (!(connector instanceof connectorClass)) return null;
+    checkSavedPasswordsStay(connector, updates);
     if (this.repository.update(type, id, updates)) {
       applyToConnector(connector, updates);
       this.emitStatusUpdate();
