@@ -198,13 +198,13 @@ interface DownloadSink {
 }
 
 /** The limits of one download (`maxBytes`, `timeLimitMs`) and of one upload. Tests set small limits. */
-export interface DownloadLimits {
+export interface TransferLimits {
   maxBytes: number;
   timeLimitMs: number;
   uploadTimeLimitMs: number;
 }
 
-const DEFAULT_DOWNLOAD_LIMITS: DownloadLimits = {
+const DEFAULT_TRANSFER_LIMITS: TransferLimits = {
   maxBytes: MAX_DOWNLOAD_BYTES, timeLimitMs: DOWNLOAD_TIME_LIMIT_MS, uploadTimeLimitMs: UPLOAD_TIME_LIMIT_MS,
 };
 
@@ -610,7 +610,7 @@ export class FTPClient {
   private user: string;
   private password: string;
   private readonly timeoutMs: number;
-  private readonly downloadLimits: DownloadLimits;
+  private readonly transferLimits: TransferLimits;
   /** The tree walks that wait or run now, by depth and path. A request for the same tree waits for the same walk. */
   private readonly treeWalks = new Map<string, SharedTreeWalk>();
   /** One task at a time: each task opens its control connection only in its turn, and closes it before the next */
@@ -618,13 +618,13 @@ export class FTPClient {
 
   constructor({
     host, port = DEFAULT_FTP_PORT, user = DEFAULT_FTP_USER, password = '', timeoutMs = DEFAULT_FTP_TIMEOUT_MS
-  }: FTPConfig, downloadLimits: Partial<DownloadLimits> = {}) {
+  }: FTPConfig, transferLimits: Partial<TransferLimits> = {}) {
     this.host = host;
     this.port = port;
     this.user = user;
     this.password = password;
     this.timeoutMs = timeoutMs;
-    this.downloadLimits = { ...DEFAULT_DOWNLOAD_LIMITS, ...downloadLimits };
+    this.transferLimits = { ...DEFAULT_TRANSFER_LIMITS, ...transferLimits };
   }
 
   /** Change connection settings (for example after a machine config change) */
@@ -758,7 +758,7 @@ export class FTPClient {
    */
   async downloadFile(filePath: string, writableStream: Writable, signal?: AbortSignal): Promise<void> {
     const remotePath = toRelativeRemotePath(filePath);
-    const { maxBytes, timeLimitMs } = this.downloadLimits;
+    const { maxBytes, timeLimitMs } = this.transferLimits;
     // One stop for the time limit and for the signal of the caller: it closes the client and the raw data socket
     const stop = new TaskStop(signal);
     const onTurn = () => stop.startTimeLimit(timeLimitMs, () => downloadTooSlowError(timeLimitMs));
@@ -900,7 +900,7 @@ export class FTPClient {
    * The signal of the caller stops only the wait for the turn. After the turn, only the time limit stops the upload.
    */
   private withUploadConnection<T>(stop: TaskStop, paths: string, work: (client: ftp.Client) => Promise<T>): Promise<T> {
-    const { uploadTimeLimitMs } = this.downloadLimits;
+    const { uploadTimeLimitMs } = this.transferLimits;
     const onTurn = () => {
       stop.startTimeLimit(uploadTimeLimitMs, () => uploadTooSlowError(uploadTimeLimitMs));
       stop.ignoreCallerFromNow(() => log.warn(
@@ -919,6 +919,10 @@ export class FTPClient {
     useMachineHostForTransfers(client);
     client.ftp.verbose = verbose;
     const close = () => client.close();
+    // No signal.throwIfAborted() is necessary here. The queue does not start a task whose signal aborted, and it removes
+    // its abort listener and starts the task in one step, so the signal did not abort before this line. Do not rely on a
+    // close before the login to stop the task: basic-ftp's connect() resets the client, so that client connects again.
+    // A close during the login or after it stops the task.
     onAbort(signal, close);
     try {
       await this.login(client);
@@ -1096,8 +1100,8 @@ export class FTPClient {
 
       dataSocket.on('data', (chunk: Buffer) => {
         if (isSettled) return;
-        if (sink.bytesWritten + chunk.length > this.downloadLimits.maxBytes) {
-          settle(downloadTooLargeError(this.downloadLimits.maxBytes));
+        if (sink.bytesWritten + chunk.length > this.transferLimits.maxBytes) {
+          settle(downloadTooLargeError(this.transferLimits.maxBytes));
           return;
         }
         startIdleTimer();

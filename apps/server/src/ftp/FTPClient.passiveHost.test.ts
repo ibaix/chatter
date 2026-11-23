@@ -3,7 +3,7 @@ import net from 'net';
 import { PassThrough, Writable } from 'stream';
 import * as ftp from 'basic-ftp';
 import {
-  FTPClient, MAX_FOLDER_LIST_BYTES, REPLY_AFTER_DATA_WAIT_MS, SIZE_REPLY_WAIT_MS, TREE_WALK_TIME_LIMIT_MS, type DownloadLimits
+  FTPClient, MAX_FOLDER_LIST_BYTES, REPLY_AFTER_DATA_WAIT_MS, SIZE_REPLY_WAIT_MS, TREE_WALK_TIME_LIMIT_MS, type TransferLimits
 } from './FTPClient.js';
 import { captureLog } from '../logging/testSupport.js';
 import type { FTPTreeNode } from '../types/index.js';
@@ -731,7 +731,7 @@ async function until(condition: () => boolean): Promise<void> {
 
 /** Start a download of O1000 from a new fake machine. `outcome` is 'success' or the error message. */
 async function startDownload({ timeoutMs, limits, destination = new PassThrough(), signal, ...options }: FakeMachineOptions & {
-  timeoutMs: number; limits?: Partial<DownloadLimits>; destination?: Writable; signal?: AbortSignal;
+  timeoutMs: number; limits?: Partial<TransferLimits>; destination?: Writable; signal?: AbortSignal;
 }) {
   const machine = await startFakeMachine({ controlHost: NAT_CONTROL_HOST, pasvReplyHost: NAT_PASV_REPLY_HOST, ...options });
   const ftpClient = new FTPClient({ host: NAT_CONTROL_HOST, port: machine.controlPort, timeoutMs }, limits);
