@@ -187,7 +187,7 @@ function diagnosticRoutes(
 const BUNDLE_MESSAGE_DAYS = 7;
 const DAY_MS = 24 * 60 * 60_000;
 
-/** VictoriaMetrics in development. docker-compose.yml gives the address on the compose network. */
+/** VictoriaMetrics in development. docker-compose.yml gives the address on the internal network "history". */
 const DEFAULT_VICTORIA_METRICS_URL = process.env.VICTORIA_METRICS_URL || 'http://localhost:8428';
 
 /** The folder for the files of a history backup or restore, in the data volume. Chatter deletes it at each start. */
@@ -195,7 +195,7 @@ export function historyBackupFolder(): string {
   return path.join(dataFolder(), 'history-backup');
 }
 
-/** VictoriaMetrics and vmalert in development. docker-compose.yml gives the addresses on the compose network. */
+/** VictoriaMetrics and vmalert in development. docker-compose.yml gives the addresses on the internal network "history". */
 const DEFAULT_HISTORY_HEALTH_URLS = {
   victoriaMetrics: `${DEFAULT_VICTORIA_METRICS_URL}/health`,
   vmalert: `${process.env.VMALERT_URL || 'http://localhost:8880'}/health`,

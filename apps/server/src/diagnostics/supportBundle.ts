@@ -28,7 +28,7 @@ export interface BundleSources {
   updates: UpdateService;
   channels: () => NotificationChannel[];
   messages: () => NotificationMessage[];
-  /** The health addresses of VictoriaMetrics and vmalert on the compose network */
+  /** The health addresses of VictoriaMetrics and vmalert on the internal network "history" */
   historyHealthUrls: Record<string, string>;
   /** The folder of the database, for the free space */
   dataFolder: () => string;

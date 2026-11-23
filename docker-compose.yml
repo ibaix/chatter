@@ -30,7 +30,7 @@ services:
       # Where ChatterBox saves and reads the machine history (numbers such as spindle speed).
       VICTORIA_METRICS_URL: "http://victoriametrics:8428"
       # vmalert sends its alerts to port 3002. That port has no login, so it is not in "ports:" above.
-      # Only the containers on the compose networks can reach it.
+      # Only the containers on the networks "default" and "history" can reach it.
       ALERT_HOST: "0.0.0.0"
       # ChatterBox writes the alert rules of each machine (the Alert rules tab) to this folder, and vmalert reads them.
       ALERT_RULES_DIR: "/app/alert-rules"

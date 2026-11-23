@@ -12,7 +12,7 @@ export interface RuleReloader {
 }
 
 /**
- * vmalert has no login, so only Chatter (on the same Docker network) must reach it.
+ * vmalert has no login, so only Chatter (on the internal Docker network "history") must reach it.
  * When it cannot be reached, vmalert still reads the files again within 30 seconds (-configCheckInterval).
  */
 export class VmalertClient implements RuleReloader {
