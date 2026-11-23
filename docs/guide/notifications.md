@@ -98,6 +98,8 @@ The message list shows each message that Chatter did not send alone as **Grouped
 After you save, Chatter never shows a secret again, such as the Twilio auth token, the Apprise password, the Discord webhook address, the Telegram bot token, or the ntfy access token. To keep the saved secret, leave its box empty.
 To change it, type the new one. To stop sending an optional secret, for example a webhook secret or an ntfy access token, select **Delete the saved secret**.
 
+When you change the address of a channel, type the saved secret again. The address is the **Web address** of a webhook, the **Server** of ntfy, or the **Apprise address**. Chatter does not send a saved secret to a new address. If the secret box is empty, Chatter does not save the channel and does not send the test. It shows "Type the Secret again" (or the name of the other secret). To use no secret at the new address, select **Delete the saved secret**. The same address with spaces around it is not a new address.
+
 ## Text messages with Twilio
 
 [Twilio](https://www.twilio.com) is a service that sends text messages. You need your own Twilio account. Twilio asks a small price for each message.

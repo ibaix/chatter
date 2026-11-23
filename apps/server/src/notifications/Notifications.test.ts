@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { alertReceiverApp } from '../alerts/alertReceiverApp.js';
 import { type Alert, AlertStore } from '../alerts/AlertStore.js';
 import { SettingsTable } from '../storage/settingsTable.js';
-import { Notifications } from './Notifications.js';
+import { Notifications, SecretNeededError } from './Notifications.js';
 import { SEND_LIMIT } from './Outbox.js';
 
 const NOW = Date.UTC(2026, 10, 13, 15, 2);
@@ -23,14 +23,17 @@ describe('Notifications', () => {
   let db: Database.Database;
   let alerts: AlertStore;
   let notifications: Notifications;
-  let requests: { url: string; body: { text: string } }[];
+  let requests: { url: string; body: { text: string }; authorization?: string }[];
 
   beforeEach(() => {
     db = new Database(':memory:');
     alerts = new AlertStore(db, NOW);
     requests = [];
     const fetch = async (url: string | URL | Request, init?: RequestInit) => {
-      requests.push({ url: String(url), body: JSON.parse(String(init?.body)) as { text: string } });
+      const authorization = new Headers(init?.headers).get('authorization');
+      requests.push({
+        url: String(url), body: JSON.parse(String(init?.body)) as { text: string }, ...(authorization === null ? {} : { authorization }),
+      });
       return new Response(null, { status: 200 });
     };
     notifications = new Notifications({
@@ -57,6 +60,19 @@ describe('Notifications', () => {
       body: expect.objectContaining({ text: 'CRITICAL - Haas VF-2: In alarm. Started 9:02 AM.' }),
     }]);
     expect(notifications.outbox.list({})[0]).toMatchObject({ status: 'sent' });
+  });
+
+  it('sends an alert to the new address with the new secret after an edit, and never sends the old secret', async () => {
+    const id = addChannel({ ...slack, values: { ...slack.values, secret: 'old-secret' } });
+    const edited = notifications.channels.update(id, { ...slack, values: { url: 'https://hooks.example.net/in', secret: 'new-secret' } });
+    expect(edited).toMatchObject({ ok: true });
+    alerts.save([alert], NOW);
+
+    notifications.findAlertChanges();
+    await notifications.sendDue();
+
+    expect(requests).toEqual([expect.objectContaining({ url: 'https://hooks.example.net/in', authorization: 'Bearer new-secret' })]);
+    expect(JSON.stringify(requests)).not.toContain('old-secret');
   });
 
   describe('sendTest', () => {
@@ -87,6 +103,15 @@ describe('Notifications', () => {
         error: 'ntfy.sh allows 250 messages each day for each network (IP address). The limit is used. '
           + 'It resets in 60 minutes. Use an access token or your own ntfy server.',
       });
+    });
+
+    it('throws SecretNeededError and sends nothing when the form moves a saved secret to a new address', async () => {
+      const id = addChannel({ ...slack, values: { ...slack.values, secret: 'old-secret' } });
+      const moved: ChannelInput = { ...slack, values: { url: 'https://hooks.example.net/in', secret: '' } };
+
+      await expect(notifications.sendTest(moved, id)).rejects.toBeInstanceOf(SecretNeededError);
+      expect(requests).toEqual([]);
+      expect(notifications.outbox.list({ channelId: id })).toEqual([]);
     });
 
     it('gives the first problem of the form and sends nothing', async () => {

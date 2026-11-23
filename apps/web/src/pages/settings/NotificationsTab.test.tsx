@@ -144,6 +144,39 @@ describe('NotificationsTab', () => {
     expect(screen.getByLabelText('Account SID')).toHaveValue('AC1');
   });
 
+  describe('when the server refuses a new address with the saved secret', () => {
+    const REFUSAL = 'Type the Secret again. You changed the Web address. Chatter does not send a saved secret to a new address. '
+      + 'To use no secret, select Delete the saved secret.';
+
+    async function editSlackAddress(): Promise<HTMLElement> {
+      await renderTab();
+      fireEvent.click(screen.getByRole('button', { name: 'Edit Slack #shop-floor' }));
+      const panel = screen.getByRole('dialog', { name: 'Edit Slack #shop-floor' });
+      fireEvent.change(within(panel).getByLabelText('Web address'), { target: { value: 'https://hooks.example.net/in' } });
+      return panel;
+    }
+
+    it('shows the text of the server in the form after Save, and keeps the form open', async () => {
+      vi.mocked(updateChannel).mockRejectedValue(new Error(REFUSAL));
+      const panel = await editSlackAddress();
+
+      fireEvent.click(within(panel).getByRole('button', { name: 'Save channel' }));
+
+      expect(await within(panel).findByText(REFUSAL)).toBeInTheDocument();
+      expect(screen.getByRole('dialog', { name: 'Edit Slack #shop-floor' })).toBeInTheDocument();
+    });
+
+    it('shows the text of the server in the form after Send test', async () => {
+      vi.mocked(sendTestMessage).mockRejectedValue(new Error(REFUSAL));
+      const panel = await editSlackAddress();
+
+      fireEvent.click(within(panel).getByRole('button', { name: 'Send test' }));
+
+      expect(await within(panel).findByText(REFUSAL)).toBeInTheDocument();
+      expect(sendTestMessage).toHaveBeenCalledWith(expect.objectContaining({ values: { url: 'https://hooks.example.net/in' } }), 'slack');
+    });
+  });
+
   it('deletes a channel after the admin confirms, and closes the panel', async () => {
     vi.mocked(removeChannel).mockResolvedValue();
     await renderTab();

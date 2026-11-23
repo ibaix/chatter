@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import type { AlertSeverity, ChannelInput, ChannelValues, NotificationChannel } from '@local-chatter/shared';
+import type {
+  AlertSeverity, ChannelField, ChannelFieldValue, ChannelInput, ChannelValues, NotificationChannel,
+} from '@local-chatter/shared';
 import type Database from 'better-sqlite3';
 import type { MachineRemovalListener } from '../polling/poller.js';
 import type { ChannelType } from './channels/ChannelType.js';
@@ -10,7 +12,9 @@ export const MAX_CHANNEL_NAME_LENGTH = 100;
 export type ChannelSaveResult = { ok: true; channel: NotificationChannel } | { ok: false; error: string };
 
 /** A form that passed the checks. `values` has the saved secrets in place of the empty secrets. */
-export type InputCheck = PassedInputCheck | { ok: false; error: string };
+export type InputCheck = PassedInputCheck | FailedInputCheck;
+/** `secretNeeded`: the form moves a saved secret to a new address. "Send test" then refuses the request, as a save does. */
+interface FailedInputCheck { ok: false; error: string; secretNeeded?: true }
 export interface PassedInputCheck { ok: true; type: ChannelType; values: ChannelValues }
 
 /** What the sender needs: the channel, its type, and all its values with the secrets */
@@ -129,17 +133,20 @@ export class ChannelStore implements MachineRemovalListener {
 
   /**
    * Checks a form, for a save or for "Send test". With `savedId`, an empty secret gets the saved secret
-   * of that channel, if the type did not change.
+   * of that channel, if the type did not change and the form does not change an address (see problemWithMovedSecrets).
    */
   checkInput(input: ChannelInput, savedId?: string): InputCheck {
     const type = this.findType(input.type);
     if (!type) return { ok: false, error: `Chatter does not know the channel type "${input.type}"` };
     const nameProblem = problemWithName(input.name);
     if (nameProblem) return { ok: false, error: nameProblem };
-    const savedSecrets = withoutKeys(this.savedSecretsOfType(savedId, type.id), input.clearSecrets ?? []);
+    const saved = this.savedRowOfType(savedId, type.id);
+    const savedSecrets = withoutKeys(saved ? parseValues(saved.secrets) : {}, input.clearSecrets ?? []);
     const values = valuesOfType(type, input.values, savedSecrets);
     const check = type.checkSettings(values);
-    return check.ok ? { ok: true, type, values } : check;
+    if (!check.ok) return check;
+    const secretProblem = saved && problemWithMovedSecrets(type, input.values, parseValues(saved.settings), savedSecrets);
+    return secretProblem ? { ok: false, error: secretProblem, secretNeeded: true } : { ok: true, type, values };
   }
 
   forSending(id: string): ChannelForSending | null {
@@ -160,9 +167,10 @@ export class ChannelStore implements MachineRemovalListener {
     return this.db.prepare('SELECT * FROM notification_channels WHERE id = ?').get(id) as ChannelRow | undefined;
   }
 
-  private savedSecretsOfType(savedId: string | undefined, typeId: string): ChannelValues {
+  /** A channel of a different type gives none of its saved values to the form */
+  private savedRowOfType(savedId: string | undefined, typeId: string): ChannelRow | undefined {
     const row = savedId === undefined ? undefined : this.row(savedId);
-    return row?.type === typeId ? parseValues(row.secrets) : {};
+    return row?.type === typeId ? row : undefined;
   }
 
   private toChannel(row: ChannelRow): NotificationChannel {
@@ -196,11 +204,41 @@ function valuesOfType(type: ChannelType, values: ChannelValues, savedSecrets: Ch
   const kept: ChannelValues = {};
   for (const field of type.fields) {
     const value = values[field.key];
-    const isEmptySecret = field.kind === 'secret' && (value === undefined || (typeof value === 'string' && value.trim() === ''));
-    if (isEmptySecret && savedSecrets[field.key] !== undefined) kept[field.key] = savedSecrets[field.key];
-    else if (!isEmptySecret && value !== undefined) kept[field.key] = value;
+    const isEmpty = isEmptySecret(field, value);
+    if (isEmpty && savedSecrets[field.key] !== undefined) kept[field.key] = savedSecrets[field.key];
+    else if (!isEmpty && value !== undefined) kept[field.key] = value;
   }
   return kept;
+}
+
+function isEmptySecret(field: ChannelField, value: ChannelFieldValue | undefined): boolean {
+  return field.kind === 'secret' && (value === undefined || (typeof value === 'string' && value.trim() === ''));
+}
+
+/**
+ * A saved secret goes only to the address where the admin saved it, so a typing error cannot send it to a different server.
+ * Each `url` field of a type tells where the secrets go. When the form changes one of them, it must have each saved secret
+ * again, or delete it. The same address with spaces around it is no change. Gives the error text, or null.
+ */
+function problemWithMovedSecrets(
+  type: ChannelType, values: ChannelValues, savedSettings: ChannelValues, savedSecrets: ChannelValues,
+): string | null {
+  const changed = type.fields.filter(field => field.kind === 'url' && addressOf(values[field.key]) !== addressOf(savedSettings[field.key]));
+  const kept = type.fields.filter(field => isEmptySecret(field, values[field.key]) && savedSecrets[field.key] !== undefined);
+  if (changed.length === 0 || kept.length === 0) return null;
+  const problem = `Type the ${labelsOf(kept)} again. You changed the ${labelsOf(changed)}. `
+    + 'Chatter does not send a saved secret to a new address.';
+  // The form can delete only a secret that is not necessary
+  return kept.some(field => !field.required) ? `${problem} To use no secret, select Delete the saved secret.` : problem;
+}
+
+/** An address that is not there, or empty, is the default address of the type, for example ntfy.sh */
+function addressOf(value: ChannelFieldValue | undefined): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function labelsOf(fields: ChannelField[]): string {
+  return fields.map(field => field.label.replace(/ \(optional\)$/, '')).join(' and the ');
 }
 
 function withoutKeys(values: ChannelValues, keys: string[]): ChannelValues {

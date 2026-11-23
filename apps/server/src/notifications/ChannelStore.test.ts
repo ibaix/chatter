@@ -250,6 +250,125 @@ describe('ChannelStore', () => {
     });
   });
 
+  // F-10: a saved secret goes only to the address where the admin saved it
+  describe('a saved secret and a new address', () => {
+    const MOVED = 'You changed the Web address. Chatter does not send a saved secret to a new address.';
+    const withSecret = { ...webhookInput, values: { ...webhookInput.values, secret: 'old-secret' } };
+    const newAddress = { url: 'https://hooks.example.net/in', secret: '' };
+
+    it('refuses a new web address with no secret, for a save and for "Send test"', () => {
+      const id = addedId(withSecret);
+      const error = `Type the Secret again. ${MOVED} To use no secret, select Delete the saved secret.`;
+
+      expect(store.update(id, { ...webhookInput, values: newAddress })).toEqual({ ok: false, error, secretNeeded: true });
+      expect(store.checkInput({ ...webhookInput, values: newAddress }, id)).toEqual({ ok: false, error, secretNeeded: true });
+      expect(store.forSending(id)?.values).toEqual(withSecret.values);
+    });
+
+    it('refuses a new web address when the form leaves the secret out', () => {
+      const id = addedId(withSecret);
+
+      expect(store.update(id, { ...webhookInput, values: { url: newAddress.url } })).toMatchObject({ ok: false, secretNeeded: true });
+    });
+
+    it('keeps the secret when the form has the same address with spaces around it', () => {
+      const id = addedId(withSecret);
+
+      expect(store.update(id, { ...webhookInput, values: { url: ` ${webhookInput.values.url as string} `, secret: '' } }))
+        .toMatchObject({ ok: true });
+      expect(store.forSending(id)?.values.secret).toBe('old-secret');
+    });
+
+    it('keeps the token of ntfy when the form leaves out an empty server, because both send to ntfy.sh', () => {
+      const ntfy: ChannelInput = { ...webhookInput, type: 'ntfy', values: { topic: 'shop-alerts', url: '', token: 'tk_saved' } };
+      const id = addedId(ntfy);
+
+      expect(store.update(id, { ...ntfy, values: { topic: 'shop-alerts', token: '' } })).toMatchObject({ ok: true });
+      expect(store.forSending(id)?.values.token).toBe('tk_saved');
+    });
+
+    it('refuses to send the ntfy token of a custom server to ntfy.sh, when the form empties the server or leaves it out', () => {
+      const ntfy: ChannelInput = { ...webhookInput, type: 'ntfy', values: { topic: 'shop-alerts', url: 'https://ntfy.shop.lan', token: 'tk_saved' } };
+      const id = addedId(ntfy);
+
+      expect(store.update(id, { ...ntfy, values: { topic: 'shop-alerts', url: '', token: '' } })).toMatchObject({ ok: false, secretNeeded: true });
+      expect(store.update(id, { ...ntfy, values: { topic: 'shop-alerts', token: '' } })).toMatchObject({ ok: false, secretNeeded: true });
+      expect(store.forSending(id)?.values).toMatchObject({ url: 'https://ntfy.shop.lan', token: 'tk_saved' });
+    });
+
+    it('keeps the Twilio token when the account changes, because the token goes only to the Twilio API', () => {
+      const id = addedId(twilioInput);
+      const otherAccount = `AC${'fedcba9876543210'.repeat(2)}`;
+
+      expect(store.update(id, { ...twilioInput, values: { ...twilioInput.values, accountSid: otherAccount, authToken: '' } }))
+        .toMatchObject({ ok: true });
+      expect(store.forSending(id)?.values.authToken).toBe('token-one');
+    });
+
+    describe('with a type that has a necessary secret and two addresses', () => {
+      const relay = defineChannelType({
+        id: 'relay',
+        name: 'Relay',
+        fields: [
+          { key: 'url', label: 'Server', kind: 'url', required: true },
+          { key: 'backup', label: 'Backup server (optional)', kind: 'url', required: false },
+          { key: 'token', label: 'Token', kind: 'secret', required: true },
+          { key: 'key', label: 'Key (optional)', kind: 'secret', required: false },
+        ],
+        settings: z.object({ url: z.string(), backup: z.string().optional(), token: z.string(), key: z.string().optional() }),
+        send: async () => ({ ok: true, detail: 'sent' }),
+      });
+      const relayInput = (values: Record<string, string>): ChannelInput => ({ ...webhookInput, type: 'relay', values });
+      const saved = { url: 'https://relay.lan', backup: 'https://backup.lan', token: 'saved-token', key: 'saved-key' };
+      let typed: ChannelStore;
+      let id: string;
+
+      beforeEach(() => {
+        typed = new ChannelStore(db, type => (type === 'relay' ? relay : undefined));
+        const result = typed.add(relayInput(saved), NOW);
+        if (!result.ok) throw new Error(result.error);
+        id = result.channel.id;
+      });
+
+      it('names each secret that the form must have again, and tells to delete it when one of them is optional', () => {
+        expect(typed.update(id, relayInput({ ...saved, backup: 'https://other.lan', token: '', key: '' }))).toEqual({
+          ok: false,
+          secretNeeded: true,
+          error: 'Type the Token and the Key again. You changed the Backup server. Chatter does not send a saved secret to a new address. '
+            + 'To use no secret, select Delete the saved secret.',
+        });
+      });
+
+      it('does not tell to delete a secret when each secret that the form must have again is necessary', () => {
+        expect(typed.update(id, relayInput({ ...saved, url: 'https://other.lan', token: '' }))).toMatchObject({
+          error: 'Type the Token again. You changed the Server. Chatter does not send a saved secret to a new address.',
+        });
+      });
+
+      it('names only the secret that the form does not have', () => {
+        expect(typed.update(id, relayInput({ ...saved, url: 'https://other.lan', key: '' }))).toMatchObject({
+          error: 'Type the Key again. You changed the Server. Chatter does not send a saved secret to a new address. '
+            + 'To use no secret, select Delete the saved secret.',
+        });
+      });
+
+      it('names each address that changed', () => {
+        const result = typed.update(id, relayInput({ url: 'https://a.lan', backup: 'https://b.lan', token: 'new-token', key: '' }));
+
+        expect(result).toMatchObject({ error: expect.stringContaining('You changed the Server and the Backup server.') });
+      });
+
+      it('saves the new addresses when the form has each saved secret again, or deletes it', () => {
+        const result = typed.update(id, {
+          ...relayInput({ url: 'https://a.lan', backup: '', token: 'new-token', key: '' }), clearSecrets: ['key'],
+        });
+
+        expect(result).toMatchObject({ ok: true });
+        expect(typed.forSending(id)?.values).toEqual({ url: 'https://a.lan', backup: '', token: 'new-token' });
+      });
+    });
+  });
+
   it('removes a channel', () => {
     const id = addedId(twilioInput);
 
