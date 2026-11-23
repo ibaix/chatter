@@ -330,11 +330,18 @@ describe('ChannelStore', () => {
         id = result.channel.id;
       });
 
-      it('names each secret that the form must have again, and does not tell to delete a necessary secret', () => {
+      it('names each secret that the form must have again, and tells to delete it when one of them is optional', () => {
         expect(typed.update(id, relayInput({ ...saved, backup: 'https://other.lan', token: '', key: '' }))).toEqual({
           ok: false,
           secretNeeded: true,
-          error: 'Type the Token and the Key again. You changed the Backup server. Chatter does not send a saved secret to a new address.',
+          error: 'Type the Token and the Key again. You changed the Backup server. Chatter does not send a saved secret to a new address. '
+            + 'To use no secret, select Delete the saved secret.',
+        });
+      });
+
+      it('does not tell to delete a secret when each secret that the form must have again is necessary', () => {
+        expect(typed.update(id, relayInput({ ...saved, url: 'https://other.lan', token: '' }))).toMatchObject({
+          error: 'Type the Token again. You changed the Server. Chatter does not send a saved secret to a new address.',
         });
       });
 
