@@ -90,9 +90,9 @@ function knownDevice(c: Context, auth: Auth, username: string): string | undefin
   return auth.knownDeviceOf(getCookie(c, DEVICE_COOKIE), username) ?? undefined;
 }
 
-/** Remember this browser as a known device of the user. It keeps the device ID that it has for this user. */
+/** Remember this browser as a known device of the user, with a new device ID */
 function setDeviceCookie(c: Context, auth: Auth, origin: RequestOrigin, username: string): void {
-  const value = auth.deviceCookieFor(username, knownDevice(c, auth, username));
+  const value = auth.deviceCookieFor(username);
   if (value === null) return;
   setCookie(c, DEVICE_COOKIE, value, {
     httpOnly: true,

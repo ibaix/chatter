@@ -176,11 +176,11 @@ describe('Auth', () => {
       expect(auth.knownDeviceOf(cookie, ' admin ')).toBeNull();
     });
 
-    it('keeps the device ID that it gets, so the count of the device stays', async () => {
+    it('gives a new device ID with each cookie', async () => {
       await auth.setUp(ADMIN, BROWSER);
-      const device = auth.knownDeviceOf(auth.deviceCookieFor('admin'), 'admin')!;
+      const first = auth.knownDeviceOf(auth.deviceCookieFor('admin'), 'admin');
 
-      expect(auth.knownDeviceOf(auth.deviceCookieFor('admin', device), 'admin')).toBe(device);
+      expect(auth.knownDeviceOf(auth.deviceCookieFor('admin'), 'admin')).not.toBe(first);
     });
 
     it('does not know the device for a different user', async () => {

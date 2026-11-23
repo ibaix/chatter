@@ -162,11 +162,12 @@ export class Auth {
 
   /**
    * The value of a known device cookie for this user, after a good password. Null when the user does not exist.
-   * Give the device ID of the cookie that the browser has, so the browser keeps its count of wrong passwords.
+   * Each cookie has a new device ID. So when a copy of an old cookie gets too many wrong passwords,
+   * the browser with the new cookie can still log in.
    */
-  deviceCookieFor(username: string, deviceId: string = newDeviceId()): string | null {
+  deviceCookieFor(username: string): string | null {
     const user = this.users.findByName(username);
-    return user && signDeviceCookie(this.deviceKey, { userId: user.id, deviceId }, user.passwordHash);
+    return user && signDeviceCookie(this.deviceKey, { userId: user.id, deviceId: newDeviceId() }, user.passwordHash);
   }
 
   /**

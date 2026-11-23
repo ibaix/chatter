@@ -210,12 +210,15 @@ describe('known device cookie', () => {
     expect((await send(ADMIN_COMPUTER, '/api/auth/login', newLogin, { cookie: newDevice })).status).toBe(200);
   });
 
-  it('keeps the device ID at the next login, so the browser keeps its count', async () => {
-    const cookie = await knownDeviceOf(ADMIN);
-    for (let i = 0; i < 9; i++) await send(ADMIN_COMPUTER, '/api/auth/login', WRONG, { cookie });
-    const again = deviceCookie(await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie }));
+  it('gives a new device ID at each login, so the wrong passwords of an old copy of the cookie do not stop the browser', async () => {
+    const old = await knownDeviceOf(ADMIN);
+    const again = deviceCookie(await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: old }));
+    expect(again.split('.')[1]).not.toBe(old.split('.')[1]);
+    await lockUser();
+    for (let i = 0; i < 10; i++) await send(ADMIN_COMPUTER, '/api/auth/login', WRONG, { cookie: old });
 
-    expect(again.split('.')[1]).toBe(cookie.split('.')[1]);
+    expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: old })).status).toBe(429);
+    expect((await send(ADMIN_COMPUTER, '/api/auth/login', ADMIN, { cookie: again })).status).toBe(200);
   });
 
   it('keeps the device cookie on logout', async () => {
