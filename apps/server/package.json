@@ -23,7 +23,7 @@
     "@local-chatter/shared": "*",
     "basic-ftp": "^6.2.6",
     "better-sqlite3": "^13.2.0",
-    "dotenv": "^16.3.1",
+    "dotenv": "^18.0.10",
     "hono": "^4.13.19",
     "koffi": "^2.15.0",
     "node-opcua-certificate-manager": "^2.187.32",
