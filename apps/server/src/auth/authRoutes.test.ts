@@ -15,6 +15,8 @@ import { LoginLog } from './loginLog.js';
 import { ProxySettings } from './proxySettings.js';
 import { SEEN_INTERVAL_MS, SESSION_IDLE_MS, SESSION_LIFETIME_SECONDS } from './sessionStore.js';
 import { authParts } from './testSupport.js';
+import { resetAdmins } from './adminReset.js';
+import { hashPassword } from './passwords.js';
 import { captureLog, type CapturedLog } from '../logging/testSupport.js';
 
 /** A database that has no machines */
@@ -103,6 +105,42 @@ describe('auth routes', () => {
     } finally {
       log.restore();
     }
+  });
+
+  it('gives the same 409 reply when the setup is closed and when the username is taken, so it does not tell which usernames exist', async () => {
+    // A user who is not an Admin, and no Admin: the database of an older version after its reset-password
+    const { users, auth, accounts } = authParts();
+    users.add({ username: 'sam', passwordHash: 'x', role: 'operator' });
+    const fresh = createApp({ poller: new HardwarePoller(emptyDb), auth, accounts, history: noHistory() });
+    const setUpOn = (body: object) => fresh.request('/api/auth/setup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+
+    const taken = await setUpOn({ username: 'SAM', password: 'long-enough' });
+    expect((await setUpOn(ADMIN)).status).toBe(200);
+    const closed = await setUpOn({ username: 'someone', password: 'long-enough' });
+
+    expect(taken.status).toBe(409);
+    expect(closed.status).toBe(409);
+    const takenBody = await taken.json();
+    expect(takenBody).toEqual(await closed.json());
+    expect(JSON.stringify(takenBody)).not.toMatch(/username|exists/i);
+  });
+
+  it('keeps the setup closed after reset-password', async () => {
+    const { users, sessions, auth, accounts } = authParts();
+    const fresh = createApp({ poller: new HardwarePoller(emptyDb), auth, accounts, history: noHistory() });
+    await auth.setUp(ADMIN, { userAgent: 'test browser', address: '192.168.1.20' });
+
+    resetAdmins(users, sessions, { username: 'boss', passwordHash: await hashPassword('new-admin-password') });
+
+    expect(await (await fresh.request('/api/auth/status')).json()).toMatchObject({ setupNeeded: false });
+    const res = await fresh.request('/api/auth/setup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'intruder', password: 'intruder-password' }),
+    });
+    expect(res.status).toBe(409);
+    expect(users.findByName('intruder')).toBeNull();
   });
 
   it('refuses a short password', async () => {
