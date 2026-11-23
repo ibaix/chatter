@@ -57,6 +57,11 @@ describe('anchorsOf', () => {
     expect(anchorsOf('## Steps\n## Steps\n## Steps')).toEqual(['steps', 'steps-1', 'steps-2']);
   });
 
+  it('gives a heading the next free number when a custom anchor or a numbered heading has its anchor', () => {
+    expect(anchorsOf('## Back up {#back-up}\n## Back up')).toEqual(['back-up', 'back-up-1']);
+    expect(anchorsOf('## Foo\n## Foo-1\n## Foo')).toEqual(['foo', 'foo-1', 'foo-2']);
+  });
+
   it('skips code blocks with tildes', () => {
     expect(anchorsOf('~~~bash\n# not a heading\n~~~\n## Real')).toEqual(['real']);
   });

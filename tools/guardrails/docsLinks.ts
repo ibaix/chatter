@@ -26,20 +26,21 @@ export function docsPageFile(page: string): string {
 /** The heading anchors of a Markdown page: a {#custom} anchor, or the heading text as VitePress makes it. */
 export function anchorsOf(markdown: string): string[] {
   const anchors: string[] = [];
-  const seen = new Map<string, number>();
   for (const line of linesOutsideCodeBlocks(markdown)) {
     const heading = /^#{1,6}\s+(.*)$/.exec(line);
     if (!heading) continue;
     const custom = /\{#([^}]+)\}\s*$/.exec(heading[1]);
     if (custom) {
+      // VitePress stops the build when a custom anchor is already on the page
       anchors.push(custom[1]);
       continue;
     }
-    // VitePress adds -1, -2, ... to a heading anchor that is already on the page
+    // As markdown-it-anchor in VitePress does: when the anchor is already on the page (from a heading or
+    // a {#id}), try -1, -2, ... until one is free
     const base = slug(textOf(heading[1]));
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    anchors.push(count === 0 ? base : `${base}-${count}`);
+    let anchor = base;
+    for (let i = 1; anchors.includes(anchor); i++) anchor = `${base}-${i}`;
+    anchors.push(anchor);
   }
   return anchors;
 }
