@@ -202,6 +202,19 @@ describe('Auth', () => {
       expect(auth.knownDeviceOf(newCookie, 'sam')).toBeNull();
     });
 
+    it('does not know the devices of the user after a log out of the other browsers, and knows a new cookie', async () => {
+      const token = (await auth.setUp(ADMIN, BROWSER))!;
+      await accounts.add({ ...SAM, role: 'operator' });
+      const adminCookie = auth.deviceCookieFor('admin');
+      const samCookie = auth.deviceCookieFor('sam');
+
+      auth.logOutOtherBrowsers(auth.sessionOf(token)!);
+
+      expect(auth.knownDeviceOf(adminCookie, 'admin')).toBeNull();
+      expect(auth.knownDeviceOf(auth.deviceCookieFor('admin'), 'admin')).toEqual(expect.any(String));
+      expect(auth.knownDeviceOf(samCookie, 'sam')).toEqual(expect.any(String));
+    });
+
     it('gives no cookie for a user that does not exist', () => {
       expect(auth.deviceCookieFor('nobody')).toBeNull();
     });

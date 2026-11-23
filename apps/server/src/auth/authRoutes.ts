@@ -95,12 +95,12 @@ function setSessionCookie(c: Context, origin: RequestOrigin, token: string): voi
 }
 
 /** The device ID of a valid device cookie of this browser for this username, or undefined */
-function knownDevice(c: Context, auth: Auth, username: string): string | undefined {
+export function knownDevice(c: Context, auth: Auth, username: string): string | undefined {
   return auth.knownDeviceOf(getCookie(c, DEVICE_COOKIE), username) ?? undefined;
 }
 
 /** Remember this browser as a known device of the user, with a new device ID */
-function setDeviceCookie(c: Context, auth: Auth, origin: RequestOrigin, username: string): void {
+export function setDeviceCookie(c: Context, auth: Auth, origin: RequestOrigin, username: string): void {
   const value = auth.deviceCookieFor(username);
   if (value === null) return;
   setCookie(c, DEVICE_COOKIE, value, {
