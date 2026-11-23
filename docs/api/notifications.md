@@ -53,6 +53,7 @@ The body of POST, PUT, and the tests is a form:
 - `values` has a value for each field of the type, also the secret fields.
 - On PUT and on the test of a saved channel, an empty secret keeps the saved secret.
 - `clearSecrets` (optional, on PUT and on the test of a saved channel) is a list of secret keys to delete, for example `["secret"]` to stop sending a webhook secret.
+- Exception: when a secret is saved and the form changes a `url` field (the address of the service), send the secret again, or put its key in `clearSecrets`. Else PUT and the test of a saved channel get `400` with `{ "error": "Type the <label> again. ..." }`. The server saves nothing and sends nothing. Chatter does not send a saved secret to a new address. Spaces around the address are no change.
 - `minSeverity` is `warning` (warning and critical alerts) or `critical` (only critical alerts).
 - `machineIds` is `null` for all machines, also the machines that you add later, or a list of machine ids.
 - `ignorePatterns` (optional) is a list of at most 20 patterns. The channel does not send a message whose text has one of the patterns. A pattern finds text in any part of the message, and upper case and lower case are the same. `*` finds any text, and `?` finds one character. Each pattern has at most 100 characters. The server removes the spaces around each pattern, and keeps each pattern only one time. It refuses an empty pattern, and a pattern of only `*` and `?`. See [Ignore some messages](../guide/notifications.md#ignore-some-messages).
@@ -62,7 +63,7 @@ The body of POST, PUT, and the tests is a form:
 On POST and PUT, a wrong form gets `400` with `{ "error": "<the problem in plain words>" }`. A body larger than 64 KB gets `413`.
 
 A test sends a real message at once, and gives `{ "ok": true, "detail": "Sent to 2 phones" }` or `{ "ok": false, "error": "<the reason>" }`.
-A test of a form with a wrong value, for example a wrong phone number, gets `200` with `ok: false`. Only a body with a missing or wrong part, for example no `minSeverity`, gets `400`.
+A test of a form with a wrong value, for example a wrong phone number, gets `200` with `ok: false`. Only a body with a missing or wrong part, for example no `minSeverity`, gets `400`. A test of a saved channel also gets `400` when it would send a saved secret to a new address (see above).
 
 ## Messages
 
