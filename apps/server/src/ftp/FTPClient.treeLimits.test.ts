@@ -98,6 +98,24 @@ describe('FTPClient.getFileTree limits', () => {
     expect(log.text('warn')).toContain(`The file tree on 192.168.1.50 is too large. Chatter shows only the first ${MAX_TREE_ENTRIES} entries.`);
   });
 
+  // The web app shows two levels: the folders, and the folders in each of them.
+  // A full deep folder must not take the entries of the folders next to it.
+  it('lists each level of the tree before it opens the level below it', async () => {
+    listingOf = folderPath => {
+      if (folderPath === '/') return [folder('A'), folder('B')];
+      if (folderPath === '/A') return [folder('A1')];
+      if (folderPath === '/B') return [folder('B1')];
+      return Array.from({ length: MAX_TREE_ENTRIES }, (_, index) => file(`O${index}`));
+    };
+
+    const tree = await new FTPClient({ host: '192.168.1.50' }).readFileTree('/', 3);
+
+    expect(listedFolders).toEqual(['/', '/A', '/B', '/A/A1']);
+    expect(tree.nodes.find(node => node.name === 'B')?.children?.map(child => child.name)).toEqual(['B1']);
+    expect(countNodes(tree.nodes)).toBe(MAX_TREE_ENTRIES);
+    expect(tree.isCutShort).toBe(true);
+  });
+
   it(`keeps at most ${MAX_TREE_ENTRIES} entries from one very long folder`, async () => {
     listingOf = () => Array.from({ length: MAX_TREE_ENTRIES + 10 }, (_, index) => file(`O${index}`));
 
