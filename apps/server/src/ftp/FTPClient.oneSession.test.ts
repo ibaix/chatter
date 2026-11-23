@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import net from 'net';
 import { PassThrough } from 'stream';
 import { FTPClient } from './FTPClient.js';
+import { MachineBusyError, MAX_WAITING_TASKS } from './sessionQueue.js';
 import { HOST, startEndlessMachine, type EndlessMachine } from './testSupport.js';
 
 // Many CNC FTP servers accept only one session at a time. A second session can fail, or confuse the control.
@@ -27,6 +28,10 @@ interface CountingMachine {
   logins(): number;
   /** The text of each STOR, by its path */
   uploads: Map<string, string>;
+  /** The first word of each command that the machine got */
+  commands: string[];
+  /** With `holdStor`: send the 226 reply of each held STOR, and of each later STOR at once */
+  releaseStor(): void;
   close(): Promise<void>;
 }
 
@@ -73,14 +78,18 @@ function readAll(socket: net.Socket): Promise<string> {
 /**
  * A fake machine. Each PASV opens a new data port for one transfer. With `noListReply`, the machine sends the listing
  * but no reply to LIST, as some old machines do. Then the tree walk closes the connection and logs in again for the
- * next folder.
+ * next folder. With `holdStor`, the machine reads each upload, but sends no 226 reply until the test calls
+ * releaseStor(). So an upload keeps the turn of the machine.
  */
-async function startCountingMachine({ noListReply = false } = {}): Promise<CountingMachine> {
+async function startCountingMachine({ noListReply = false, holdStor = false } = {}): Promise<CountingMachine> {
   const openControls = new Set<net.Socket>();
   const allSockets = new Set<net.Socket>();
   const uploads = new Map<string, string>();
+  const commands: string[] = [];
   let mostOpen = 0;
   let loginCount = 0;
+  let release: () => void = () => undefined;
+  const released = holdStor ? new Promise<void>(resolve => { release = resolve; }) : Promise.resolve();
 
   const track = (socket: net.Socket) => {
     allSockets.add(socket);
@@ -117,9 +126,14 @@ async function startCountingMachine({ noListReply = false } = {}): Promise<Count
       text: listingOf(argument === '' ? session.folder : path), isReplySent: !noListReply,
     }),
     STOR: ({ reply, session, path }) => {
+      if (path.startsWith('/LOCKED/')) {
+        reply('550 Permission denied');
+        return;
+      }
       reply('150 Ready for data');
-      void session.data?.then(readAll).then(text => {
+      void session.data?.then(readAll).then(async text => {
         uploads.set(path, text);
+        await released;
         reply('226 Transfer complete');
       });
     },
@@ -131,6 +145,7 @@ async function startCountingMachine({ noListReply = false } = {}): Promise<Count
     const argument = rest.join(' ').replace(/^(-\S+\s*)+/, '');
     const path = argument.startsWith('/') ? argument : `${session.folder === '/' ? '' : session.folder}/${argument}`;
     const reply = (text: string) => control.write(`${text}\r\n`);
+    commands.push(word.toUpperCase());
     mostOpen = Math.max(mostOpen, openControls.size);
     const handler = handlers[word.toUpperCase()] ?? (() => reply('200 OK'));
     handler({ reply, session, argument, path });
@@ -160,6 +175,8 @@ async function startCountingMachine({ noListReply = false } = {}): Promise<Count
     mostOpenAtCommand: () => mostOpen,
     logins: () => loginCount,
     uploads,
+    commands,
+    releaseStor: () => release(),
     async close() {
       allSockets.forEach(socket => socket.destroy());
       await new Promise(resolve => controlServer.close(resolve));
@@ -347,5 +364,313 @@ describe('FTPClient download that stops while another task waits', () => {
     cancelFirst.abort();
     await expect(first).rejects.toThrow('FTP download error: ');
     expect(loginsOn(endless)).toBe(1);
+  });
+});
+
+/** The text of a task that did not start, because the queue of the machine is full */
+const BUSY_TEXT = 'The machine is busy with other file tasks. Try again later.';
+
+/**
+ * Resolve when the condition is true, or fail after 2 s. It uses setImmediate and Date, which the fake timers of
+ * these tests do not change.
+ */
+async function until(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('The condition did not become true in 2 s');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
+/** A download of an endless file that keeps the turn of the machine until the test cancels it */
+function startHeldDownload(client: FTPClient) {
+  const output = new PassThrough();
+  const started = firstBytes(output);
+  output.resume();
+  const cancel = new AbortController();
+  const done = client.downloadFile('O1000', output, cancel.signal).catch((err: Error) => err);
+  return { started, cancel, done };
+}
+
+/** The error of a task, or 'fulfilled' */
+function outcomeOf(task: Promise<unknown>): Promise<unknown> {
+  return task.then(() => 'fulfilled', (err: unknown) => err);
+}
+
+describe('FTPClient tasks that wait for a busy machine', () => {
+  let endless: EndlessMachine | undefined;
+  let machine: CountingMachine | undefined;
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await endless?.close();
+    await machine?.close();
+    endless = undefined;
+    machine = undefined;
+  });
+
+  const loginsOn = (busy: EndlessMachine) => busy.commands.filter(command => command === 'USER').length;
+
+  // A MachineBusyError becomes a 503 in the route. With "FTP ... error" in front, it would be a 500 with a stack.
+  it('gives each kind of task the busy error, with its own text, when the queue of the machine is full', async () => {
+    endless = await startEndlessMachine();
+    const client = new FTPClient({ host: HOST, port: endless.port });
+    const running = startHeldDownload(client);
+    await running.started;
+    const waiting = Array.from({ length: MAX_WAITING_TASKS }, () => {
+      const cancel = new AbortController();
+      return { cancel, done: outcomeOf(client.downloadFile('O2000', new PassThrough(), cancel.signal)) };
+    });
+
+    const errors = await Promise.all([
+      client.uploadFiles([{ remotePath: '/SUBS/O9100', source: 'O9100\nM99\n' }]),
+      client.listFiles('/'),
+      client.uploadFile('/SUBS/O9100', 'O9100\nM99\n'),
+      client.deleteFile('/O1000'),
+      client.readFileTree('/', 2),
+    ].map(outcomeOf));
+
+    for (const err of errors) {
+      expect(err).toBeInstanceOf(MachineBusyError);
+      expect((err as Error).message).toBe(BUSY_TEXT);
+    }
+    waiting.forEach(task => task.cancel.abort());
+    running.cancel.abort();
+    await Promise.all([running.done, ...waiting.map(task => task.done)]);
+    expect(loginsOn(endless)).toBe(1);
+  });
+
+  // The connector keeps its FTPClient when the user changes the machine settings. A waiting task must use the new
+  // address, so it does not send the saved password to the old one.
+  it('sends a waiting task to the new address after a settings change', async () => {
+    endless = await startEndlessMachine();
+    machine = await startCountingMachine();
+    const client = new FTPClient({ host: HOST, port: endless.port });
+    const running = startHeldDownload(client);
+    await running.started;
+
+    const listed = client.listFiles('/');
+    client.updateConfig({ port: machine.port });
+    running.cancel.abort();
+    await running.done;
+
+    expect((await listed).map(file => file.name)).toEqual(['PROGRAMS', 'SUBS', 'O1000']);
+    expect(machine.logins()).toBe(1);
+    expect(loginsOn(endless)).toBe(1);
+  });
+
+  it('starts the next task after an upload that the machine refuses in its turn', async () => {
+    machine = await startCountingMachine();
+    const client = new FTPClient({ host: HOST, port: machine.port });
+
+    const refused = outcomeOf(client.uploadFile('/LOCKED/O9100', 'O9100\nM99\n', true));
+    // The upload has its turn, so the list waits for it
+    await until(() => machine?.logins() === 1);
+    const listed = await client.listFiles('/SUBS');
+    const upload = await refused;
+
+    expect((upload as Error).message).toMatch(/^FTP upload error: 550 Permission denied/);
+    expect(listed.map(file => file.name)).toEqual(['O9000']);
+    expect(machine.mostOpenAtCommand()).toBe(1);
+  });
+
+  // A browser that leaves while its task waits must not get a task on the machine later, for example an upload
+  it.each([
+    { name: 'a list', start: (client: FTPClient, signal: AbortSignal) => client.listFiles('/', signal) },
+    { name: 'a tree walk', start: (client: FTPClient, signal: AbortSignal) => client.readFileTree('/', 2, signal) },
+    { name: 'an upload', start: (client: FTPClient, signal: AbortSignal) => client.uploadFile('/O9100', 'O9100\n', true, signal) },
+    {
+      name: 'an upload batch',
+      start: (client: FTPClient, signal: AbortSignal) => client.uploadFiles([{ remotePath: '/O9100', source: 'O9100\n' }], true, signal),
+    },
+    { name: 'a delete', start: (client: FTPClient, signal: AbortSignal) => client.deleteFile('/O1000', signal) },
+  ])('removes $name that waits when its signal aborts, and does not connect for it', async ({ start }) => {
+    endless = await startEndlessMachine();
+    const client = new FTPClient({ host: HOST, port: endless.port });
+    const running = startHeldDownload(client);
+    await running.started;
+    const cancel = new AbortController();
+
+    const task = outcomeOf(start(client, cancel.signal));
+    cancel.abort(new Error('The browser left'));
+
+    expect(((await task) as Error).message).toContain('The browser left');
+    running.cancel.abort();
+    await running.done;
+    // The next task after the cancelled one gets its turn
+    const after = startHeldDownload(client);
+    await after.started;
+    after.cancel.abort();
+    await after.done;
+    expect(loginsOn(endless)).toBe(2);
+    expect(endless.commands).not.toContain('STOR');
+    expect(endless.commands).not.toContain('DELE');
+  });
+
+  it('stops a running upload when its signal aborts, and starts the next task', async () => {
+    machine = await startCountingMachine({ holdStor: true });
+    const client = new FTPClient({ host: HOST, port: machine.port });
+    const cancel = new AbortController();
+
+    const upload = outcomeOf(client.uploadFile('/PROGRAMS/O4000', 'O4000\nM30\n', true, cancel.signal));
+    await until(() => machine?.uploads.has('/PROGRAMS/O4000') === true);
+    const listed = client.listFiles('/SUBS');
+    cancel.abort(new Error('The browser left'));
+
+    expect(((await upload) as Error).message).toBe('FTP upload error: The browser left');
+    expect((await listed).map(file => file.name)).toEqual(['O9000']);
+    expect(machine.mostOpenAtCommand()).toBe(1);
+  });
+
+  // An upload keeps the turn of the machine. A control that never confirms it must not block the other tasks forever.
+  it('stops an upload at its time limit, and starts the next task', async () => {
+    machine = await startCountingMachine({ holdStor: true });
+    const client = new FTPClient({ host: HOST, port: machine.port }, { uploadTimeLimitMs: 60_000 });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const upload = outcomeOf(client.uploadFile('/PROGRAMS/O4000', 'O4000\nM30\n', true));
+    await until(() => machine?.uploads.has('/PROGRAMS/O4000') === true);
+    const listed = client.listFiles('/SUBS');
+    vi.advanceTimersByTime(59_999);
+    expect(machine.logins()).toBe(1);
+    vi.advanceTimersByTime(1);
+
+    expect(((await upload) as Error).message).toBe('FTP upload error: The upload took too long. Chatter stops an upload after 1 minute.');
+    expect((await listed).map(file => file.name)).toEqual(['O9000']);
+  });
+
+  it('fails each file of a batch that the time limit stopped', async () => {
+    machine = await startCountingMachine({ holdStor: true });
+    const client = new FTPClient({ host: HOST, port: machine.port }, { uploadTimeLimitMs: 60_000 });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    const batch = client.uploadFiles([
+      { remotePath: '/PROGRAMS/O4000', source: 'O4000\n' },
+      { remotePath: '/PROGRAMS/O5000', source: 'O5000\n' },
+    ], true);
+    await until(() => machine?.uploads.has('/PROGRAMS/O4000') === true);
+    vi.advanceTimersByTime(60_000);
+
+    const tooSlow = 'The upload took too long. Chatter stops an upload after 1 minute.';
+    expect(await batch).toEqual({
+      success: [],
+      failed: [{ remotePath: 'PROGRAMS/O4000', error: tooSlow }, { remotePath: 'PROGRAMS/O5000', error: tooSlow }],
+    });
+    expect(machine.uploads.has('/PROGRAMS/O5000')).toBe(false);
+  });
+
+  // The download time limit is for the transfer. The wait for the turn must not use it up.
+  it('starts the time limit of a download when the download gets its turn', async () => {
+    endless = await startEndlessMachine();
+    const client = new FTPClient({ host: HOST, port: endless.port, timeoutMs: 600_000 }, { timeLimitMs: 60_000 });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const first = startHeldDownload(client);
+    await first.started;
+    const secondOutput = new PassThrough();
+    let hasSecondData = false;
+    secondOutput.on('data', () => { hasSecondData = true; });
+    const cancelSecond = new AbortController();
+    const second = outcomeOf(client.downloadFile('O2000', secondOutput, cancelSecond.signal));
+    let isSecondDone = false;
+    void second.then(() => { isSecondDone = true; });
+
+    vi.advanceTimersByTime(60_000);
+
+    expect(((await first.done) as Error).message).toBe('FTP download error: The download took too long. Chatter stops a download after 1 minute.');
+    await until(() => hasSecondData || isSecondDone);
+    expect(hasSecondData).toBe(true);
+    cancelSecond.abort();
+    await second;
+  });
+});
+
+describe('FTPClient tree walks of a busy machine', () => {
+  let machine: CountingMachine | undefined;
+
+  afterEach(async () => {
+    await machine?.close();
+    machine = undefined;
+  });
+
+  /** A machine whose upload keeps the turn until the test calls releaseStor() */
+  async function busyMachine() {
+    const counting = await startCountingMachine({ holdStor: true });
+    machine = counting;
+    const client = new FTPClient({ host: HOST, port: counting.port });
+    const upload = client.uploadFile('/PROGRAMS/O4000', 'O4000\nM30\n', true);
+    await until(() => counting.uploads.has('/PROGRAMS/O4000'));
+    return { client, counting, upload };
+  }
+
+  // The walk stops at MAX_TREE_DEPTH (5), so a deeper request is the same walk
+  it('gives a request for a deeper tree than the limit the same walk', async () => {
+    machine = await startCountingMachine();
+    const client = new FTPClient({ host: HOST, port: machine.port });
+
+    const [atLimit, deeper] = await Promise.all([client.readFileTree('/', 5), client.readFileTree('/', 9)]);
+
+    expect(deeper).toBe(atLimit);
+    expect(machine.logins()).toBe(1);
+  });
+
+  // Each role can ask for a tree, and each walk can take minutes. Walks of many folders that wait must not fill the
+  // queue, so the sends of an Operator can still wait for their turn.
+  it('lets only two walks of different trees wait, and refuses the next one at once', async () => {
+    const { client, counting, upload } = await busyMachine();
+
+    const waitingWalk = client.readFileTree('/', 2);
+    const sameWalk = client.readFileTree('/', 2);
+    const secondWalk = client.readFileTree('/SUBS', 1);
+    const thirdWalk = outcomeOf(client.readFileTree('/PROGRAMS', 1));
+    const listed = client.listFiles('/SUBS');
+
+    const refused = await thirdWalk;
+    expect(refused).toBeInstanceOf(MachineBusyError);
+    expect((refused as Error).message).toBe(BUSY_TEXT);
+    counting.releaseStor();
+    await upload;
+    const walked = await waitingWalk;
+    expect(namesOf(walked.nodes)).toEqual(['PROGRAMS', 'SUBS', 'O1000']);
+    expect(await sameWalk).toBe(walked);
+    expect(namesOf((await secondWalk).nodes)).toEqual(['O9000']);
+    expect((await listed).map(file => file.name)).toEqual(['O9000']);
+    // The upload, the two walks and the list
+    expect(counting.logins()).toBe(4);
+  });
+
+  it('gives the walk to the callers that stay, when one caller leaves', async () => {
+    const { client, counting, upload } = await busyMachine();
+    const leave = new AbortController();
+
+    const left = outcomeOf(client.readFileTree('/', 2, leave.signal));
+    const stays = client.readFileTree('/', 2, new AbortController().signal);
+    leave.abort(new Error('The browser left'));
+
+    expect(((await left) as Error).message).toBe('The browser left');
+    counting.releaseStor();
+    await upload;
+    expect(namesOf((await stays).nodes)).toEqual(['PROGRAMS', 'SUBS', 'O1000']);
+    expect(counting.logins()).toBe(2);
+  });
+
+  it('does not walk the tree when each caller left while the walk waited', async () => {
+    const { client, counting, upload } = await busyMachine();
+    const leaveFirst = new AbortController();
+    const leaveSecond = new AbortController();
+
+    const first = outcomeOf(client.readFileTree('/', 2, leaveFirst.signal));
+    const second = outcomeOf(client.readFileTree('/', 2, leaveSecond.signal));
+    leaveFirst.abort(new Error('The browser left'));
+    leaveSecond.abort(new Error('The browser left'));
+
+    expect(((await first) as Error).message).toBe('The browser left');
+    expect(((await second) as Error).message).toBe('The browser left');
+    // A new request for the same tree starts a new walk. It does not join the walk that stopped.
+    const again = client.readFileTree('/', 2);
+    counting.releaseStor();
+    await upload;
+    expect(namesOf((await again).nodes)).toEqual(['PROGRAMS', 'SUBS', 'O1000']);
+    // The upload and the new walk only
+    expect(counting.logins()).toBe(2);
   });
 });

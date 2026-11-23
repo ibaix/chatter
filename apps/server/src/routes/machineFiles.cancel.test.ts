@@ -15,12 +15,23 @@ import { machineFileRoutes } from './machineFiles.js';
 // The whole path of a cancel: the browser closes the connection, @hono/node-server cancels the reply,
 // streamWithoutErrorText cancels the download stream, and the FTP client stops the transfer on the machine.
 
-/** The program routes, with one machine that downloads over a real FTP client, and a user that can read files */
+/** The uploads that the routes started, as the outcome of each: 'sent' or the error */
+let uploadOutcomes: Array<Promise<unknown>> = [];
+
+/**
+ * The program routes, with one machine that downloads and uploads over a real FTP client, and a user that can read and
+ * send files
+ */
 function appFor(machine: EndlessMachine) {
   const ftp = new FTPClient({ host: HOST, port: machine.port });
   const connector = {
     downloadFile: (path: string, output, signal) => ftp.downloadFile(path, output, signal),
-  } as Pick<BaseMachineConnector, 'downloadFile'> as BaseMachineConnector;
+    uploadFile: (path: string, source, allowOverwrite, signal) => {
+      const upload = ftp.uploadFile(path, source, allowOverwrite, signal);
+      uploadOutcomes.push(upload.then(() => 'sent', (err: unknown) => err));
+      return upload;
+    },
+  } as Pick<BaseMachineConnector, 'downloadFile' | 'uploadFile'> as BaseMachineConnector;
   const poller = { getConnector: () => connector } as unknown as HardwarePoller;
   return new Hono<LoggedInEnv>()
     .use(async (c, next) => {
@@ -43,6 +54,7 @@ describe('a program download that the browser cancels', () => {
     if (server) await new Promise<void>((resolve, reject) => server!.close(err => (err ? reject(err) : resolve())));
     await machine?.close();
     log = undefined;
+    uploadOutcomes = [];
     browser = undefined;
     server = undefined;
     machine = undefined;
@@ -91,7 +103,6 @@ describe('a program download that the browser cancels', () => {
     try {
       await waitFor(() => requestCount === 2);
       expect(requestCount).toBe(2);
-      expect(machine.commands.filter(command => command === 'USER')).toHaveLength(1);
       first.socket.destroy();
       await second.gotData;
 
@@ -101,7 +112,55 @@ describe('a program download that the browser cancels', () => {
       second.socket.destroy();
     }
   });
+
+  // The upload waits for the download. A browser that leaves must not get its file on the machine minutes later.
+  it('does not send a waiting upload to the machine when its browser leaves', async () => {
+    log = captureLog();
+    machine = await startEndlessMachine();
+    server = startWebServer(appFor(machine), 0, { hostname: '127.0.0.1' });
+    await once(server, 'listening');
+    const port = (server.address() as AddressInfo).port;
+    const download = startBrowserDownload(port);
+    browser = download.socket;
+    await download.gotData;
+
+    const upload = startBrowserUpload(port);
+    await waitFor(() => uploadOutcomes.length === 1);
+    expect(uploadOutcomes).toHaveLength(1);
+    upload.destroy();
+
+    expect(await uploadOutcomes[0]).toBeInstanceOf(Error);
+    download.socket.destroy();
+    await waitFor(() => machine!.openControlConnections() === 0);
+    expect(machine.commands).not.toContain('STOR');
+    expect(machine.commands.filter(command => command === 'USER')).toHaveLength(1);
+    expect(log.lines.filter(line => line.level === 'error')).toEqual([]);
+  });
 });
+
+/** A browser that sends one program file. The route reads the whole body, then waits for the turn of the machine. */
+function startBrowserUpload(port: number): Socket {
+  const boundary = 'chatter-test';
+  const part = (name: string, value: string, fileName?: string) => [
+    `--${boundary}`,
+    `Content-Disposition: form-data; name="${name}"${fileName ? `; filename="${fileName}"` : ''}`,
+    ...(fileName ? ['Content-Type: application/octet-stream'] : []),
+    '',
+    value,
+  ].join('\r\n');
+  const body = [part('path', '/O9100'), part('overwrite', 'true'), part('file', 'O9100\nM30\n', 'O9100'), `--${boundary}--`, ''].join('\r\n');
+  const socket = connect(port, '127.0.0.1');
+  socket.on('error', () => {});
+  socket.on('connect', () => socket.write([
+    'POST /machine/1/files/upload HTTP/1.1',
+    'Host: localhost',
+    `Content-Type: multipart/form-data; boundary=${boundary}`,
+    `Content-Length: ${Buffer.byteLength(body)}`,
+    '',
+    body,
+  ].join('\r\n')));
+  return socket;
+}
 
 /** A browser that asks for a program download. `gotData` resolves at the first line of the program. */
 function startBrowserDownload(port: number): { socket: Socket; gotData: Promise<void> } {

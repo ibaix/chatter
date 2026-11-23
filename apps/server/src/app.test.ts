@@ -899,7 +899,7 @@ describe('API Routes', () => {
       const res = await call('GET', `/api/machine/${machine.id}/files?path=/PRG&depth=${depth}`);
 
       expect(res.status).toBe(200);
-      expect(readFileTree).toHaveBeenCalledWith('/PRG', expectedDepth);
+      expect(readFileTree).toHaveBeenCalledWith('/PRG', expectedDepth, expect.any(AbortSignal));
     });
 
     // The web app shows a note when the list is cut short. The body stays a plain list, as the API docs show it.
@@ -927,7 +927,7 @@ describe('API Routes', () => {
       expect(res.status).toBe(200);
       expect(res.headers.get(FILE_LIST_CUT_SHORT_HEADER)).toBe('true');
       expect(await res.json()).toEqual([PROGRAM]);
-      expect(readFileTree).toHaveBeenCalledWith('.', 2);
+      expect(readFileTree).toHaveBeenCalledWith('.', 2, expect.any(AbortSignal));
     });
 
     it('sends no cut-short header for a full list', async () => {
@@ -1223,7 +1223,7 @@ describe('API Routes', () => {
       const res = await call('POST', `/api/machine/${machine.id}/files/upload`, form);
 
       expect(res.status).toBe(200);
-      expect(uploadFile).toHaveBeenCalledWith('/PRG/O1000.NC', Buffer.from('test'), true);
+      expect(uploadFile).toHaveBeenCalledWith('/PRG/O1000.NC', Buffer.from('test'), true, expect.any(AbortSignal));
       expect(recordUpload).toHaveBeenCalledWith(machine.id, 'test.nc', 'test.nc', '/PRG/O1000.NC', 'test');
     });
 
@@ -1274,6 +1274,7 @@ describe('API Routes', () => {
           { remotePath: '/PRG/b.nc', source: Buffer.from('G01') },
         ],
         false,
+        expect.any(AbortSignal),
       );
       expect(res.body.success).toEqual([
         { filename: 'a.nc', targetName: 'O0100.NC', path: '/PRG/O0100.NC' },
@@ -1447,7 +1448,7 @@ describe('API Routes', () => {
       const res = await call('POST', `/api/machine/${id}/files/upload-batch`, batchForm({ fileName: 'constructor', targetNames: '{}' }));
 
       expect(res.status).toBe(200);
-      expect(uploadFiles).toHaveBeenCalledWith([{ remotePath: '/PRG/constructor', source: Buffer.from('G00') }], false);
+      expect(uploadFiles).toHaveBeenCalledWith([{ remotePath: '/PRG/constructor', source: Buffer.from('G00') }], false, expect.any(AbortSignal));
     });
 
     it('keeps a path with spaces, dots and letters outside ASCII', async () => {

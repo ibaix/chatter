@@ -1,0 +1,138 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Hono } from 'hono';
+import type { LoggedInEnv } from '../auth/authRoutes.js';
+import type { BaseMachineConnector } from '../machines/BaseMachineConnector.js';
+import type { HardwarePoller } from '../polling/poller.js';
+import { machineFileRoutes } from './machineFiles.js';
+
+// The server holds the files of an upload in memory, and a Pi can have only 512 MB. Each machine has its own FTP queue,
+// so the queue does not limit the uploads of all machines. The route itself lets only a few uploads hold a body.
+
+vi.mock('../storage/database.js', () => ({ recordUpload: vi.fn() }));
+
+const BUSY_TEXT = 'Chatter is busy with other uploads. Try again later.';
+
+/** An upload on the machine that runs until the test ends it */
+function heldUploads() {
+  const ends: Array<() => void> = [];
+  let isHeld = true;
+  const upload = () => (isHeld ? new Promise<void>(resolve => { ends.push(resolve); }) : Promise.resolve());
+  return {
+    upload,
+    count: () => ends.length,
+    endAll: () => {
+      isHeld = false;
+      ends.forEach(end => end());
+    },
+  };
+}
+
+function appWith(held: ReturnType<typeof heldUploads>) {
+  const connector = {
+    uploadFile: vi.fn(held.upload),
+    uploadFiles: vi.fn(async () => {
+      await held.upload();
+      return { success: [], failed: [] };
+    }),
+  };
+  const poller = { getConnector: () => connector as unknown as BaseMachineConnector } as unknown as HardwarePoller;
+  const app = new Hono<LoggedInEnv>()
+    .use(async (c, next) => {
+      c.set('user', { id: 1, username: 'operator', role: 'operator' });
+      await next();
+    })
+    .route('/', machineFileRoutes(poller));
+  return { app, connector };
+}
+
+function uploadForm(): FormData {
+  const form = new FormData();
+  form.append('file', new File(['O1000\nM30\n'], 'O1000.nc'));
+  form.append('path', '/O1000.nc');
+  return form;
+}
+
+function batchForm(): FormData {
+  const form = new FormData();
+  form.append('files', new File(['O1000\nM30\n'], 'O1000.nc'));
+  form.append('basePath', '/');
+  return form;
+}
+
+const post = (app: Hono<LoggedInEnv>, path: string, body: FormData) => app.request(path, { method: 'POST', body });
+
+/** Resolve when the condition is true, or fail after 2 s */
+async function until(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('The condition did not become true in 2 s');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
+describe('the limit of uploads at the same time, for all machines', () => {
+  let held: ReturnType<typeof heldUploads> | undefined;
+
+  afterEach(() => {
+    held?.endAll();
+    held = undefined;
+  });
+
+  it('refuses a third upload with 503 while two uploads run, and accepts uploads again after they end', async () => {
+    held = heldUploads();
+    const { app, connector } = appWith(held);
+    const running = [post(app, '/machine/1/files/upload', uploadForm()), post(app, '/machine/2/files/upload-batch', batchForm())];
+    await until(() => held?.count() === 2);
+
+    const single = await post(app, '/machine/3/files/upload', uploadForm());
+    const batch = await post(app, '/machine/3/files/upload-batch', batchForm());
+
+    expect(single.status).toBe(503);
+    expect(await single.json()).toEqual({ error: BUSY_TEXT });
+    expect(batch.status).toBe(503);
+    expect(await batch.json()).toEqual({ error: BUSY_TEXT });
+    expect(connector.uploadFile).toHaveBeenCalledTimes(1);
+    expect(connector.uploadFiles).toHaveBeenCalledTimes(1);
+
+    held.endAll();
+    expect((await Promise.all(running)).map(reply => reply.status)).toEqual([200, 200]);
+    const after = await post(app, '/machine/3/files/upload', uploadForm());
+    expect(after.status).toBe(200);
+  });
+
+  // The body of an upload is in memory as soon as the route reads it. So the refusal must come first.
+  it('refuses the upload before it reads the body', async () => {
+    held = heldUploads();
+    const { app } = appWith(held);
+    const running = [post(app, '/machine/1/files/upload', uploadForm()), post(app, '/machine/2/files/upload', uploadForm())];
+    await until(() => held?.count() === 2);
+    // A body that never ends: a route that reads it never answers
+    const endlessBody = new ReadableStream<Uint8Array>({ pull: () => new Promise(() => undefined) });
+    const request = new Request('http://localhost/machine/3/files/upload', {
+      method: 'POST',
+      body: endlessBody,
+      headers: { 'Content-Type': 'multipart/form-data; boundary=chatter' },
+      duplex: 'half',
+    } as RequestInit);
+
+    const reply = await app.request(request);
+
+    expect(reply.status).toBe(503);
+    held.endAll();
+    await Promise.all(running);
+  });
+
+  it('frees the place of an upload that fails', async () => {
+    held = heldUploads();
+    const { app, connector } = appWith(held);
+    held.endAll();
+    connector.uploadFile.mockRejectedValue(new Error('FTP upload error: 550 Permission denied'));
+
+    const replies = [];
+    for (let i = 0; i < 3; i += 1) replies.push((await post(app, '/machine/1/files/upload', uploadForm())).status);
+
+    expect(replies).toEqual([500, 500, 500]);
+    connector.uploadFile.mockImplementation(held.upload);
+    expect((await post(app, '/machine/1/files/upload', uploadForm())).status).toBe(200);
+  });
+});

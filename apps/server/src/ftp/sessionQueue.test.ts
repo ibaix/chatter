@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { MachineBusyError, SessionQueue } from './sessionQueue.js';
+import { MachineBusyError, SESSION_WAIT_LIMIT_MS, SessionQueue } from './sessionQueue.js';
 
 /** A task that runs until the test ends it */
 function heldTask() {
@@ -116,8 +116,26 @@ describe('SessionQueue', () => {
 
     const err = await outcome;
     expect(err).toBeInstanceOf(MachineBusyError);
-    expect((err as Error).message).toBe('The machine is busy with another file task. Chatter waited 1 minute. Try again later.');
+    expect((err as Error).message).toBe('The machine is busy with other file tasks. Chatter waited 1 minute. Try again later.');
     expect(queue.waitingCount).toBe(0);
+    stuck.end();
+    await running;
+  });
+
+  // The guide and docs/security.md tell the user "3 minutes"
+  it('waits 3 minutes by default, and tells the user so', async () => {
+    vi.useFakeTimers();
+    const queue = new SessionQueue();
+    const stuck = heldTask();
+    const running = queue.run(stuck.work);
+    const outcome = queue.run(async () => 'late').catch((err: unknown) => err);
+
+    expect(SESSION_WAIT_LIMIT_MS).toBe(3 * 60_000);
+    await vi.advanceTimersByTimeAsync(SESSION_WAIT_LIMIT_MS - 1);
+    expect(queue.waitingCount).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(((await outcome) as Error).message).toBe('The machine is busy with other file tasks. Chatter waited 3 minutes. Try again later.');
     stuck.end();
     await running;
   });
