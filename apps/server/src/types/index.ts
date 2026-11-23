@@ -23,6 +23,7 @@ export type {
   BrotherMachineUpdate,
   FanucMachineData,
   FanucMachineUpdate,
+  FileTree,
   FTPFileInfo,
   FTPTreeNode,
   HaasMachineData,

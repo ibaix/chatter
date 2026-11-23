@@ -30,7 +30,7 @@ With **Sign and encrypt**, the control must trust the certificate of Chatter:
 3. Chatter connects at its next try.
 
 Chatter keeps its certificate in the data folder (in `opcua-pki`, next to `chatter.db`), so the certificate stays after an update and you trust it only once. All Siemens machines use the same certificate.
-Chatter trusts the certificate of each control the first time it connects.
+Chatter accepts a new certificate of a control with no check by a person. It does not check that the certificate of the control is the same as before. So a device that answers at the address of the control can get the OPC UA username and password. See [Security](../security.md).
 
 ## What Chatter reads
 

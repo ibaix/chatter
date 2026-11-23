@@ -2,19 +2,67 @@ import net from 'net';
 import { Readable, Writable } from 'stream';
 import * as ftp from 'basic-ftp';
 import { ftpErrorMessage } from './ftpErrorMessage.js';
-import type { FTPConfig, FTPFileInfo, FTPTreeNode, FTPUploadFile, FTPUploadResult } from '../types/index.js';
+import { FILE_TREE_ENTRY_LIMIT } from '@local-chatter/shared';
+import { createLogger } from '../logging/logger.js';
+import type { FileTree, FTPConfig, FTPFileInfo, FTPTreeNode, FTPUploadFile, FTPUploadResult } from '../types/index.js';
 
 const DEFAULT_FTP_PORT = 21;
 const DEFAULT_FTP_USER = 'anonymous';
 /** The time that the FTP client waits for the machine. This is also the default of basic-ftp. */
 const DEFAULT_FTP_TIMEOUT_MS = 30_000;
 const DEFAULT_TREE_DEPTH = 2;
+/**
+ * The most folder levels that one tree request walks. Each level costs a LIST on the machine.
+ * The web app asks for 2 levels, and CNC program folders are not deeper than this.
+ */
+export const MAX_TREE_DEPTH = 5;
+/** The most entries (files and folders) in one tree, so a very large or rogue FTP server cannot fill the memory */
+export const MAX_TREE_ENTRIES = FILE_TREE_ENTRY_LIMIT;
 const ROOT_PATH = '/';
+/**
+ * The most bytes of one folder listing. A listing line has about 60 bytes, so this holds more than
+ * MAX_TREE_ENTRIES lines. A rogue FTP server cannot fill the memory of a Pi with a listing that has no end.
+ */
+export const MAX_FOLDER_LIST_BYTES = 1024 * 1024;
+const MAX_FOLDER_LIST_MB = MAX_FOLDER_LIST_BYTES / 1024 / 1024;
+/** The most folders that one tree walk opens. Each folder costs some commands and a LIST on the machine. */
+export const MAX_TREE_FOLDERS = 200;
+/**
+ * One tree walk stops after this time, and keeps what it read. The raw LIST waits 1 s for each folder,
+ * so a normal walk of many folders can take some time.
+ */
+export const TREE_WALK_TIME_LIMIT_MS = 120_000;
+/** One folder list of listFiles, and the check for a file before an upload, stops after this time */
+export const FOLDER_LIST_TIME_LIMIT_MS = 60_000;
+const FOLDER_LIST_TOO_LONG_MESSAGE = `The folder list on the machine is too long. Chatter reads at most ${MAX_FOLDER_LIST_MB} MB of it.`;
+const FOLDER_LIST_TOO_SLOW_MESSAGE = 'The folder list on the machine took too long.';
 
-/** The manual download gives up when no byte arrives in this time */
-const DOWNLOAD_NO_DATA_TIMEOUT_MS = 30_000;
+/** The raw RETR stops when the machine stops in the middle of a file */
+const DOWNLOAD_STALLED_MESSAGE = 'The machine stopped sending the file. Try again.';
+/**
+ * The most bytes of one download. CNC programs are much smaller (a control holds some MB at most), but a program on a
+ * data server can be large. A rogue FTP server cannot send a file with no end.
+ */
+const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+/**
+ * One download stops after this time. A machine that sends one byte just before each timeout cannot keep the
+ * download open for ever. A slow control sends about 50 KB each second, so 64 MB takes about 22 minutes.
+ */
+const DOWNLOAD_TIME_LIMIT_MS = 30 * 60_000;
+/**
+ * After a clean end of the data connection, the raw RETR waits this long for the reply to RETR (usually 226).
+ * Some old, simple FTP servers never send this reply. Then the file is complete without it. The wait is never
+ * longer than the FTP timeout.
+ */
+export const REPLY_AFTER_DATA_WAIT_MS = 3_000;
 /** The raw LIST does not wait for the server to close the data connection, so it waits this long for the listing */
 const RAW_LIST_TRANSFER_WAIT_MS = 1_000;
+/**
+ * The raw RETR and the raw LIST stop when their data connection does not open in this time, and use the
+ * fallback of basic-ftp. On a shop network a connection opens in a few milliseconds. The FTP timeout (30 s)
+ * would come for each folder of a tree walk, so this time is shorter.
+ */
+const RAW_DATA_CONNECT_TIMEOUT_MS = 5_000;
 
 /**
  * "227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)": four address bytes, then the port as two bytes.
@@ -42,7 +90,90 @@ export interface RawListEntry {
   size: number;
 }
 
+/** The entries that one tree walk can still add */
+interface TreeWalk {
+  entriesLeft: number;
+  foldersLeft: number;
+  /** Why the walk left out an entry or a folder. Undefined when the tree is complete. */
+  cutReason?: TreeCutReason;
+  /**
+   * Set when the walk must open no more folders: after its time limit, or after a listing that is too long.
+   * After a listing that is too long, the machine can still send its reply to that LIST,
+   * and that late reply must not go to the next command.
+   */
+  stopReason?: TreeCutReason;
+}
+
+type TreeCutReason = 'entries' | 'folders' | 'time' | 'longList';
+
+function cutWalk(walk: TreeWalk, reason: TreeCutReason): void {
+  walk.cutReason ??= reason;
+}
+
+/** Cut the walk, and open no more folders */
+function stopWalk(walk: TreeWalk, reason: TreeCutReason): void {
+  cutWalk(walk, reason);
+  walk.stopReason ??= reason;
+}
+
+/** The reason why the walk must open no more folders, or undefined when it can go on */
+function stopReasonOf(walk: TreeWalk): TreeCutReason | undefined {
+  if (walk.stopReason) return walk.stopReason;
+  if (walk.entriesLeft <= 0) return 'entries';
+  if (walk.foldersLeft <= 0) return 'folders';
+  return undefined;
+}
+
+/** One folder listing, and whether it was longer than MAX_FOLDER_LIST_BYTES */
+interface FolderListing {
+  entries: RawListEntry[];
+  isTooLong: boolean;
+}
+
+/** The text of a raw LIST, and whether Chatter stopped it at MAX_FOLDER_LIST_BYTES */
+interface RawListing {
+  text: string;
+  isTooLong: boolean;
+}
+
+/** A folder list that was too long or too slow. The caller cannot know if a file is in the folder. */
+class FolderListLimitError extends Error {}
+
+/**
+ * A raw RETR error after which the fallback cannot help, because a second RETR would end the same way:
+ * - the machine refused the RETR with an error reply, for example "550 No such file". This is a clear answer about
+ *   the file.
+ * - the file is larger than the byte limit.
+ */
+class NoFallbackError extends Error {}
+
+/**
+ * "425 Cannot open data connection": the machine could not use the data connection of the raw RETR. This is not an
+ * answer about the file, so the fallback of basic-ftp can still work.
+ */
+const CANNOT_OPEN_DATA_CONNECTION = 425;
+
+/** A folder that the tree walk still has to list, and the list to fill with its entries */
+interface TreeFolder {
+  path: string;
+  nodes: FTPTreeNode[];
+}
+
 type BatchFileOutcome = FTPUploadResult['success'][number] | FTPUploadResult['failed'][number];
+
+/** The place where the raw RETR writes the file, and the number of bytes that it wrote */
+interface DownloadSink {
+  destination: Writable;
+  bytesWritten: number;
+}
+
+/** The limits of one download. Tests set small limits. */
+export interface DownloadLimits {
+  maxBytes: number;
+  timeLimitMs: number;
+}
+
+const DEFAULT_DOWNLOAD_LIMITS: DownloadLimits = { maxBytes: MAX_DOWNLOAD_BYTES, timeLimitMs: DOWNLOAD_TIME_LIMIT_MS };
 
 interface PassiveAddress {
   host: string;
@@ -145,12 +276,104 @@ function joinRemotePath(dirPath: string, name: string): string {
   return dirPath === ROOT_PATH ? `/${name}` : `${dirPath}/${name}`;
 }
 
+const log = createLogger('ftp');
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error';
 }
 
+/**
+ * True when basic-ftp stopped a list at its `maxListingBytes`. basic-ftp gives no error code for this,
+ * so this reads the message of its StringWriter. A test with the real basic-ftp checks this message.
+ */
+function isListingTooLong(err: unknown): boolean {
+  return err instanceof Error && err.message.startsWith('StringWriter: Maximum bytes exceeded');
+}
+
+/** Run `work`. When it takes longer than `timeLimitMs`, run `onTimeUp`, then close the client, so the work stops. */
+async function closeClientAfter<T>(
+  client: ftp.Client,
+  { timeLimitMs, onTimeUp }: { timeLimitMs: number; onTimeUp: () => void },
+  work: () => Promise<T>
+): Promise<T> {
+  const timer = setTimeout(() => {
+    onTimeUp();
+    client.close();
+  }, timeLimitMs);
+  try {
+    return await work();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** basic-ftp's list of one folder, with a time limit. basic-ftp itself stops at MAX_FOLDER_LIST_BYTES. */
+async function listFolderWithLimits(client: ftp.Client, path: string): Promise<ftp.FileInfo[]> {
+  let isTimeUp = false;
+  try {
+    return await closeClientAfter(client, { timeLimitMs: FOLDER_LIST_TIME_LIMIT_MS, onTimeUp: () => { isTimeUp = true; } }, () => client.list(path));
+  } catch (err) {
+    if (isTimeUp) throw new FolderListLimitError(FOLDER_LIST_TOO_SLOW_MESSAGE, { cause: err });
+    if (isListingTooLong(err)) throw new FolderListLimitError(FOLDER_LIST_TOO_LONG_MESSAGE, { cause: err });
+    throw err;
+  }
+}
+
+/** The complete lines of a listing. When the listing was cut, its last line can be cut in two, so it is left out. */
+function completeLines(text: string, isCut: boolean): string {
+  return isCut ? text.slice(0, text.lastIndexOf('\n') + 1) : text;
+}
+
 function alreadyExistsMessage(remotePath: string): string {
   return `File "${remotePath}" ${ALREADY_EXISTS_MARKER}. Enable overwrite to replace it.`;
+}
+
+/** Run `stop` when the signal aborts, also when it aborted before this call */
+function onAbort(signal: AbortSignal | undefined, stop: () => void): void {
+  if (signal?.aborted) stop();
+  else signal?.addEventListener('abort', stop, { once: true });
+}
+
+const BYTES_IN_MB = 1024 * 1024;
+const MS_IN_MINUTE = 60_000;
+const MS_IN_SECOND = 1_000;
+
+/** "64 MB", or the number of bytes when the size is not a whole number of MB */
+function sizeText(bytes: number): string {
+  const megabytes = bytes / BYTES_IN_MB;
+  return Number.isInteger(megabytes) ? `${megabytes} MB` : `${bytes} bytes`;
+}
+
+/** "30 minutes", or the number of seconds when the time is not a whole number of minutes */
+function durationText(ms: number): string {
+  const minutes = ms / MS_IN_MINUTE;
+  if (Number.isInteger(minutes)) return minutes === 1 ? '1 minute' : `${minutes} minutes`;
+  const seconds = ms / MS_IN_SECOND;
+  return seconds === 1 ? '1 second' : `${seconds} seconds`;
+}
+
+function downloadTooLargeError(maxBytes: number): Error {
+  return new NoFallbackError(`The file on the machine is too large. Chatter downloads at most ${sizeText(maxBytes)}.`);
+}
+
+function downloadTooSlowError(timeLimitMs: number): Error {
+  return new Error(`The download took too long. Chatter stops a download after ${durationText(timeLimitMs)}.`);
+}
+
+/**
+ * A stream that gives each chunk to `destination`, and fails when more than `maxBytes` come. It waits for the
+ * 'drain' of `destination`, so a slow destination slows the transfer. It does not end `destination`.
+ */
+function limitBytes(destination: Writable, maxBytes: number): Writable {
+  let byteCount = 0;
+  return new Writable({
+    write(chunk: Buffer, _encoding, done) {
+      byteCount += chunk.length;
+      if (byteCount > maxBytes) done(downloadTooLargeError(maxBytes));
+      else if (destination.write(chunk)) done();
+      else destination.once('drain', () => done());
+    },
+  });
 }
 
 async function toBuffer(source: Buffer | string | NodeJS.ReadableStream): Promise<Buffer> {
@@ -161,12 +384,6 @@ async function toBuffer(source: Buffer | string | NodeJS.ReadableStream): Promis
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
   }
   return Buffer.concat(chunks);
-}
-
-/** Run `stop` when the signal aborts, also when it aborted before this call */
-function onAbort(signal: AbortSignal | undefined, stop: () => void): void {
-  if (signal?.aborted) stop();
-  else signal?.addEventListener('abort', stop, { once: true });
 }
 
 /** Binary mode stops line ending changes. Some machine FTP servers reject TYPE I, so the transfer is tried anyway. */
@@ -213,15 +430,12 @@ function controlConnectionHost(ftpContext: ftp.FTPContext): string {
 }
 
 /**
- * Open the data connection of a basic-ftp transfer, as basic-ftp does for its own PASV and EPSV.
- * The connection attempt stops after the FTP timeout. When the connection opens, basic-ftp takes it,
- * and from then on basic-ftp handles its errors and its timeout.
+ * Open a data connection to the machine. The attempt stops after `timeoutMs` (0 means no limit),
+ * and then the socket is destroyed. A socket error keeps its code.
  */
-function connectDataSocket(ftpContext: ftp.FTPContext, { host, port }: { host: string; port: number }): Promise<void> {
-  // Chatter always connects with "secure: false". This code opens a plain socket, so it must not run over TLS.
-  if (ftpContext.hasTLS) {
-    return Promise.reject(new Error('Chatter does not support FTP over TLS for the PASV data connection'));
-  }
+function openDataSocket({ host, port, timeoutMs, family }: {
+  host: string; port: number; timeoutMs: number; family?: number;
+}): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const socket = new net.Socket();
     const onError = (err: Error) => {
@@ -232,17 +446,30 @@ function connectDataSocket(ftpContext: ftp.FTPContext, { host, port }: { host: s
       socket.destroy();
       reject(new Error(`Timeout: the passive data connection to ${host}:${port} did not open`));
     };
-    socket.setTimeout(ftpContext.timeout);
+    socket.setTimeout(timeoutMs);
     socket.on('error', onError);
     socket.on('timeout', onTimeout);
-    socket.connect({ port, host, family: ftpContext.ipFamily }, () => {
+    socket.connect({ port, host, family }, () => {
+      socket.setTimeout(0);
       socket.removeListener('error', onError);
       socket.removeListener('timeout', onTimeout);
-      // The setter stops the connect timeout and adds the error handlers of basic-ftp
-      ftpContext.dataSocket = socket;
-      resolve();
+      resolve(socket);
     });
   });
+}
+
+/**
+ * Open the data connection of a basic-ftp transfer, as basic-ftp does for its own PASV and EPSV.
+ * The connection attempt stops after the FTP timeout. When the connection opens, basic-ftp takes it,
+ * and from then on basic-ftp handles its errors and its timeout.
+ */
+async function connectDataSocket(ftpContext: ftp.FTPContext, { host, port }: { host: string; port: number }): Promise<void> {
+  // Chatter always connects with "secure: false". This code opens a plain socket, so it must not run over TLS.
+  if (ftpContext.hasTLS) {
+    throw new Error('Chatter does not support FTP over TLS for the PASV data connection');
+  }
+  // The setter adds the error handlers of basic-ftp
+  ftpContext.dataSocket = await openDataSocket({ host, port, timeoutMs: ftpContext.timeout, family: ftpContext.ipFamily });
 }
 
 /** The PASV transfer strategy of basic-ftp, with the data connection to the machine host */
@@ -285,15 +512,19 @@ export class FTPClient {
   private user: string;
   private password: string;
   private readonly timeoutMs: number;
+  private readonly downloadLimits: DownloadLimits;
+  /** The tree walks that run now, by depth and path. A request for the same tree waits for the same walk. */
+  private readonly treeWalks = new Map<string, Promise<FileTree>>();
 
   constructor({
     host, port = DEFAULT_FTP_PORT, user = DEFAULT_FTP_USER, password = '', timeoutMs = DEFAULT_FTP_TIMEOUT_MS
-  }: FTPConfig) {
+  }: FTPConfig, downloadLimits: Partial<DownloadLimits> = {}) {
     this.host = host;
     this.port = port;
     this.user = user;
     this.password = password;
     this.timeoutMs = timeoutMs;
+    this.downloadLimits = { ...DEFAULT_DOWNLOAD_LIMITS, ...downloadLimits };
   }
 
   /** Change connection settings (for example after a machine config change) */
@@ -307,7 +538,7 @@ export class FTPClient {
   async listFiles(path = ROOT_PATH): Promise<FTPFileInfo[]> {
     try {
       assertSafeFtpArgument(path);
-      const list = await this.withConnection({ verbose: false }, client => client.list(path));
+      const list = await this.withConnection({ verbose: false }, client => listFolderWithLimits(client, path));
       return list.map(item => ({
         name: item.name,
         type: item.isDirectory ? 'directory' : 'file',
@@ -321,34 +552,83 @@ export class FTPClient {
   }
 
   async getFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FTPTreeNode[]> {
+    return (await this.readFileTree(path, depth)).nodes;
+  }
+
+  /**
+   * The file tree, and whether the walk cut it short: at MAX_TREE_ENTRIES entries, at MAX_TREE_FOLDERS folders,
+   * at TREE_WALK_TIME_LIMIT_MS, or after a folder listing that is too long. The depth limit does not count as a cut.
+   */
+  async readFileTree(path = ROOT_PATH, depth = DEFAULT_TREE_DEPTH): Promise<FileTree> {
+    const key = `${depth}:${path}`;
+    const running = this.treeWalks.get(key);
+    if (running) return running;
+    const tree = this.walkFileTree(path, depth);
+    this.treeWalks.set(key, tree);
+    try {
+      return await tree;
+    } finally {
+      this.treeWalks.delete(key);
+    }
+  }
+
+  private async walkFileTree(path: string, depth: number): Promise<FileTree> {
+    const walk: TreeWalk = { entriesLeft: MAX_TREE_ENTRIES, foldersLeft: MAX_TREE_FOLDERS };
     try {
       assertSafeFtpArgument(path);
       if (depth <= 0) {
-        return [];
+        return { nodes: [], isCutShort: false };
       }
-      return await this.withConnection({ verbose: false }, client => this.buildTree(client, path, depth));
+      const nodes = await this.withConnection({ verbose: false }, client => closeClientAfter(
+        client,
+        { timeLimitMs: TREE_WALK_TIME_LIMIT_MS, onTimeUp: () => stopWalk(walk, 'time') },
+        () => this.buildTree(client, { path, depth: Math.min(depth, MAX_TREE_DEPTH), walk })
+      ));
+      if (walk.cutReason) {
+        log.warn(this.treeCutMessage(walk.cutReason), { path });
+      }
+      return { nodes, isCutShort: walk.cutReason !== undefined };
     } catch (err) {
       throw new Error(ftpErrorMessage(err, this.host, this.port), { cause: err });
     }
   }
 
-  /** `signal` stops the download and closes the connections to the machine, for example when the user cancels it */
+  /**
+   * Download one file to `writableStream`. The download stops at the time limit and at the byte limit
+   * (DOWNLOAD_TIME_LIMIT_MS and MAX_DOWNLOAD_BYTES), and then closes its connections to the machine.
+   * `signal` stops the download in the same way, for example when the user cancels it.
+   */
   async downloadFile(filePath: string, writableStream: Writable, signal?: AbortSignal): Promise<void> {
     const remotePath = toRelativeRemotePath(filePath);
+    const { maxBytes, timeLimitMs } = this.downloadLimits;
+    // One stop for the time limit and for the signal of the caller: it closes the client and the raw data socket
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(downloadTooSlowError(timeLimitMs)), timeLimitMs);
+    const stopOnSignal = () => stop.abort(signal?.reason);
+    onAbort(signal, stopOnSignal);
     try {
       assertSafeFtpArgument(remotePath);
-      signal?.throwIfAborted();
-      await this.withConnection({ verbose: true, signal }, async client => {
+      // A signal that aborted before the start stops the download before Chatter connects to the machine
+      stop.signal.throwIfAborted();
+      await this.withConnection({ verbose: true, signal: stop.signal }, async client => {
+        const sink: DownloadSink = { destination: writableStream, bytesWritten: 0 };
         try {
-          await this.downloadOverPassiveSocket(client, remotePath, writableStream, signal);
+          // When the signal closes the client, the RETR fails, and the raw RETR closes its data connection
+          await this.downloadOverPassiveSocket(client, remotePath, sink);
         } catch (err) {
-          if (signal?.aborted) throw err;
-          // Fall back to basic-ftp's standard download
-          await client.downloadTo(writableStream, remotePath);
+          // The user already has part of the file. A second download would add to that part, so the download fails.
+          if (stop.signal.aborted || sink.bytesWritten > 0 || err instanceof NoFallbackError) throw err;
+          const destination = limitBytes(writableStream, maxBytes);
+          await this.downloadWithBasicFtp(client, { remotePath, destination, rawError: err });
         }
       });
     } catch (err) {
-      throw new Error(`FTP download error: ${errorText(err)}`, { cause: err });
+      // After an abort, the error of the closed connection tells less than the reason
+      const reason: unknown = stop.signal.aborted ? stop.signal.reason : err;
+      throw new Error(`FTP download error: ${errorText(reason)}`, { cause: err });
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', stopOnSignal);
     }
   }
 
@@ -407,29 +687,51 @@ export class FTPClient {
     }
   }
 
+  /**
+   * The fallback: basic-ftp's standard download. A failed raw RETR closes the client, so log in again first.
+   * When that second login fails, the error of the raw RETR tells the user more than the login error.
+   */
+  private async downloadWithBasicFtp(
+    client: ftp.Client,
+    { remotePath, destination, rawError }: { remotePath: string; destination: Writable; rawError: unknown }
+  ): Promise<void> {
+    if (client.closed) {
+      try {
+        await this.login(client);
+      } catch {
+        throw rawError;
+      }
+    }
+    await client.downloadTo(destination, remotePath);
+  }
+
   /** Open a connection, run `work` on it, and always close it. `signal` closes it early, and then `work` fails. */
   private async withConnection<T>(
     { verbose, signal }: { verbose: boolean; signal?: AbortSignal },
     work: (client: ftp.Client) => Promise<T>
   ): Promise<T> {
-    const client = new ftp.Client(this.timeoutMs);
+    const client = new ftp.Client(this.timeoutMs, { allowSeparateTransferHost: false, maxListingBytes: MAX_FOLDER_LIST_BYTES });
     useMachineHostForTransfers(client);
     client.ftp.verbose = verbose;
     const close = () => client.close();
     onAbort(signal, close);
     try {
-      await client.access({
-        host: this.host,
-        port: this.port,
-        user: this.user,
-        password: this.password,
-        secure: false
-      });
+      await this.login(client);
       return await work(client);
     } finally {
       signal?.removeEventListener('abort', close);
       client.close();
     }
+  }
+
+  private async login(client: ftp.Client): Promise<void> {
+    await client.access({
+      host: this.host,
+      port: this.port,
+      user: this.user,
+      password: this.password,
+      secure: false
+    });
   }
 
   /** Upload one file of an uploadFiles batch. A failure is returned, not thrown, so the batch goes on. */
@@ -453,9 +755,11 @@ export class FTPClient {
   private async fileExists(client: ftp.Client, filePath: string): Promise<boolean> {
     const { dirPath, fileName } = parseFilePath(filePath);
     try {
-      const list = await client.list(dirPath);
+      const list = await listFolderWithLimits(client, dirPath);
       return list.some(item => item.name === fileName);
-    } catch {
+    } catch (err) {
+      // A list that was too long or too slow does not tell if the file is there. The upload must not write over it.
+      if (err instanceof FolderListLimitError) throw err;
       // The folder cannot be listed (for example it does not exist yet), so the file is not there
       return false;
     }
@@ -464,127 +768,268 @@ export class FTPClient {
   /**
    * Download with raw FTP commands over our own data socket: open the data
    * connection first, then send RETR. More compatible with limited FTP servers like Speedio.
+   * When the download fails after the RETR, or the machine sends no reply to RETR, the client closes: a late 226 or
+   * 426 must not go to the next command.
    */
-  private async downloadOverPassiveSocket(
-    client: ftp.Client, filePath: string, destination: Writable, signal?: AbortSignal
-  ): Promise<void> {
-    // The RETR below goes straight to the socket, so basic-ftp does not check it
+  private async downloadOverPassiveSocket(client: ftp.Client, filePath: string, sink: DownloadSink): Promise<void> {
+    // basic-ftp refuses only CR, LF and NUL in a command, so this check is stricter
     assertSafeFtpArgument(filePath);
     await trySetBinaryMode(client);
     const { host, port } = await requestPassiveAddress(client.ftp);
+    const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
+    let isConfirmed: boolean;
+    try {
+      isConfirmed = await this.receiveFile(client, { filePath, dataSocket, sink });
+    } catch (err) {
+      dataSocket.destroy();
+      client.close();
+      throw err;
+    }
+    if (!isConfirmed) {
+      log.warn('The machine did not confirm the end of the file (no reply to RETR). Chatter accepts the file, because the data connection ended correctly.', {
+        host: this.host, file: filePath, bytes: sink.bytesWritten
+      });
+      // A late reply must not go to the next command
+      client.close();
+    }
+  }
 
+  /**
+   * Send RETR and write the data to the sink. The download is complete when the data connection ends cleanly
+   * and the machine sends its 226 (or another 2xx) reply. An error reply (for example 426) fails the download.
+   * When no reply comes in REPLY_AFTER_DATA_WAIT_MS after a clean end, the download is also complete, and the
+   * promise gives false: some old FTP servers send no 226. A data connection that breaks fails the download.
+   * The timer stops a download when no data comes in the FTP timeout. Each chunk starts it again.
+   */
+  private receiveFile(
+    client: ftp.Client,
+    { filePath, dataSocket, sink }: { filePath: string; dataSocket: net.Socket; sink: DownloadSink }
+  ): Promise<boolean> {
     return new Promise((resolve, reject) => {
-      const dataSocket = new net.Socket();
-      let bytesReceived = 0;
+      let hasDataEnded = false;
+      let isReplyDone = false;
+      let isSettled = false;
+      let timer: NodeJS.Timeout | undefined;
 
-      dataSocket.on('data', chunk => {
-        bytesReceived += chunk.length;
-        destination.write(chunk);
-      });
-      dataSocket.on('close', () => resolve());
-      dataSocket.on('error', reject);
+      /** An error fails the download. Else `isConfirmed` tells if the machine sent its reply. */
+      const settle = (outcome: Error | { isConfirmed: boolean }) => {
+        if (isSettled) return;
+        isSettled = true;
+        clearTimeout(timer);
+        if (outcome instanceof Error) reject(outcome);
+        else resolve(outcome.isConfirmed);
+      };
+      const startTimer = (waitMs: number, onTimeUp: () => void) => {
+        clearTimeout(timer);
+        // A late chunk or end event after the end must not start a timer that nothing stops
+        if (isSettled) return;
+        timer = setTimeout(onTimeUp, waitMs);
+      };
+      const startIdleTimer = () => startTimer(this.timeoutMs, () => settle(new Error(DOWNLOAD_STALLED_MESSAGE)));
+      const settleWhenComplete = () => {
+        if (hasDataEnded && isReplyDone) settle({ isConfirmed: true });
+      };
+      /**
+       * The destination is full, so the reader is slow, not the machine. Stop to read from the machine, so the file
+       * does not wait in memory, and stop the idle timer until the destination takes more. The time limit still runs.
+       */
+      const waitForDrain = () => {
+        dataSocket.pause();
+        clearTimeout(timer);
+        sink.destination.once('drain', () => {
+          if (isSettled) return;
+          dataSocket.resume();
+          startIdleTimer();
+        });
+      };
 
-      dataSocket.connect(port, host, () => {
-        // Written straight to the control socket without waiting for the reply, so data can flow on the data socket
-        client.ftp.socket.write(`RETR ${filePath}\r\n`);
-      });
-      // basic-ftp does not know this data connection, so the close of the client does not close it
-      onAbort(signal, () => {
-        dataSocket.destroy();
-        reject(signal?.reason);
-      });
-
-      setTimeout(() => {
-        if (bytesReceived === 0) {
-          dataSocket.destroy();
-          reject(new Error('Download timeout'));
+      dataSocket.on('data', (chunk: Buffer) => {
+        if (isSettled) return;
+        if (sink.bytesWritten + chunk.length > this.downloadLimits.maxBytes) {
+          settle(downloadTooLargeError(this.downloadLimits.maxBytes));
+          return;
         }
-      }, DOWNLOAD_NO_DATA_TIMEOUT_MS);
+        startIdleTimer();
+        sink.bytesWritten += chunk.length;
+        if (!sink.destination.write(chunk)) waitForDrain();
+      });
+      // 'end' comes only when the machine closes the data connection cleanly, not when the connection breaks
+      dataSocket.on('end', () => {
+        hasDataEnded = true;
+        // The wait starts again here, so a slow last chunk leaves the full wait for the reply
+        startTimer(Math.min(this.timeoutMs, REPLY_AFTER_DATA_WAIT_MS), () => settle({ isConfirmed: false }));
+        settleWhenComplete();
+      });
+      dataSocket.on('error', err => settle(err));
+
+      startIdleTimer();
+      client.ftp.handle(`RETR ${filePath}`, (reply, task) => {
+        if (reply instanceof ftp.FTPError && reply.code !== CANNOT_OPEN_DATA_CONNECTION) {
+          task.reject(new NoFallbackError(reply.message, { cause: reply }));
+        } else if (reply instanceof Error) task.reject(reply);
+        else if (reply.code >= 200 && reply.code < 300) task.resolve(reply);
+        else if (reply.code >= 300) task.reject(new Error(`Unexpected reply to RETR: ${reply.message}`));
+        // A 1xx reply (for example 150) only tells that the transfer starts
+      }).then(() => {
+        isReplyDone = true;
+        settleWhenComplete();
+      }, (err: Error) => settle(err));
+      // The timers above watch the transfer. The control connection is quiet until the 226, so its own timeout stops.
+      client.ftp.socket.setTimeout(0);
     });
   }
 
   /**
    * Send a bare LIST over our own data socket and return the raw listing.
    * basic-ftp sends "LIST -a", which some limited FTP servers do not support.
+   * The listing stops at MAX_FOLDER_LIST_BYTES: then the data socket is destroyed, and the listing has the complete lines.
    */
-  private async rawListCurrentDirectory(client: ftp.Client): Promise<string> {
+  private async rawListCurrentDirectory(client: ftp.Client): Promise<RawListing> {
     const { host, port } = await requestPassiveAddress(client.ftp);
+    const dataSocket = await openDataSocket({ host, port, timeoutMs: this.rawDataConnectTimeoutMs() });
 
     return new Promise((resolve, reject) => {
-      const dataSocket = new net.Socket();
-      let listing = '';
+      const chunks: Buffer[] = [];
+      let byteCount = 0;
+      let isTooLong = false;
+      const listing = (): RawListing => ({ text: completeLines(Buffer.concat(chunks).toString(), isTooLong), isTooLong });
+      // After a listing that is too long, the fallback must not read the same listing again
+      const fail = (err: unknown) => (isTooLong ? resolve(listing()) : reject(err));
 
-      dataSocket.on('data', chunk => {
-        listing += chunk.toString();
-      });
-      dataSocket.on('error', reject);
-
-      dataSocket.connect(port, host, async () => {
-        try {
-          await client.send('LIST');
-          setTimeout(() => {
-            dataSocket.end();
-            resolve(listing);
-          }, RAW_LIST_TRANSFER_WAIT_MS);
-        } catch (err) {
-          dataSocket.end();
-          reject(err);
+      dataSocket.on('data', (chunk: Buffer) => {
+        if (isTooLong) return;
+        const room = MAX_FOLDER_LIST_BYTES - byteCount;
+        chunks.push(chunk.length > room ? chunk.subarray(0, room) : chunk);
+        byteCount += Math.min(chunk.length, room);
+        if (chunk.length > room) {
+          isTooLong = true;
+          dataSocket.destroy();
         }
+      });
+      dataSocket.on('error', fail);
+      // Until the reply to LIST comes, an idle data connection is destroyed, so the walk goes on with the fallback.
+      // After the reply, the wait for the listing has its own short limit, and a folder can be empty.
+      dataSocket.setTimeout(this.timeoutMs, () => {
+        dataSocket.destroy();
+        reject(new Error('Timeout: the raw LIST data connection is idle'));
+      });
+
+      client.send('LIST').then(() => {
+        dataSocket.setTimeout(0);
+        setTimeout(() => {
+          dataSocket.end();
+          resolve(listing());
+        }, RAW_LIST_TRANSFER_WAIT_MS);
+      }, (err: unknown) => {
+        dataSocket.end();
+        fail(err);
       });
     });
   }
 
-  /** List the current folder: bare LIST first, then basic-ftp's list. An empty list when both fail. */
-  private async listCurrentDirectory(client: ftp.Client): Promise<RawListEntry[]> {
-    try {
-      return parseRawList(await this.rawListCurrentDirectory(client));
-    } catch {
-      try {
-        const list = await client.list();
-        return list.map(item => ({ name: item.name, isDir: item.isDirectory, size: item.size }));
-      } catch {
-        return [];
-      }
+  private treeCutMessage(reason: TreeCutReason): string {
+    switch (reason) {
+      case 'entries':
+        return `The file tree on ${this.host} is too large. Chatter shows only the first ${MAX_TREE_ENTRIES} entries.`;
+      case 'folders':
+        return `The file tree on ${this.host} has too many folders. Chatter opens at most ${MAX_TREE_FOLDERS} folders.`;
+      case 'time':
+        return `The file tree on ${this.host} took too long. Chatter stops a walk after ${TREE_WALK_TIME_LIMIT_MS / 1000} s.`;
+      case 'longList':
+        return `A folder list on ${this.host} is too long. Chatter reads at most ${MAX_FOLDER_LIST_MB} MB of one folder list, and then opens no more folders.`;
     }
+  }
+
+  /** The connect timeout of the raw data connections. It is never longer than the FTP timeout. */
+  private rawDataConnectTimeoutMs(): number {
+    return Math.min(this.timeoutMs, RAW_DATA_CONNECT_TIMEOUT_MS);
   }
 
   /**
-   * Build the tree below `path`, `depth` levels deep. A folder that cannot be
-   * opened gives an empty list, so one bad folder does not hide the rest of the tree.
+   * List the current folder: bare LIST first, then basic-ftp's list. An empty list when both fail.
+   * A raw listing that is too long keeps its first lines, and the fallback does not run.
+   * basic-ftp keeps nothing of a listing that is too long.
    */
-  private async buildTree(client: ftp.Client, path: string, depth: number): Promise<FTPTreeNode[]> {
-    if (depth <= 0) {
-      return [];
+  private async listCurrentDirectory(client: ftp.Client): Promise<FolderListing> {
+    let raw: RawListing;
+    try {
+      raw = await this.rawListCurrentDirectory(client);
+    } catch {
+      return listWithBasicFtp(client);
     }
+    return { entries: parseRawList(raw.text), isTooLong: raw.isTooLong };
+  }
+
+  /**
+   * Build the tree below `path`, `depth` levels deep, one level at a time.
+   * The walk lists all the folders of one level before it opens the level below it,
+   * so the entry limit cuts the deepest level first and the upper levels stay complete.
+   * A folder that cannot be opened gives an empty list, so one bad folder does not hide the rest of the tree.
+   * The walk opens no more folders when it has no entries or folders left, after its time limit,
+   * or after a folder listing that is too long.
+   * Each folder that it did not open has no children.
+   */
+  private async buildTree(
+    client: ftp.Client,
+    { path, depth, walk }: { path: string; depth: number; walk: TreeWalk }
+  ): Promise<FTPTreeNode[]> {
+    const top: TreeFolder = { path, nodes: [] };
+    let level: TreeFolder[] = [top];
+    for (let levelsLeft = depth; levelsLeft > 0 && level.length > 0; levelsLeft--) {
+      const nextLevel: TreeFolder[] = [];
+      for (const folder of level) {
+        const stopReason = stopReasonOf(walk);
+        if (stopReason) {
+          cutWalk(walk, stopReason);
+          return top.nodes;
+        }
+        walk.foldersLeft -= 1;
+        const { entries, isTooLong } = await this.listFolder(client, folder.path);
+        if (isTooLong) stopWalk(walk, 'longList');
+        const kept = entries.slice(0, walk.entriesLeft);
+        walk.entriesLeft -= kept.length;
+        if (kept.length < entries.length) cutWalk(walk, 'entries');
+        for (const entry of kept) {
+          const node = treeNodeOf(entry, folder.path);
+          folder.nodes.push(node);
+          if (entry.isDir && levelsLeft > 1) {
+            node.children = [];
+            nextLevel.push({ path: node.path, nodes: node.children });
+          }
+        }
+      }
+      level = nextLevel;
+    }
+    return top.nodes;
+  }
+
+  /** The entries of one folder. A folder that cannot be opened gives an empty list. */
+  private async listFolder(client: ftp.Client, path: string): Promise<FolderListing> {
     try {
       await client.cd(path);
       await client.pwd();
-      const entries = await this.listCurrentDirectory(client);
-
-      const nodes: FTPTreeNode[] = [];
-      for (const entry of entries) {
-        nodes.push(await this.treeNodeFor(client, { entry, parentPath: path, depth }));
-      }
-      return nodes;
+      return await this.listCurrentDirectory(client);
     } catch {
-      return [];
+      return { entries: [], isTooLong: false };
     }
   }
+}
 
-  private async treeNodeFor(
-    client: ftp.Client,
-    { entry, parentPath, depth }: { entry: RawListEntry; parentPath: string; depth: number }
-  ): Promise<FTPTreeNode> {
-    const fullPath = joinRemotePath(parentPath, entry.name);
-    const node: FTPTreeNode = {
-      name: entry.name,
-      type: entry.isDir ? 'directory' : 'file',
-      size: entry.size || 0,
-      path: fullPath
-    };
-    if (entry.isDir && depth > 1) {
-      node.children = await this.buildTree(client, fullPath, depth - 1);
-    }
-    return node;
+function treeNodeOf(entry: RawListEntry, parentPath: string): FTPTreeNode {
+  return {
+    name: entry.name,
+    type: entry.isDir ? 'directory' : 'file',
+    size: entry.size || 0,
+    path: joinRemotePath(parentPath, entry.name)
+  };
+}
+
+/** The fallback list of the tree walk. The time limit of the walk also stops it. */
+async function listWithBasicFtp(client: ftp.Client): Promise<FolderListing> {
+  try {
+    const list = await client.list();
+    return { entries: list.map(item => ({ name: item.name, isDir: item.isDirectory, size: item.size })), isTooLong: false };
+  } catch (err) {
+    return { entries: [], isTooLong: isListingTooLong(err) };
   }
 }

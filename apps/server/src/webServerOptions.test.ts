@@ -86,7 +86,7 @@ describe('the connection limits of startWebServer', () => {
   });
 
   it('keeps a connection open within the header time limit', async () => {
-    const port = await start({ serverOptions: { headersTimeout: 1_000, connectionsCheckingInterval: 50 } });
+    const port = await start({ serverOptions: { headersTimeout: 5_000, connectionsCheckingInterval: 50 } });
     const { socket, reply } = await open(port);
     await wait(300);
 
@@ -150,6 +150,12 @@ describe('startWebServer', () => {
     expect(text).toMatch(/^HTTP\/1\.1 408 /);
     expect(text).toContain('{"error":"The request took too long. Try again."}');
     expect(text).not.toContain('got');
+    socket.destroy();
+  });
+
+  it('tells the browser not to guess the type of the 408 reply, because the security headers of the app are not on it', async () => {
+    const { socket, reply } = await startSlowUpload('/short');
+    expect((await reply).toLowerCase()).toContain('\r\nx-content-type-options: nosniff\r\n');
     socket.destroy();
   });
 

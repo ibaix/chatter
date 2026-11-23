@@ -8,8 +8,12 @@ For a Raspberry Pi, see [Install on a Raspberry Pi](./raspberry-pi.md).
 | | You need |
 |---|---|
 | **Computer** | Windows, Mac, or Linux, with an Intel, AMD, or 64-bit ARM processor |
-| **Docker** | [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows or Mac) or Docker Engine (Linux) |
+| **Docker** | [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows or Mac) or Docker Engine 28 or later (Linux) |
 | **FANUC machines** | The `amd64` package. A Mac with Apple silicon runs it with emulation. See [FANUC machines](../guide/fanuc.md). |
+
+::: warning Docker Engine 28 or later
+On Linux, an older Docker Engine lets other computers reach the history database. The history database has no login. To see the version, run `docker version`. See [Security](../security.md#keep-victoriametrics-and-vmalert-closed).
+:::
 
 ## Install
 

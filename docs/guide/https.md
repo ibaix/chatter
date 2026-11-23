@@ -17,10 +17,25 @@ A reverse proxy is a server that takes the HTTPS requests from the browsers, and
    Do not trust a wide range, like `172.16.0.0/12`, if normal users also have addresses in it.
 3. Reload the page. At the bottom, **This page came** shows **Over HTTPS**, and **Through the proxy** shows the address of the proxy.
 4. Let only the proxy reach port 3001. This step is part of the security: a computer that reaches port 3001 directly, from a trusted address, can send a false user address.
-   If the proxy runs on the same computer, change `"3001:3001"` to `"127.0.0.1:3001:3001"`, then run `docker compose up -d`. Else, use a firewall rule.
+   - **The proxy runs directly on the same computer, not in Docker.** Change `"3001:3001"` to `"127.0.0.1:3001:3001"`, then run `docker compose up -d`. Do this change again after each update, because an update replaces `docker-compose.yml`.
+   - **The proxy runs in a Docker container on the same computer.** Do not use `127.0.0.1:3001:3001`. This proxy connects through the gateway of the Docker network (the `TRUST_PROXY: "172.18.0.1"` example in `docker-compose.yml`), so it cannot reach `127.0.0.1` of the computer. Use a rule in the `DOCKER-USER` chain, and leave out `! -s <proxy address>`. The rule then stops each computer on the network. The proxy container can still reach Chatter, because its traffic does not come in on the network interface.
+   - **The proxy runs on a different computer.** Use a rule in the `DOCKER-USER` chain. Put the address of the proxy after `! -s`, not the address of your network:
+     ```bash
+     sudo iptables -I DOCKER-USER -i <LAN interface> -p tcp -m conntrack --ctorigdstport 3001 --ctdir ORIGINAL ! -s <proxy address> -j DROP
+     ```
+
+   A ufw or firewalld rule does not limit a port that Docker publishes. For `<LAN interface>`, and to keep the rule after a restart, see [Limit who can reach Chatter](../security.md#limit-who-can-reach-chatter).
 
 Chatter believes the `X-Forwarded-*` headers only from the trusted addresses, because any computer can send them.
 Only one proxy in front of Chatter is supported.
+
+## Security headers from the proxy
+
+Chatter sends its own security headers on each reply. It does not send HSTS (`Strict-Transport-Security`), because HSTS on a LAN address can stop the access to Chatter.
+When all users open Chatter through the proxy, you can set the proxy to add HSTS.
+
+Do not set the proxy to add a second `Content-Security-Policy` or `X-Frame-Options` header.
+Chatter already sends them. If the proxy adds a second Content-Security-Policy, the browser obeys the two policies together, and the page can stop working.
 
 ## Set the trusted addresses in a file
 

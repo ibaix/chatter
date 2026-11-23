@@ -185,6 +185,31 @@ describe('streamed replies on a real web server', () => {
   });
 });
 
+describe('streamWithoutErrorText backpressure', () => {
+  it('reads the source only when the browser takes the bytes, so a large file does not fill the memory', async () => {
+    let pulls = 0;
+    // A file of 100 parts. Each pull reads one part from the disk or the machine.
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls++;
+        if (pulls > 100) controller.close();
+        else controller.enqueue(new TextEncoder().encode(`part ${pulls};`));
+      },
+    });
+    const app = new Hono().get('/download', c => {
+      // The browser does not read the reply
+      streamWithoutErrorText(c, source, 'The test download');
+      return c.text('started');
+    });
+
+    await app.request('/download');
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    // One part for the queue of the source, and one for the queue of the download
+    expect(pulls).toBeLessThanOrEqual(2);
+  });
+});
+
 describe('streamWithoutErrorText without a Node response', () => {
   it('fails the stream with a general text, so a test client sees no path', async () => {
     const log = captureLog();
